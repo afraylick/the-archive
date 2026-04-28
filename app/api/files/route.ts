@@ -1,0 +1,147 @@
+import { NextResponse } from 'next/server';
+import { getSessionUser, type UserId } from '@/lib/auth';
+import fs from 'fs';
+import type { NextRequest } from 'next/server';
+import { getDataFilePath, getUploadPath } from '@/lib/storage';
+
+interface AudioFileRecord {
+  id: string;
+  instrument?: string;
+  vibe?: string;
+  instruments?: string[];
+  vibes?: string[];
+  finish?: string;
+  collections?: string[];
+  bobs?: boolean;
+  colorTags?: string[];
+  waveformPeaks?: number[][];
+  waveformDuration?: number;
+  year?: number;
+  createdAt?: string;
+  uploadedAt?: string;
+  rating?: number;
+  myRating?: number;
+  userRating?: number;
+  ratings?: Partial<Record<UserId, number>>;
+  likedBy?: string[];
+  stems?: {
+    id: string;
+    name: string;
+    uploadedAt: string;
+  };
+  notes?: string;
+  comments?: {
+    id?: string;
+    text: string;
+    timestamp?: number;
+    userId?: string;
+    userName?: string;
+    createdAt?: string;
+  }[];
+}
+
+const TAG_NORMALIZATIONS: Record<string, string> = {
+  'electric guitar': 'E. Guitar',
+  'e. guitar': 'E. Guitar',
+  'acoustic guitar': 'Acoustic',
+};
+
+const normalizeTag = (tag: string) => TAG_NORMALIZATIONS[tag.toLowerCase()] || tag;
+
+const getRating = (file: AudioFileRecord, userId: UserId) => file.ratings?.[userId] || 0;
+
+const sanitizeFileForUser = (file: AudioFileRecord, userId: UserId, isAdmin: boolean) => {
+  const ratings = file.ratings || {};
+  const visibleRatings = isAdmin
+    ? ratings
+    : {
+        adam: ratings.adam || file.myRating || 0,
+        [userId]: getRating(file, userId),
+      };
+
+  return {
+    ...file,
+    bobs: isAdmin ? file.bobs : undefined,
+    liked: file.likedBy?.includes(userId) || false,
+    likedBy: file.likedBy?.includes(userId) ? [userId] : [],
+    ratings: visibleRatings,
+    myRating: ratings.adam || file.myRating || 0,
+    userRating: getRating(file, userId),
+  };
+};
+
+export async function GET(req: NextRequest) {
+  try {
+    const user = getSessionUser(req);
+    if (!user) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    }
+
+    const dataFile = getDataFilePath();
+    if (!fs.existsSync(dataFile)) {
+      return NextResponse.json([]);
+    }
+    let data = JSON.parse(fs.readFileSync(dataFile, 'utf8')) as AudioFileRecord[];
+
+    // Migrate old rating to myRating and userRating
+    data = data.map((file) => {
+      if (file.rating !== undefined && file.myRating === undefined) {
+        file.myRating = file.rating;
+        file.userRating = 0;
+        delete file.rating;
+      }
+      if (!file.ratings) {
+        file.ratings = {};
+      }
+      file.ratings.adam = file.ratings.adam || file.myRating || 0;
+      if (!Array.isArray(file.instruments)) {
+        file.instruments = file.instrument ? [file.instrument] : [];
+      }
+      if (!Array.isArray(file.vibes)) {
+        file.vibes = file.vibe ? [file.vibe] : [];
+      }
+      file.instruments = Array.from(new Set(file.instruments.filter(Boolean).map(normalizeTag)));
+      file.vibes = Array.from(new Set(file.vibes.filter(Boolean)));
+      if (!Array.isArray(file.colorTags)) {
+        file.colorTags = [];
+      }
+      if (!Array.isArray(file.collections)) {
+        file.collections = [];
+      }
+      file.collections = Array.from(new Set(file.collections.filter(Boolean)));
+      if (!Array.isArray(file.likedBy)) {
+        file.likedBy = [];
+      }
+      file.likedBy = Array.from(new Set(file.likedBy.filter(Boolean)));
+      if (file.notes === undefined) {
+        file.notes = file.comments?.filter(comment => !comment.userId).map(comment => comment.text).join('\n') || '';
+      }
+      file.comments = Array.isArray(file.comments)
+        ? file.comments.filter(comment => comment.userId && comment.text).map(comment => ({
+            ...comment,
+            id: comment.id || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+            userName: comment.userName || comment.userId || 'Unknown',
+            createdAt: comment.createdAt || new Date().toISOString(),
+          }))
+        : [];
+      if (!file.createdAt) {
+        const fallbackYear = file.year || new Date(file.uploadedAt || Date.now()).getFullYear();
+        file.createdAt = new Date(Date.UTC(fallbackYear, 0, 1)).toISOString();
+      }
+      file.instrument = file.instruments[0] || '';
+      file.vibe = file.vibes[0] || '';
+      file.finish = file.finish || '';
+      file.myRating = file.ratings.adam || 0;
+      file.userRating = getRating(file, user.id);
+      return file;
+    }).filter((file) => fs.existsSync(getUploadPath(file.id)));
+
+    // Save migrated data
+    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+
+    const visibleData = user.id === 'bobs' ? data.filter(file => file.bobs) : data;
+    return NextResponse.json(visibleData.map(file => sanitizeFileForUser(file, user.id, user.isAdmin)));
+  } catch {
+    return NextResponse.json({ error: 'Failed to load files' }, { status: 500 });
+  }
+}

@@ -1,0 +1,155 @@
+@import "../node_modules/tailwindcss/index.css";
+
+:root {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --muted: #262626;
+  --muted-foreground: #a3a3a3;
+  --border: #404040;
+  --accent: #5e9ec5;
+  --accent-foreground: #ffffff;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  touch-action: manipulation;
+}
+
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+.login-wave-static,
+.login-wave {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(92vw, 980px);
+  height: 220px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      transparent 0 20px,
+      rgba(94, 158, 197, 0.15) 20px 22px,
+      rgba(10, 132, 255, 0.32) 22px 25px,
+      transparent 25px 44px
+    );
+  filter: drop-shadow(0 0 18px rgba(94, 158, 197, 0.35));
+  mask-image:
+    radial-gradient(ellipse at center, transparent 0 21%, black 22% 74%, transparent 75%),
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      black 14%,
+      black 86%,
+      transparent 100%
+    );
+  opacity: 0;
+  animation: login-wave-pulse 7s ease-out infinite;
+}
+
+.login-wave-static {
+  width: min(96vw, 1080px);
+  height: 260px;
+  opacity: 0.34;
+  animation: login-wave-drift 18s linear infinite;
+  mask-image:
+    radial-gradient(ellipse at center, transparent 0 24%, black 25% 78%, transparent 79%),
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      black 10%,
+      black 90%,
+      transparent 100%
+    );
+}
+
+.login-wave-static::before,
+.login-wave::before {
+  content: "";
+  position: absolute;
+  inset: 50% 0 auto;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(237, 237, 237, 0.76), rgba(94, 158, 197, 0.7), transparent);
+  box-shadow: 0 0 14px rgba(94, 158, 197, 0.55);
+  transform: translateY(-50%);
+}
+
+.login-wave-one {
+  animation-delay: 0s;
+}
+
+.login-wave-two {
+  animation-delay: 1.6s;
+}
+
+.login-wave-three {
+  animation-delay: 3.2s;
+}
+
+.login-wave-four {
+  animation-delay: 4.8s;
+}
+
+@keyframes login-wave-pulse {
+  0% {
+    opacity: 0.08;
+    transform: translate(-50%, -50%) scale(0.36, 0.32);
+  }
+  18% {
+    opacity: 0.78;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.55, 1.25);
+  }
+}
+
+@keyframes login-wave-drift {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 176px 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-wave-static,
+  .login-wave {
+    animation: none;
+    opacity: 0.28;
+    transform: translate(-50%, -50%) scale(1.15, 0.9);
+  }
+
+  .login-wave:not(.login-wave-one) {
+    display: none;
+  }
+}
