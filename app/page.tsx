@@ -1431,7 +1431,7 @@ export default function Home() {
   const [vibeOptions, setVibeOptions] = useState<string[]>(DEFAULT_VIBES);
   const [newInstrument, setNewInstrument] = useState('');
   const [newVibe, setNewVibe] = useState('');
-  const [sortBy, setSortBy] = useState<SortBy>('random');
+  const [sortBy, setSortBy] = useState<SortBy>('adamsRating');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [randomSortSeed, setRandomSortSeed] = useState(() => Math.random());
   const [randomTrackIds, setRandomTrackIds] = useState<string[] | null>(null);
