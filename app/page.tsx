@@ -69,6 +69,7 @@ interface AudioCardProps {
 }
 
 type EndMode = 'repeat' | 'next' | 'stop';
+type SortBy = 'random' | 'name' | 'date' | 'adamsRating' | 'userRating';
 
 interface PlayerRegistryEntry {
   cardElement: HTMLDivElement;
@@ -119,6 +120,14 @@ const getTags = (file: AudioFile, pluralKey: 'instruments' | 'vibes', singularKe
 const displayTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag.replace(/\b\w/g, char => char.toUpperCase());
 
 const getNoteText = (file: AudioFile) => file.notes ?? file.comments?.filter(comment => !comment.userId).map(comment => comment.text).join('\n') ?? '';
+
+const getRandomSortValue = (id: string, seed: number) => {
+  let hash = Math.floor(seed * 1000000000);
+  for (let i = 0; i < id.length; i++) {
+    hash = Math.imul(hash ^ id.charCodeAt(i), 2654435761);
+  }
+  return hash >>> 0;
+};
 
 const parseTimecode = (value: string) => {
   const trimmed = value.trim();
@@ -1422,8 +1431,9 @@ export default function Home() {
   const [vibeOptions, setVibeOptions] = useState<string[]>(DEFAULT_VIBES);
   const [newInstrument, setNewInstrument] = useState('');
   const [newVibe, setNewVibe] = useState('');
-  const [sortBy, setSortBy] = useState<'name' | 'date' | 'adamsRating' | 'userRating'>('adamsRating');
+  const [sortBy, setSortBy] = useState<SortBy>('random');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [randomSortSeed, setRandomSortSeed] = useState(() => Math.random());
   const [randomTrackIds, setRandomTrackIds] = useState<string[] | null>(null);
   const [randomIncludeVoiceMemos, setRandomIncludeVoiceMemos] = useState(false);
   const [activeTrack, setActiveTrack] = useState<AudioFile | null>(null);
@@ -1483,13 +1493,17 @@ export default function Home() {
         aVal = a.userRating;
         bVal = b.userRating;
         break;
+      case 'random':
+        aVal = getRandomSortValue(a.id, randomSortSeed);
+        bVal = getRandomSortValue(b.id, randomSortSeed);
+        break;
       default:
         return 0;
     }
     if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1;
     if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1;
     return 0;
-  }, [sortBy, sortDirection]);
+  }, [randomSortSeed, sortBy, sortDirection]);
 
   const matchesFilters = useCallback((file: AudioFile) => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
@@ -1556,9 +1570,10 @@ export default function Home() {
     selectedYears,
     likedOnly,
     randomTrackIds,
+    randomSortSeed,
     sortBy,
     sortDirection,
-  }), [likedOnly, randomTrackIds, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, sortBy, sortDirection]);
+  }), [likedOnly, randomSortSeed, randomTrackIds, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, sortBy, sortDirection]);
 
   const renderLimit = renderWindow.key === filterKey ? renderWindow.limit : INITIAL_RENDER_LIMIT;
 
@@ -1609,12 +1624,25 @@ export default function Home() {
   };
 
   const pickRandomTracks = () => {
+    if (activeWaveSurferRef.current) {
+      activeWaveSurferRef.current.pause();
+      activeWaveSurferRef.current.seekTo(0);
+    }
+    activeWaveSurferRef.current = null;
+    activeTrackIdRef.current = null;
+    activeCardElementRef.current = null;
+    setActiveTrack(null);
+    setIsPlaying(false);
+    setProgress(0);
+
     const shuffled = [...randomCandidates];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
 
+    setSortBy('random');
+    setRandomSortSeed(Math.random());
     setRandomTrackIds(shuffled.slice(0, 5).map(file => file.id));
     setRenderWindow(prev => ({ ...prev, key: '', limit: INITIAL_RENDER_LIMIT }));
   };
@@ -2170,9 +2198,10 @@ export default function Home() {
               <label className="text-foreground">Sort by:</label>
               <select
                 value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                onChange={(e) => setSortBy(e.target.value as SortBy)}
                 className="min-h-11 flex-1 rounded border border-border bg-background p-2 text-foreground sm:flex-none"
               >
+                <option value="random">Random</option>
                 <option value="name">Name</option>
                 <option value="date">Date</option>
                 <option value="adamsRating">Adam&apos;s Rating</option>
