@@ -80,8 +80,9 @@ const DEFAULT_VIBES = ['ambient', 'rock', 'indie', 'acoustic', 'hard', 'soft', '
 const FINISH_OPTIONS = ['Tracked', 'Recorder', 'Voice Memo'];
 const INITIAL_RENDER_LIMIT = 30;
 const RENDER_BATCH_SIZE = 30;
-const WAVEFORM_PEAK_LENGTH = 1200;
-const WAVEFORM_PEAK_PRECISION = 1000;
+const WAVEFORM_PEAK_LENGTH = 4000;
+const WAVEFORM_PEAK_PRECISION = 10000;
+const WAVEFORM_EXPORT_PRECISION = 4;
 const VOL_BOOST_DB = 12;
 const VOL_BOOST_GAIN = Math.pow(10, VOL_BOOST_DB / 20);
 const TAG_LABELS: Record<string, string> = {
@@ -342,7 +343,7 @@ const AudioCard = ({
       const waveformPeaks = wavesurfer.exportPeaks({
         channels: 1,
         maxLength: WAVEFORM_PEAK_LENGTH,
-        precision: 3,
+        precision: WAVEFORM_EXPORT_PRECISION,
       });
       if (!waveformPeaks[0]?.length) return;
 

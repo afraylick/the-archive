@@ -48,8 +48,9 @@ interface ArchiveUser {
   isAdmin: boolean;
 }
 
-const WAVEFORM_PEAK_LENGTH = 1200;
-const WAVEFORM_PEAK_PRECISION = 1000;
+const WAVEFORM_PEAK_LENGTH = 4000;
+const WAVEFORM_PEAK_PRECISION = 10000;
+const WAVEFORM_EXPORT_PRECISION = 4;
 const FINISH_OPTIONS = ['Tracked', 'Recorder', 'Voice Memo'];
 const FINDER_COLOR_HEX: Record<string, string> = {
   gray: '#8e8e93',
@@ -256,7 +257,7 @@ const ManageWaveform = ({
         const waveformPeaks = wavesurfer.exportPeaks({
           channels: 1,
           maxLength: WAVEFORM_PEAK_LENGTH,
-          precision: 3,
+          precision: WAVEFORM_EXPORT_PRECISION,
         });
         if (!waveformPeaks[0]?.length || duration <= 0) return;
 
