@@ -5,6 +5,8 @@ import { getDataFilePath, getStemPath, getUploadPath } from '@/lib/storage';
 
 interface AudioFileRecord {
   id: string;
+  name?: string;
+  originalName?: string;
   instrument?: string;
   vibe?: string;
   instruments?: string[];
@@ -31,8 +33,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const { id } = await params;
   try {
     const user = getSessionUser(req);
-    if (!user?.isAdmin) {
-      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+    if (!user) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
     }
 
     const updatedFile = await req.json() as AudioFileRecord;
@@ -45,6 +47,26 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     if (index === -1) {
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
+
+    if (!user.isAdmin) {
+      if (
+        Array.isArray(updatedFile.waveformPeaks) &&
+        updatedFile.waveformPeaks.length > 0 &&
+        typeof updatedFile.waveformDuration === 'number' &&
+        updatedFile.waveformDuration > 0
+      ) {
+        data[index] = {
+          ...data[index],
+          waveformPeaks: updatedFile.waveformPeaks,
+          waveformDuration: updatedFile.waveformDuration,
+        };
+        fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+        return NextResponse.json({ message: 'Waveform updated successfully' });
+      }
+
+      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+    }
+
     if (Array.isArray(updatedFile.instruments)) {
       updatedFile.instrument = updatedFile.instruments[0] || '';
     }

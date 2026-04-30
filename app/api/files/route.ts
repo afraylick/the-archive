@@ -6,6 +6,8 @@ import { getDataFilePath, getUploadPath } from '@/lib/storage';
 
 interface AudioFileRecord {
   id: string;
+  name?: string;
+  originalName?: string;
   instrument?: string;
   vibe?: string;
   instruments?: string[];
@@ -63,7 +65,7 @@ const sanitizeFileForUser = (file: AudioFileRecord, userId: UserId, isAdmin: boo
     ...file,
     bobs: isAdmin ? file.bobs : undefined,
     liked: file.likedBy?.includes(userId) || false,
-    likedBy: file.likedBy?.includes(userId) ? [userId] : [],
+    likedBy: isAdmin ? (file.likedBy || []) : file.likedBy?.includes(userId) ? [userId] : [],
     ratings: visibleRatings,
     myRating: ratings.adam || file.myRating || 0,
     userRating: getRating(file, userId),

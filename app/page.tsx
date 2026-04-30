@@ -8,6 +8,7 @@ import WaveSurfer from 'wavesurfer.js';
 interface AudioFile {
   id: string;
   name: string;
+  originalName?: string;
   instrument?: string;
   vibe?: string;
   instruments?: string[];
@@ -79,6 +80,8 @@ const DEFAULT_VIBES = ['ambient', 'rock', 'indie', 'acoustic', 'hard', 'soft', '
 const FINISH_OPTIONS = ['Tracked', 'Recorder', 'Voice Memo'];
 const INITIAL_RENDER_LIMIT = 30;
 const RENDER_BATCH_SIZE = 30;
+const WAVEFORM_PEAK_LENGTH = 1200;
+const WAVEFORM_PEAK_PRECISION = 1000;
 const VOL_BOOST_DB = 12;
 const VOL_BOOST_GAIN = Math.pow(10, VOL_BOOST_DB / 20);
 const TAG_LABELS: Record<string, string> = {
@@ -136,6 +139,29 @@ const hasCachedWaveform = (file: AudioFile) => (
   typeof file.waveformDuration === 'number' &&
   file.waveformDuration > 0
 );
+
+const createWaveformPeaks = (audioBuffer: AudioBuffer) => {
+  const channelData = audioBuffer.getChannelData(0);
+  const peaks: number[] = [];
+  const samplesPerPeak = channelData.length / WAVEFORM_PEAK_LENGTH;
+
+  for (let i = 0; i < WAVEFORM_PEAK_LENGTH; i++) {
+    const start = Math.floor(i * samplesPerPeak);
+    const end = Math.max(start + 1, Math.ceil((i + 1) * samplesPerPeak));
+    let peak = 0;
+
+    for (let sampleIndex = start; sampleIndex < end && sampleIndex < channelData.length; sampleIndex++) {
+      const sample = channelData[sampleIndex];
+      if (Math.abs(sample) > Math.abs(peak)) {
+        peak = sample;
+      }
+    }
+
+    peaks.push(Math.round(peak * WAVEFORM_PEAK_PRECISION) / WAVEFORM_PEAK_PRECISION);
+  }
+
+  return [peaks];
+};
 
 const getCreatedDateValue = (file: AudioFile) => {
   if (file.createdAt) {
@@ -229,6 +255,8 @@ const AudioCard = ({
   const [hoveredAdamRating, setHoveredAdamRating] = useState(0);
   const [hoveredUserRating, setHoveredUserRating] = useState(0);
   const [openTagPicker, setOpenTagPicker] = useState<'instruments' | 'vibes' | null>(null);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameDraft, setRenameDraft] = useState(file.name);
   const [showNotes, setShowNotes] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [showCollections, setShowCollections] = useState(false);
@@ -240,6 +268,8 @@ const AudioCard = ({
   const [noteText, setNoteText] = useState(() => getNoteText(file));
   const [isVolumeBoosted, setIsVolumeBoosted] = useState(false);
   const [volumeBoostConfirming, setVolumeBoostConfirming] = useState(false);
+  const [waveformRefreshing, setWaveformRefreshing] = useState(false);
+  const [waveformRefreshKey, setWaveformRefreshKey] = useState(0);
   const [shouldMountWaveform, setShouldMountWaveform] = useState(false);
   const [duration, setDuration] = useState(file.waveformDuration || 0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -311,7 +341,7 @@ const AudioCard = ({
 
       const waveformPeaks = wavesurfer.exportPeaks({
         channels: 1,
-        maxLength: 1200,
+        maxLength: WAVEFORM_PEAK_LENGTH,
         precision: 3,
       });
       if (!waveformPeaks[0]?.length) return;
@@ -355,7 +385,7 @@ const AudioCard = ({
       wavesurfer.destroy();
       wavesurferRef.current = null;
     };
-  }, [onDestroy, onPause, onPlay, onReady, onStop, setFiles, shouldRenderWaveform]);
+  }, [onDestroy, onPause, onPlay, onReady, onStop, setFiles, shouldRenderWaveform, waveformRefreshKey]);
 
   useEffect(() => {
     if (!volumeBoostConfirming) return;
@@ -404,6 +434,29 @@ const AudioCard = ({
       body: JSON.stringify(updatedFile),
     });
     setFiles(prev => prev.map(f => f.id === file.id ? updatedFile : f));
+  };
+
+  const saveRename = async () => {
+    const nextName = renameDraft.trim();
+    if (!nextName || nextName === file.name) {
+      setRenameDraft(file.name);
+      setIsRenaming(false);
+      return;
+    }
+
+    const updatedFile = {
+      ...file,
+      name: nextName,
+      originalName: file.originalName || file.name,
+    };
+
+    try {
+      await updateFile(updatedFile);
+      setRenameDraft(nextName);
+      setIsRenaming(false);
+    } catch {
+      alert('Failed to rename file');
+    }
   };
 
   const toggleTag = async (category: 'instruments' | 'vibes', tag: string) => {
@@ -562,6 +615,50 @@ const AudioCard = ({
     setVolumeBoostConfirming(false);
   };
 
+  const refreshWaveform = async () => {
+    setWaveformRefreshing(true);
+    try {
+      const latestFile = latestFileRef.current;
+      const res = await fetch(`/api/files/${encodeURIComponent(latestFile.id)}/audio`);
+      if (!res.ok) throw new Error('Failed to load audio file');
+
+      const audioContext = getSharedAudioContext();
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
+
+      const audioBuffer = await audioContext.decodeAudioData(await res.arrayBuffer());
+      const waveformPeaks = createWaveformPeaks(audioBuffer);
+      const updatedFile = {
+        ...latestFile,
+        waveformPeaks,
+        waveformDuration: audioBuffer.duration,
+      };
+
+      const saveRes = await fetch(`/api/files/${encodeURIComponent(latestFile.id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedFile),
+      });
+      if (!saveRes.ok) throw new Error('Failed to save waveform');
+
+      initialWaveformCacheRef.current = {
+        peaks: waveformPeaks,
+        duration: audioBuffer.duration,
+      };
+      setDuration(audioBuffer.duration);
+      setCurrentTime(0);
+      setFiles(prev => prev.map(f => f.id === latestFile.id ? updatedFile : f));
+      setShouldMountWaveform(true);
+      setWaveformRefreshKey(prev => prev + 1);
+    } catch (error) {
+      console.error('Failed to refresh waveform for', latestFileRef.current.id, error);
+      alert('Failed to refresh waveform');
+    } finally {
+      setWaveformRefreshing(false);
+    }
+  };
+
   const instruments = getTags(file, 'instruments', 'instrument');
   const vibes = getTags(file, 'vibes', 'vibe');
   const finish = file.finish || '';
@@ -622,7 +719,52 @@ const AudioCard = ({
                   />
                 </svg>
               </button>
-              <h2 className="min-w-0 break-words text-lg font-semibold text-foreground sm:text-xl">{file.name}</h2>
+              <div className="min-w-0 flex-1">
+                {isRenaming ? (
+                  <input
+                    type="text"
+                    value={renameDraft}
+                    onChange={(event) => setRenameDraft(event.target.value)}
+                    onBlur={saveRename}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') void saveRename();
+                      if (event.key === 'Escape') {
+                        setRenameDraft(file.name);
+                        setIsRenaming(false);
+                      }
+                    }}
+                    className="w-full rounded border border-accent/50 bg-background/80 px-2 py-1 text-lg font-semibold text-foreground outline-none sm:text-xl"
+                    autoFocus
+                  />
+                ) : (
+                  <div className="flex min-w-0 items-start gap-2">
+                    <div className="min-w-0">
+                      <h2 className="break-words text-lg font-semibold text-foreground sm:text-xl">{file.name}</h2>
+                      {file.originalName && file.originalName !== file.name && (
+                        <p className="mt-0.5 break-words text-[11px] font-light text-muted-foreground opacity-70">
+                          {file.originalName}
+                        </p>
+                      )}
+                    </div>
+                    {currentUser.isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRenameDraft(file.name);
+                          setIsRenaming(true);
+                        }}
+                        className="mt-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-border/60 text-muted-foreground opacity-70 transition hover:border-border hover:text-foreground hover:opacity-100"
+                        title="Rename file"
+                        aria-label={`Rename ${file.name}`}
+                      >
+                        <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m16.9 4.7 2.4 2.4M4 20h4.8L20 8.8a1.7 1.7 0 0 0 0-2.4L17.6 4a1.7 1.7 0 0 0-2.4 0L4 15.2V20z" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
           <div className="mb-3 space-y-2">
@@ -1002,20 +1144,34 @@ const AudioCard = ({
           </div>
         </div>
         <div className="order-1 relative flex min-h-56 min-w-0 items-center justify-center sm:min-h-48 md:order-2">
-          <button
-            type="button"
-            onClick={handleVolumeBoostClick}
-            className={`absolute right-0 top-0 z-10 min-h-8 rounded border px-2 py-1 text-[10px] font-medium leading-none opacity-50 transition hover:opacity-80 ${
-              isVolumeBoosted
-                ? 'border-accent/50 bg-accent/15 text-accent'
-                : volumeBoostConfirming
-                  ? 'border-accent/40 bg-accent/10 text-accent'
-                  : 'border-border/60 bg-background/80 text-muted-foreground hover:border-border hover:text-foreground'
-            }`}
-            title={`Boost this song by ${VOL_BOOST_DB} dB`}
-          >
-            {isVolumeBoosted ? `+${VOL_BOOST_DB} dB` : volumeBoostConfirming ? 'Confirm' : 'Vol Boost'}
-          </button>
+          <div className="absolute right-0 top-0 z-10 flex items-start gap-1">
+            <button
+              type="button"
+              onClick={refreshWaveform}
+              disabled={waveformRefreshing}
+              className="inline-flex h-8 w-8 items-center justify-center rounded border border-border/60 bg-background/80 text-muted-foreground opacity-55 transition hover:border-border hover:text-foreground hover:opacity-85 disabled:opacity-35"
+              title="Refresh waveform"
+              aria-label={`Refresh waveform for ${file.name}`}
+            >
+              <svg className={`h-3.5 w-3.5 ${waveformRefreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 11a8.1 8.1 0 0 0-15.5-2M4 5v4h4m-4 4a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={handleVolumeBoostClick}
+              className={`min-h-8 rounded border px-2 py-1 text-[10px] font-medium leading-none opacity-50 transition hover:opacity-80 ${
+                isVolumeBoosted
+                  ? 'border-accent/50 bg-accent/15 text-accent'
+                  : volumeBoostConfirming
+                    ? 'border-accent/40 bg-accent/10 text-accent'
+                    : 'border-border/60 bg-background/80 text-muted-foreground hover:border-border hover:text-foreground'
+              }`}
+              title={`Boost this song by ${VOL_BOOST_DB} dB`}
+            >
+              {isVolumeBoosted ? `+${VOL_BOOST_DB} dB` : volumeBoostConfirming ? 'Confirm' : 'Vol Boost'}
+            </button>
+          </div>
           <div 
             ref={waveformRef} 
             className="mx-auto mb-2 min-h-56 w-full max-w-[760px] cursor-pointer sm:min-h-44" 
@@ -1267,6 +1423,8 @@ export default function Home() {
   const [newVibe, setNewVibe] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'date' | 'adamsRating' | 'userRating'>('adamsRating');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [randomTrackIds, setRandomTrackIds] = useState<string[] | null>(null);
+  const [randomIncludeVoiceMemos, setRandomIncludeVoiceMemos] = useState(false);
   const [activeTrack, setActiveTrack] = useState<AudioFile | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -1350,9 +1508,42 @@ export default function Home() {
     );
   }, [likedOnly, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears]);
 
-  const filteredFiles = useMemo(() => {
+  const matchesRandomFilters = useCallback((file: AudioFile) => {
+    const normalizedSearch = searchQuery.trim().toLowerCase();
+    const fileCollections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
+    const matchesSearch = normalizedSearch.length === 0
+      || file.name.toLowerCase().includes(normalizedSearch)
+      || (searchNotes && getNoteText(file).toLowerCase().includes(normalizedSearch));
+    const finish = file.finish || '';
+
+    return (
+      matchesSearch &&
+      (!likedOnly || Boolean(file.liked)) &&
+      (randomIncludeVoiceMemos || finish !== 'Voice Memo') &&
+      (selectedInstruments.length === 0 || getTags(file, 'instruments', 'instrument').some(tag => selectedInstruments.includes(tag))) &&
+      (selectedVibes.length === 0 || getTags(file, 'vibes', 'vibe').some(tag => selectedVibes.includes(tag))) &&
+      (selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection))) &&
+      (selectedYears.length === 0 || selectedYears.includes(file.year || 0))
+    );
+  }, [likedOnly, randomIncludeVoiceMemos, searchNotes, searchQuery, selectedCollections, selectedInstruments, selectedVibes, selectedYears]);
+
+  const sortedFilteredFiles = useMemo(() => {
     return files.filter(matchesFilters).sort(compareFiles);
   }, [compareFiles, files, matchesFilters]);
+
+  const randomCandidates = useMemo(() => {
+    return files.filter(matchesRandomFilters);
+  }, [files, matchesRandomFilters]);
+
+  const filteredFiles = useMemo(() => {
+    if (!randomTrackIds) return sortedFilteredFiles;
+
+    const fileById = new Map(files.map(file => [file.id, file]));
+    return randomTrackIds.flatMap(id => {
+      const file = fileById.get(id);
+      return file && matchesRandomFilters(file) ? [file] : [];
+    });
+  }, [files, matchesRandomFilters, randomTrackIds, sortedFilteredFiles]);
 
   const filterKey = useMemo(() => JSON.stringify({
     searchNotes,
@@ -1363,9 +1554,10 @@ export default function Home() {
     selectedVibes,
     selectedYears,
     likedOnly,
+    randomTrackIds,
     sortBy,
     sortDirection,
-  }), [likedOnly, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, sortBy, sortDirection]);
+  }), [likedOnly, randomTrackIds, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, sortBy, sortDirection]);
 
   const renderLimit = renderWindow.key === filterKey ? renderWindow.limit : INITIAL_RENDER_LIMIT;
 
@@ -1413,6 +1605,17 @@ export default function Home() {
       setVibeOptions([...vibeOptions, newVibe.trim()]);
       setNewVibe('');
     }
+  };
+
+  const pickRandomTracks = () => {
+    const shuffled = [...randomCandidates];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    setRandomTrackIds(shuffled.slice(0, 5).map(file => file.id));
+    setRenderWindow(prev => ({ ...prev, key: '', limit: INITIAL_RENDER_LIMIT }));
   };
 
   useEffect(() => {
@@ -1929,24 +2132,58 @@ export default function Home() {
           </div>
         </div>
         <div className="flex-1 md:pl-4">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 sm:justify-end">
-            <label className="text-foreground">Sort by:</label>
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-              className="min-h-11 flex-1 rounded border border-border bg-background p-2 text-foreground sm:flex-none"
-            >
-              <option value="name">Name</option>
-              <option value="date">Date</option>
-              <option value="adamsRating">Adam&apos;s Rating</option>
-              <option value="userRating">User Rating</option>
-            </select>
-            <button
-              onClick={() => setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')}
-              className="min-h-11 rounded bg-accent px-4 py-2 text-accent-foreground hover:bg-accent/80"
-            >
-              {sortDirection === 'asc' ? '↑' : '↓'}
-            </button>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2 rounded border border-border/60 bg-muted/30 p-1.5">
+              <button
+                type="button"
+                onClick={pickRandomTracks}
+                disabled={randomCandidates.length === 0}
+                className={`min-h-9 rounded px-3 py-1.5 text-sm transition disabled:opacity-50 ${
+                  randomTrackIds
+                    ? 'bg-accent text-accent-foreground hover:bg-accent/90'
+                    : 'bg-background text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Random
+              </button>
+              <label className="flex cursor-pointer items-center gap-2 px-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={randomIncludeVoiceMemos}
+                  onChange={(event) => setRandomIncludeVoiceMemos(event.target.checked)}
+                  className="h-3.5 w-3.5 accent-accent"
+                />
+                Voice memos
+              </label>
+              {randomTrackIds && (
+                <button
+                  type="button"
+                  onClick={() => setRandomTrackIds(null)}
+                  className="min-h-9 rounded px-3 py-1.5 text-xs text-muted-foreground transition hover:bg-background hover:text-foreground"
+                >
+                  All
+                </button>
+              )}
+            </div>
+            <div className="flex flex-1 flex-wrap items-center justify-end gap-3 sm:flex-none">
+              <label className="text-foreground">Sort by:</label>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                className="min-h-11 flex-1 rounded border border-border bg-background p-2 text-foreground sm:flex-none"
+              >
+                <option value="name">Name</option>
+                <option value="date">Date</option>
+                <option value="adamsRating">Adam&apos;s Rating</option>
+                <option value="userRating">User Rating</option>
+              </select>
+              <button
+                onClick={() => setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')}
+                className="min-h-11 rounded bg-accent px-4 py-2 text-accent-foreground hover:bg-accent/80"
+              >
+                {sortDirection === 'asc' ? '↑' : '↓'}
+              </button>
+            </div>
           </div>
           <div className="space-y-4">
             {displayedFiles.map(file => {

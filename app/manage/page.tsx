@@ -1,26 +1,38 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
+import WaveSurfer from 'wavesurfer.js';
 
 interface AudioFile {
   id: string;
   name: string;
+  originalName?: string;
   instrument?: string;
   vibe?: string;
   instruments?: string[];
   vibes?: string[];
   finish?: string;
+  collections?: string[];
   colorTags?: string[];
   waveformPeaks?: number[][];
   waveformDuration?: number;
   year?: number;
   createdAt?: string;
   ratings?: Record<string, number>;
+  likedBy?: string[];
   stems?: StemAttachment;
   bobs?: boolean;
   myRating: number;
   userRating: number;
-  comments: { text: string; timestamp?: number }[];
+  notes?: string;
+  comments: {
+    id?: string;
+    text: string;
+    timestamp?: number;
+    userId?: string;
+    userName?: string;
+    createdAt?: string;
+  }[];
   uploadedAt: string;
 }
 
@@ -56,6 +68,16 @@ const TAG_LABELS: Record<string, string> = {
 
 const displayTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag.replace(/\b\w/g, char => char.toUpperCase());
 const normalizeTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag;
+const formatCsvDate = (value: string | undefined) => {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString();
+};
+
+const csvCell = (value: unknown) => {
+  const text = value === undefined || value === null ? '' : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
+};
 
 let waveformAudioContext: AudioContext | null = null;
 
@@ -148,14 +170,152 @@ const RatingInput = ({ value, onChange }: { value: number; onChange: (rating: nu
   );
 };
 
+const ManageWaveform = ({
+  file,
+  activeWaveSurferRef,
+  onWaveformRegenerated,
+}: {
+  file: AudioFile;
+  activeWaveSurferRef: MutableRefObject<WaveSurfer | null>;
+  onWaveformRegenerated: (file: AudioFile, waveformPeaks: number[][], waveformDuration: number) => Promise<void>;
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const wavesurferRef = useRef<WaveSurfer | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [hasPreview, setHasPreview] = useState(false);
+  const [status, setStatus] = useState('Click waveform to load full song and refresh cache');
+  const latestFileRef = useRef(file);
+
+  useEffect(() => {
+    latestFileRef.current = file;
+  }, [file]);
+
+  useEffect(() => {
+    return () => {
+      if (activeWaveSurferRef.current === wavesurferRef.current) {
+        activeWaveSurferRef.current = null;
+      }
+      wavesurferRef.current?.destroy();
+      wavesurferRef.current = null;
+    };
+  }, [activeWaveSurferRef]);
+
+  const togglePlayer = async () => {
+    if (wavesurferRef.current) {
+      if (activeWaveSurferRef.current && activeWaveSurferRef.current !== wavesurferRef.current) {
+        activeWaveSurferRef.current.pause();
+      }
+      activeWaveSurferRef.current = wavesurferRef.current;
+      wavesurferRef.current.playPause();
+      return;
+    }
+
+    if (!containerRef.current) return;
+
+    setStatus('Loading full song...');
+    const wavesurfer = WaveSurfer.create({
+      container: containerRef.current,
+      waveColor: '#a3a3a3',
+      progressColor: '#5e9ec5',
+      height: 116,
+      interact: true,
+      dragToSeek: true,
+      url: `/api/files/${encodeURIComponent(file.id)}/audio`,
+    });
+
+    wavesurferRef.current = wavesurfer;
+    setHasPreview(true);
+
+    wavesurfer.on('ready', () => {
+      setStatus('Playing');
+      if (activeWaveSurferRef.current && activeWaveSurferRef.current !== wavesurfer) {
+        activeWaveSurferRef.current.pause();
+      }
+      activeWaveSurferRef.current = wavesurfer;
+      wavesurfer.play();
+    });
+
+    wavesurfer.on('play', () => {
+      setIsPlaying(true);
+      setStatus('Playing');
+    });
+
+    wavesurfer.on('pause', () => {
+      setIsPlaying(false);
+      setStatus('Ready');
+    });
+
+    wavesurfer.on('finish', () => {
+      setIsPlaying(false);
+      setStatus('Ready');
+    });
+
+    wavesurfer.on('decode', async (duration: number) => {
+      try {
+        setStatus('Refreshing waveform...');
+        const waveformPeaks = wavesurfer.exportPeaks({
+          channels: 1,
+          maxLength: WAVEFORM_PEAK_LENGTH,
+          precision: 3,
+        });
+        if (!waveformPeaks[0]?.length || duration <= 0) return;
+
+        await onWaveformRegenerated(latestFileRef.current, waveformPeaks, duration);
+        setStatus(wavesurfer.isPlaying() ? 'Playing' : 'Ready');
+      } catch (error) {
+        console.error('Failed to refresh manage waveform for', latestFileRef.current.id, error);
+        setStatus('Player loaded, waveform refresh failed');
+      }
+    });
+
+    wavesurfer.on('error', (error: Error) => {
+      console.error('Manage WaveSurfer error for', file.id, error);
+      setStatus('Preview failed');
+    });
+  };
+
+  return (
+    <div className="mt-3 w-full">
+      <div
+        className="relative min-h-32 overflow-hidden rounded border border-border/60 bg-background/60 p-2 transition hover:border-accent/50"
+      >
+        <div ref={containerRef} className="min-h-28 w-full" />
+        {!hasPreview && (
+          <button
+            type="button"
+            onClick={togglePlayer}
+            className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground transition hover:text-foreground"
+          >
+            Click to load full song
+          </button>
+        )}
+      </div>
+      <div className="mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>{status}</span>
+        {hasPreview && (
+          <button
+            type="button"
+            onClick={togglePlayer}
+            className="rounded border border-border px-2 py-1 transition hover:border-accent hover:text-foreground"
+          >
+            {isPlaying ? 'Pause' : 'Play'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
 export default function ManagePage() {
   const [files, setFiles] = useState<AudioFile[]>([]);
   const [accountUsers, setAccountUsers] = useState<ArchiveUser[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
   const [waveformProcessingId, setWaveformProcessingId] = useState<string | null>(null);
   const [waveformBulkStatus, setWaveformBulkStatus] = useState('');
   const [stemUploadingId, setStemUploadingId] = useState<string | null>(null);
   const [stemDeletingId, setStemDeletingId] = useState<string | null>(null);
+  const activeWaveSurferRef = useRef<WaveSurfer | null>(null);
 
   const fetchFiles = useCallback(() => {
     fetch('/api/files')
@@ -223,6 +383,17 @@ export default function ManagePage() {
     }
 
     setFiles(prev => prev.map(f => f.id === updatedFile.id ? updatedFile : f));
+  };
+
+  const refreshWaveformFromPreview = async (file: AudioFile, waveformPeaks: number[][], waveformDuration: number) => {
+    await saveFile(
+      {
+        ...file,
+        waveformPeaks,
+        waveformDuration,
+      },
+      'Failed to save refreshed waveform'
+    );
   };
 
   const cullWaveform = async (file: AudioFile) => {
@@ -394,6 +565,89 @@ export default function ManagePage() {
     }
   };
 
+  const exportCsv = () => {
+    const userIds = accountUsers.map(user => user.id);
+    const userNamesById = new Map(accountUsers.map(user => [user.id, user.name]));
+    const headers = [
+      'name',
+      'originalName',
+      'notes',
+      'likedBy',
+      ...userIds.map(userId => `rating:${userNamesById.get(userId) || userId}`),
+      'comments',
+      'collections',
+      'bobs',
+      'hasStems',
+      'stemsName',
+      'instruments',
+      'vibes',
+      'finish',
+      'year',
+      'recordedAt',
+      'uploadedAt',
+      'finderColorTags',
+      'waveformCached',
+      'waveformDuration',
+      'id',
+    ];
+
+    const rows = files.map(file => {
+      const comments = (file.comments || []).map(comment => {
+        const userName = comment.userName || (comment.userId ? userNamesById.get(comment.userId) : '') || comment.userId || 'Unknown';
+        const timecode = typeof comment.timestamp === 'number' ? ` @${comment.timestamp.toFixed(2)}s` : '';
+        const createdAt = comment.createdAt ? ` (${formatCsvDate(comment.createdAt)})` : '';
+        return `${userName}${timecode}${createdAt}: ${comment.text}`;
+      }).join('\n');
+
+      return [
+        file.name,
+        file.originalName || '',
+        file.notes || '',
+        (file.likedBy || []).map(userId => userNamesById.get(userId) || userId).join('; '),
+        ...userIds.map(userId => file.ratings?.[userId] || ''),
+        comments,
+        (file.collections || []).join('; '),
+        file.bobs ? 'yes' : 'no',
+        file.stems ? 'yes' : 'no',
+        file.stems?.name || '',
+        getTags(file, 'instruments', 'instrument').map(displayTag).join('; '),
+        getTags(file, 'vibes', 'vibe').map(displayTag).join('; '),
+        file.finish || '',
+        file.year || '',
+        formatCsvDate(file.createdAt),
+        formatCsvDate(file.uploadedAt),
+        (file.colorTags || []).join('; '),
+        hasCachedWaveform(file) ? 'yes' : 'no',
+        file.waveformDuration || '',
+        file.id,
+      ];
+    });
+
+    const csv = [headers, ...rows].map(row => row.map(csvCell).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `the-archive-export-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const filteredFiles = files.filter(file => {
+    const normalizedSearch = searchQuery.trim().toLowerCase();
+    if (!normalizedSearch) return true;
+
+    return (
+      file.name.toLowerCase().includes(normalizedSearch) ||
+      getTags(file, 'instruments', 'instrument').some(tag => tag.toLowerCase().includes(normalizedSearch)) ||
+      getTags(file, 'vibes', 'vibe').some(tag => tag.toLowerCase().includes(normalizedSearch)) ||
+      (file.finish || '').toLowerCase().includes(normalizedSearch) ||
+      String(file.year || '').includes(normalizedSearch)
+    );
+  });
+
   if (loading) return <div className="bg-background text-foreground min-h-screen flex items-center justify-center">Loading...</div>;
 
   return (
@@ -431,12 +685,29 @@ export default function ManagePage() {
           >
             Regenerate All Waveforms
           </button>
+          <button
+            type="button"
+            onClick={exportCsv}
+            className="rounded border border-border px-4 py-2 text-sm text-muted-foreground transition hover:border-accent hover:text-foreground"
+            disabled={files.length === 0}
+          >
+            Export CSV
+          </button>
           {waveformBulkStatus && (
             <span className="text-sm text-muted-foreground">{waveformBulkStatus}</span>
           )}
         </div>
+        <div className="mb-4">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search songs"
+            className="w-full rounded border border-border bg-background p-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent md:max-w-md"
+          />
+        </div>
         <div className="space-y-4">
-          {files.map(file => (
+          {filteredFiles.map(file => (
             <div key={file.id} className="border border-border p-4 rounded-lg shadow-md bg-card">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0">
@@ -509,53 +780,60 @@ export default function ManagePage() {
                     ))}
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-2 lg:justify-end">
-                  <label className="cursor-pointer rounded bg-muted px-3 py-2 text-sm text-muted-foreground transition hover:bg-muted/80">
-                    {stemUploadingId === file.id ? 'Uploading...' : file.stems ? 'Replace Stems ZIP' : 'Upload Stems ZIP'}
-                    <input
-                      type="file"
-                      accept=".zip,application/zip,application/x-zip-compressed"
-                      className="hidden"
-                      disabled={stemUploadingId === file.id}
-                      onChange={(event) => uploadStems(file, event.target.files?.[0] || null)}
-                    />
-                  </label>
-                  {file.stems && (
+                <div className="w-full lg:max-w-xl lg:flex-1">
+                  <div className="flex flex-wrap gap-2 lg:justify-end">
+                    <label className="cursor-pointer rounded bg-muted px-3 py-2 text-sm text-muted-foreground transition hover:bg-muted/80">
+                      {stemUploadingId === file.id ? 'Uploading...' : file.stems ? 'Replace Stems ZIP' : 'Upload Stems ZIP'}
+                      <input
+                        type="file"
+                        accept=".zip,application/zip,application/x-zip-compressed"
+                        className="hidden"
+                        disabled={stemUploadingId === file.id}
+                        onChange={(event) => uploadStems(file, event.target.files?.[0] || null)}
+                      />
+                    </label>
+                    {file.stems && (
+                      <button
+                        type="button"
+                        onClick={() => deleteStems(file)}
+                        className="rounded bg-red-500 px-3 py-2 text-sm text-white hover:bg-red-600 disabled:opacity-50"
+                        disabled={stemDeletingId === file.id}
+                      >
+                        {stemDeletingId === file.id ? 'Deleting Stems...' : 'Delete Stems'}
+                      </button>
+                    )}
                     <button
-                      type="button"
-                      onClick={() => deleteStems(file)}
-                      className="rounded bg-red-500 px-3 py-2 text-sm text-white hover:bg-red-600 disabled:opacity-50"
-                      disabled={stemDeletingId === file.id}
+                      onClick={() => cullWaveform(file)}
+                      className="rounded bg-muted px-3 py-2 text-sm text-muted-foreground hover:bg-muted/80 disabled:opacity-50"
+                      disabled={waveformProcessingId === file.id || !hasCachedWaveform(file)}
                     >
-                      {stemDeletingId === file.id ? 'Deleting Stems...' : 'Delete Stems'}
+                      Cull Waveform
                     </button>
-                  )}
-                  <button
-                    onClick={() => cullWaveform(file)}
-                    className="rounded bg-muted px-3 py-2 text-sm text-muted-foreground hover:bg-muted/80 disabled:opacity-50"
-                    disabled={waveformProcessingId === file.id || !hasCachedWaveform(file)}
-                  >
-                    Cull Waveform
-                  </button>
-                  <button
-                    onClick={() => regenerateWaveform(file)}
-                    className="rounded bg-accent px-3 py-2 text-sm text-accent-foreground hover:bg-accent/80 disabled:opacity-50"
-                    disabled={waveformProcessingId === file.id}
-                  >
-                    {waveformProcessingId === file.id ? 'Working...' : 'Regenerate Waveform'}
-                  </button>
-                  <button
-                    onClick={() => resetFriendRatings(file.id)}
-                    className="rounded bg-yellow-500 px-3 py-2 text-sm text-white hover:bg-yellow-600"
-                  >
-                    Reset Friend Ratings
-                  </button>
-                  <button
-                    onClick={() => deleteFile(file.id)}
-                    className="rounded bg-red-500 px-3 py-2 text-sm text-white hover:bg-red-600"
-                  >
-                    Delete
-                  </button>
+                    <button
+                      onClick={() => regenerateWaveform(file)}
+                      className="rounded bg-accent px-3 py-2 text-sm text-accent-foreground hover:bg-accent/80 disabled:opacity-50"
+                      disabled={waveformProcessingId === file.id}
+                    >
+                      {waveformProcessingId === file.id ? 'Working...' : 'Regenerate Waveform'}
+                    </button>
+                    <button
+                      onClick={() => resetFriendRatings(file.id)}
+                      className="rounded bg-yellow-500 px-3 py-2 text-sm text-white hover:bg-yellow-600"
+                    >
+                      Reset Friend Ratings
+                    </button>
+                    <button
+                      onClick={() => deleteFile(file.id)}
+                      className="rounded bg-red-500 px-3 py-2 text-sm text-white hover:bg-red-600"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                  <ManageWaveform
+                    file={file}
+                    activeWaveSurferRef={activeWaveSurferRef}
+                    onWaveformRegenerated={refreshWaveformFromPreview}
+                  />
                 </div>
               </div>
             </div>
