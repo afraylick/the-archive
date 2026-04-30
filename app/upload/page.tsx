@@ -25,6 +25,38 @@ const FINDER_COLOR_HEX: Record<string, string> = {
 const displayTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag.replace(/\b\w/g, char => char.toUpperCase());
 const normalizeTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag;
 const deriveFinishFromFilename = (filename: string) => filename.toLowerCase().includes('ste-0') ? 'Recorder' : 'Voice Memo';
+const FINDER_COLOR_NAMES = new Set(Object.keys(FINDER_COLOR_HEX));
+
+const deriveRatingFromColorTags = (colorTags: string[], fallbackRating: number) => {
+  const colors = new Set(colorTags);
+  if (colorTags.length > 3) return 5;
+  if (colors.has('yellow') && colors.has('green')) return 2;
+  if (colors.has('blue') && colors.has('green')) return 5;
+  if (colors.has('blue')) return 4;
+  if (colors.has('green')) return 3;
+  if (colorTags.length === 1 && colors.has('yellow')) return 2;
+  return fallbackRating;
+};
+
+interface FinderTagEntry {
+  name?: string;
+  fileName?: string;
+  path?: string;
+  relativePath?: string;
+  colorTags?: string[];
+}
+
+interface FinderTagExport {
+  files?: FinderTagEntry[];
+}
+
+const normalizeFilename = (value: string | undefined) => value ? value.split('/').pop()?.trim().toLowerCase() || '' : '';
+const normalizeColorTags = (tags: unknown) => Array.isArray(tags)
+  ? Array.from(new Set(tags
+      .map(tag => String(tag).trim().toLowerCase())
+      .filter(tag => FINDER_COLOR_NAMES.has(tag))
+    ))
+  : [];
 
 interface AudioFile {
   instrument?: string;
@@ -158,6 +190,7 @@ interface FileEntry {
   finish: string;
   year: number;
   createdAt: string;
+  colorTags: string[];
   rating: number;
   bobs: boolean;
 }
@@ -178,6 +211,7 @@ interface FolderEntry {
 export default function UploadPage() {
   const [fileEntries, setFileEntries] = useState<FileEntry[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [finderTagImportStatus, setFinderTagImportStatus] = useState('');
   const [importingFolder, setImportingFolder] = useState(false);
   const [loadingFolder, setLoadingFolder] = useState(false);
   const [folderPath, setFolderPath] = useState('');
@@ -226,6 +260,7 @@ export default function UploadPage() {
         finish: filenameRecordedDate ? 'Tracked' : deriveFinishFromFilename(file.name),
         year: filenameRecordedDate?.year || new Date(createdAt).getFullYear(),
         createdAt,
+        colorTags: [],
         rating: 0,
         bobs: false,
       };
@@ -299,6 +334,42 @@ export default function UploadPage() {
     });
   };
 
+  const applyFinderTagMetadata = async (metadataFile: File | null) => {
+    if (!metadataFile) return;
+
+    try {
+      const metadata = JSON.parse(await metadataFile.text()) as FinderTagExport;
+      if (!Array.isArray(metadata.files)) {
+        throw new Error('Invalid Finder tag JSON');
+      }
+
+      const tagsByName = new Map<string, string[]>();
+      for (const entry of metadata.files) {
+        const colorTags = normalizeColorTags(entry.colorTags);
+        for (const name of [entry.name, entry.fileName, entry.relativePath, entry.path].map(normalizeFilename).filter(Boolean)) {
+          tagsByName.set(name, colorTags);
+        }
+      }
+
+      let matched = 0;
+      setFileEntries(prev => prev.map(entry => {
+        const colorTags = tagsByName.get(normalizeFilename(entry.file.name));
+        if (!colorTags) return entry;
+
+        matched += 1;
+        return {
+          ...entry,
+          colorTags,
+          rating: deriveRatingFromColorTags(colorTags, entry.rating),
+        };
+      }));
+
+      setFinderTagImportStatus(`Applied Finder tags to ${matched} queued file${matched === 1 ? '' : 's'}.`);
+    } catch (error) {
+      setFinderTagImportStatus(error instanceof Error ? error.message : 'Failed to apply Finder tags');
+    }
+  };
+
   const addInstrument = () => {
     const tag = newInstrument.trim();
     if (tag && !instrumentOptions.includes(tag)) {
@@ -358,6 +429,7 @@ export default function UploadPage() {
         finish: entry.finish,
         year: entry.year,
         createdAt: entry.createdAt,
+        colorTags: entry.colorTags,
         rating: entry.rating,
         bobs: entry.bobs,
       }));
@@ -472,6 +544,32 @@ export default function UploadPage() {
           ) : (
             <p className="text-foreground">Drag and drop audio files here, or click to select multiple files</p>
           )}
+        </div>
+        <div className="mb-4 rounded border border-border bg-muted p-4">
+          <label className="mb-2 block text-sm font-medium text-foreground">Apply Finder color tag JSON to upload queue</label>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className={`cursor-pointer rounded border border-border bg-background px-4 py-3 text-sm text-muted-foreground transition hover:border-accent hover:text-foreground sm:py-2 ${
+              fileEntries.length === 0 ? 'opacity-50' : ''
+            }`}>
+              Choose JSON
+              <input
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                disabled={fileEntries.length === 0}
+                onChange={(event) => {
+                  void applyFinderTagMetadata(event.target.files?.[0] || null);
+                  event.currentTarget.value = '';
+                }}
+              />
+            </label>
+            {finderTagImportStatus && (
+              <span className="text-sm text-muted-foreground">{finderTagImportStatus}</span>
+            )}
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Add audio files first, then choose the JSON generated on your Mac.
+          </p>
         </div>
         <div className="mb-4 rounded border border-border bg-muted p-4">
           <label className="mb-2 block text-sm font-medium text-foreground">Import local folder with Finder color tags</label>
@@ -597,8 +695,22 @@ export default function UploadPage() {
             <h2 className="text-lg font-semibold mb-2 text-foreground">Files to Upload</h2>
             {fileEntries.map((entry, index) => (
               <div key={`${entry.file.name}-${index}`} className="border border-border p-4 mb-2 rounded bg-muted">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-foreground">{entry.file.name}</span>
+                <div className="flex justify-between items-center mb-2 gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-foreground">{entry.file.name}</span>
+                    {entry.colorTags.length > 0 && (
+                      <div className="flex shrink-0">
+                        {entry.colorTags.filter(color => FINDER_COLOR_HEX[color]).map(color => (
+                          <span
+                            key={color}
+                            className="-ml-1 first:ml-0 h-3.5 w-3.5 rounded-full border border-background"
+                            style={{ backgroundColor: FINDER_COLOR_HEX[color] }}
+                            title={displayTag(color)}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   <button type="button" onClick={() => removeEntry(index)} className="text-red-500 hover:text-red-700">Remove</button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-5 gap-4">

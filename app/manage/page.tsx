@@ -315,6 +315,8 @@ export default function ManagePage() {
   const [waveformBulkStatus, setWaveformBulkStatus] = useState('');
   const [stemUploadingId, setStemUploadingId] = useState<string | null>(null);
   const [stemDeletingId, setStemDeletingId] = useState<string | null>(null);
+  const [finderTagImporting, setFinderTagImporting] = useState(false);
+  const [finderTagImportStatus, setFinderTagImportStatus] = useState('');
   const activeWaveSurferRef = useRef<WaveSurfer | null>(null);
 
   const fetchFiles = useCallback(() => {
@@ -635,6 +637,41 @@ export default function ManagePage() {
     URL.revokeObjectURL(url);
   };
 
+  const importFinderTags = async (metadataFile: File | null) => {
+    if (!metadataFile) return;
+
+    setFinderTagImporting(true);
+    setFinderTagImportStatus('');
+    const formData = new FormData();
+    formData.append('file', metadataFile);
+
+    try {
+      const res = await fetch('/api/finder-tags/import', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json().catch(() => null) as {
+        error?: string;
+        matched?: number;
+        updated?: number;
+        ambiguous?: number;
+        skipped?: number;
+      } | null;
+      if (!res.ok) {
+        throw new Error(data?.error || 'Finder tag import failed');
+      }
+
+      setFinderTagImportStatus(
+        `Finder tags updated: ${data?.updated || 0} matched, ${data?.skipped || 0} skipped, ${data?.ambiguous || 0} ambiguous`
+      );
+      fetchFiles();
+    } catch (error) {
+      setFinderTagImportStatus(error instanceof Error ? error.message : 'Finder tag import failed');
+    } finally {
+      setFinderTagImporting(false);
+    }
+  };
+
   const filteredFiles = files.filter(file => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
     if (!normalizedSearch) return true;
@@ -693,8 +730,26 @@ export default function ManagePage() {
           >
             Export CSV
           </button>
+          <label className={`cursor-pointer rounded border border-border px-4 py-2 text-sm text-muted-foreground transition hover:border-accent hover:text-foreground ${
+            finderTagImporting ? 'opacity-50' : ''
+          }`}>
+            {finderTagImporting ? 'Importing Finder Tags...' : 'Import Finder Tags'}
+            <input
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              disabled={finderTagImporting}
+              onChange={(event) => {
+                void importFinderTags(event.target.files?.[0] || null);
+                event.currentTarget.value = '';
+              }}
+            />
+          </label>
           {waveformBulkStatus && (
             <span className="text-sm text-muted-foreground">{waveformBulkStatus}</span>
+          )}
+          {finderTagImportStatus && (
+            <span className="text-sm text-muted-foreground">{finderTagImportStatus}</span>
           )}
         </div>
         <div className="mb-4">

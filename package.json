@@ -6,7 +6,8 @@
     "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "export:finder-tags": "node scripts/export-finder-tags.mjs"
   },
   "dependencies": {
     "@types/multer": "^2.1.0",
