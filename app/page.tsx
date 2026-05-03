@@ -70,6 +70,7 @@ interface AudioCardProps {
 
 type EndMode = 'repeat' | 'next' | 'stop';
 type SortBy = 'random' | 'name' | 'date' | 'adamsRating' | 'userRating';
+type FilterCategory = 'instruments' | 'vibes' | 'collections' | 'finish' | 'years';
 
 interface PlayerRegistryEntry {
   cardElement: HTMLDivElement;
@@ -490,7 +491,6 @@ const AudioCard = ({
       vibes: nextVibes,
     };
     await updateFile(updatedFile);
-    setOpenTagPicker(null);
   };
 
   const toggleCollection = async (collection: string) => {
@@ -1523,6 +1523,24 @@ export default function Home() {
     );
   }, [likedOnly, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears]);
 
+  const matchesFiltersExcept = useCallback((file: AudioFile, except: FilterCategory) => {
+    const normalizedSearch = searchQuery.trim().toLowerCase();
+    const fileCollections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
+    const matchesSearch = normalizedSearch.length === 0
+      || file.name.toLowerCase().includes(normalizedSearch)
+      || (searchNotes && getNoteText(file).toLowerCase().includes(normalizedSearch));
+
+    return (
+      matchesSearch &&
+      (!likedOnly || Boolean(file.liked)) &&
+      (except === 'instruments' || selectedInstruments.length === 0 || getTags(file, 'instruments', 'instrument').some(tag => selectedInstruments.includes(tag))) &&
+      (except === 'vibes' || selectedVibes.length === 0 || getTags(file, 'vibes', 'vibe').some(tag => selectedVibes.includes(tag))) &&
+      (except === 'finish' || selectedFinishes.length === 0 || (file.finish ? selectedFinishes.includes(file.finish) : false)) &&
+      (except === 'collections' || selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection))) &&
+      (except === 'years' || selectedYears.length === 0 || selectedYears.includes(file.year || 0))
+    );
+  }, [likedOnly, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears]);
+
   const matchesRandomFilters = useCallback((file: AudioFile) => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
     const fileCollections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
@@ -1608,6 +1626,40 @@ export default function Home() {
   const yearOptions = Array.from(new Set(files.map(f => f.year || 0))).sort((a, b) => b - a);
   const finishOptions = Array.from(new Set([...FINISH_OPTIONS, ...files.map(file => file.finish || '').filter(Boolean)]));
   const collectionOptions = Array.from(new Set(files.flatMap(file => Array.isArray(file.collections) ? file.collections.filter(Boolean) : []))).sort((a, b) => a.localeCompare(b));
+
+  const filterCounts = useMemo(() => {
+    const counts = {
+      instruments: new Map<string, number>(),
+      vibes: new Map<string, number>(),
+      collections: new Map<string, number>(),
+      finish: new Map<string, number>(),
+      years: new Map<number, number>(),
+    };
+
+    const increment = <T,>(map: Map<T, number>, value: T) => {
+      map.set(value, (map.get(value) || 0) + 1);
+    };
+
+    files.forEach(file => {
+      if (matchesFiltersExcept(file, 'instruments')) {
+        new Set(getTags(file, 'instruments', 'instrument')).forEach(tag => increment(counts.instruments, tag));
+      }
+      if (matchesFiltersExcept(file, 'vibes')) {
+        new Set(getTags(file, 'vibes', 'vibe')).forEach(tag => increment(counts.vibes, tag));
+      }
+      if (matchesFiltersExcept(file, 'collections')) {
+        new Set(Array.isArray(file.collections) ? file.collections.filter(Boolean) : []).forEach(collection => increment(counts.collections, collection));
+      }
+      if (matchesFiltersExcept(file, 'finish') && file.finish) {
+        increment(counts.finish, file.finish);
+      }
+      if (matchesFiltersExcept(file, 'years')) {
+        increment(counts.years, file.year || 0);
+      }
+    });
+
+    return counts;
+  }, [files, matchesFiltersExcept]);
 
   const addInstrument = () => {
     if (newInstrument.trim() && !instrumentOptions.includes(newInstrument.trim())) {
@@ -1851,7 +1903,7 @@ export default function Home() {
 
   const activeFilterCount = selectedInstruments.length + selectedVibes.length + selectedCollections.length + selectedFinishes.length + selectedYears.length + (likedOnly ? 1 : 0) + (searchQuery.trim() ? 1 : 0);
   const collapsedSummaryClass = "mb-2 w-full rounded border border-border/50 bg-muted/40 px-3 py-2 text-left text-xs font-light text-muted-foreground opacity-80 transition hover:border-border hover:text-foreground";
-  const filterOptionClass = (selected: boolean) => `cursor-pointer rounded p-3 text-sm transition-colors md:p-2 ${
+  const filterOptionClass = (selected: boolean) => `flex cursor-pointer items-center justify-between gap-3 rounded p-3 text-sm transition-colors md:p-2 ${
     selected ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'
   }`;
 
@@ -1972,7 +2024,10 @@ export default function Home() {
                   }}
                   className={filterOptionClass(selectedInstruments.includes(inst))}
                 >
-                  {displayTag(inst)}
+                  <span>{displayTag(inst)}</span>
+                  <span className={selectedInstruments.includes(inst) ? 'text-accent-foreground/75' : 'text-muted-foreground/70'}>
+                    {filterCounts.instruments.get(inst) || 0}
+                  </span>
                 </div>
               ))}
             </div>}
@@ -2004,7 +2059,10 @@ export default function Home() {
                   }}
                   className={filterOptionClass(selectedVibes.includes(v))}
                 >
-                  {displayTag(v)}
+                  <span>{displayTag(v)}</span>
+                  <span className={selectedVibes.includes(v) ? 'text-accent-foreground/75' : 'text-muted-foreground/70'}>
+                    {filterCounts.vibes.get(v) || 0}
+                  </span>
                 </div>
               ))}
             </div>}
@@ -2036,7 +2094,10 @@ export default function Home() {
                   }}
                   className={filterOptionClass(selectedCollections.includes(collection))}
                 >
-                  {displayTag(collection)}
+                  <span>{displayTag(collection)}</span>
+                  <span className={selectedCollections.includes(collection) ? 'text-accent-foreground/75' : 'text-muted-foreground/70'}>
+                    {filterCounts.collections.get(collection) || 0}
+                  </span>
                 </div>
               )) : (
                 <p className="rounded border border-border/50 bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">No collections yet</p>
@@ -2070,7 +2131,10 @@ export default function Home() {
                   }}
                   className={filterOptionClass(selectedFinishes.includes(finish))}
                 >
-                  {displayTag(finish)}
+                  <span>{displayTag(finish)}</span>
+                  <span className={selectedFinishes.includes(finish) ? 'text-accent-foreground/75' : 'text-muted-foreground/70'}>
+                    {filterCounts.finish.get(finish) || 0}
+                  </span>
                 </div>
               ))}
             </div>}
@@ -2102,7 +2166,10 @@ export default function Home() {
                   }}
                   className={filterOptionClass(selectedYears.includes(year))}
                 >
-                  {year}
+                  <span>{year}</span>
+                  <span className={selectedYears.includes(year) ? 'text-accent-foreground/75' : 'text-muted-foreground/70'}>
+                    {filterCounts.years.get(year) || 0}
+                  </span>
                 </div>
               ))}
             </div>}
