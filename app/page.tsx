@@ -69,7 +69,7 @@ interface AudioCardProps {
 }
 
 type EndMode = 'repeat' | 'next' | 'stop';
-type SortBy = 'random' | 'name' | 'date' | 'adamsRating' | 'userRating';
+type SortBy = 'random' | 'name' | 'date' | 'adamsRatingRandom' | 'adamsRating' | 'userRating';
 type FilterCategory = 'instruments' | 'vibes' | 'collections' | 'finish' | 'years';
 
 interface PlayerRegistryEntry {
@@ -122,6 +122,11 @@ const displayTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag.replace
 
 const getNoteText = (file: AudioFile) => file.notes ?? file.comments?.filter(comment => !comment.userId).map(comment => comment.text).join('\n') ?? '';
 
+const isUntaggedFile = (file: AudioFile) => (
+  getTags(file, 'instruments', 'instrument').length === 0 &&
+  getTags(file, 'vibes', 'vibe').length === 0
+);
+
 const getRandomSortValue = (id: string, seed: number) => {
   let hash = Math.floor(seed * 1000000000);
   for (let i = 0; i < id.length; i++) {
@@ -129,6 +134,8 @@ const getRandomSortValue = (id: string, seed: number) => {
   }
   return hash >>> 0;
 };
+
+const compareByName = (a: AudioFile, b: AudioFile) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
 
 const parseTimecode = (value: string) => {
   const trimmed = value.trim();
@@ -1417,6 +1424,7 @@ export default function Home() {
   const [selectedCollections, setSelectedCollections] = useState<string[]>([]);
   const [selectedYears, setSelectedYears] = useState<number[]>([]);
   const [likedOnly, setLikedOnly] = useState(false);
+  const [untaggedOnly, setUntaggedOnly] = useState(false);
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchNotes, setSearchNotes] = useState(false);
@@ -1431,7 +1439,7 @@ export default function Home() {
   const [vibeOptions, setVibeOptions] = useState<string[]>(DEFAULT_VIBES);
   const [newInstrument, setNewInstrument] = useState('');
   const [newVibe, setNewVibe] = useState('');
-  const [sortBy, setSortBy] = useState<SortBy>('adamsRating');
+  const [sortBy, setSortBy] = useState<SortBy>('adamsRatingRandom');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [randomSortSeed, setRandomSortSeed] = useState(() => Math.random());
   const [randomTrackIds, setRandomTrackIds] = useState<string[] | null>(null);
@@ -1486,6 +1494,7 @@ export default function Home() {
         bVal = getCreatedDateValue(b);
         break;
       case 'adamsRating':
+      case 'adamsRatingRandom':
         aVal = a.myRating;
         bVal = b.myRating;
         break;
@@ -1502,7 +1511,13 @@ export default function Home() {
     }
     if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1;
     if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1;
-    return 0;
+    if (sortBy === 'adamsRatingRandom') {
+      const aRandom = getRandomSortValue(a.id, randomSortSeed);
+      const bRandom = getRandomSortValue(b.id, randomSortSeed);
+      if (aRandom < bRandom) return -1;
+      if (aRandom > bRandom) return 1;
+    }
+    return compareByName(a, b);
   }, [randomSortSeed, sortBy, sortDirection]);
 
   const matchesFilters = useCallback((file: AudioFile) => {
@@ -1515,13 +1530,14 @@ export default function Home() {
     return (
       matchesSearch &&
       (!likedOnly || Boolean(file.liked)) &&
+      (!untaggedOnly || isUntaggedFile(file)) &&
       (selectedInstruments.length === 0 || getTags(file, 'instruments', 'instrument').some(tag => selectedInstruments.includes(tag))) &&
       (selectedVibes.length === 0 || getTags(file, 'vibes', 'vibe').some(tag => selectedVibes.includes(tag))) &&
       (selectedFinishes.length === 0 || (file.finish ? selectedFinishes.includes(file.finish) : false)) &&
       (selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection))) &&
       (selectedYears.length === 0 || selectedYears.includes(file.year || 0))
     );
-  }, [likedOnly, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears]);
+  }, [likedOnly, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
 
   const matchesFiltersExcept = useCallback((file: AudioFile, except: FilterCategory) => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
@@ -1533,13 +1549,14 @@ export default function Home() {
     return (
       matchesSearch &&
       (!likedOnly || Boolean(file.liked)) &&
+      (!untaggedOnly || isUntaggedFile(file)) &&
       (except === 'instruments' || selectedInstruments.length === 0 || getTags(file, 'instruments', 'instrument').some(tag => selectedInstruments.includes(tag))) &&
       (except === 'vibes' || selectedVibes.length === 0 || getTags(file, 'vibes', 'vibe').some(tag => selectedVibes.includes(tag))) &&
       (except === 'finish' || selectedFinishes.length === 0 || (file.finish ? selectedFinishes.includes(file.finish) : false)) &&
       (except === 'collections' || selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection))) &&
       (except === 'years' || selectedYears.length === 0 || selectedYears.includes(file.year || 0))
     );
-  }, [likedOnly, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears]);
+  }, [likedOnly, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
 
   const matchesRandomFilters = useCallback((file: AudioFile) => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
@@ -1552,13 +1569,14 @@ export default function Home() {
     return (
       matchesSearch &&
       (!likedOnly || Boolean(file.liked)) &&
+      (!untaggedOnly || isUntaggedFile(file)) &&
       (randomIncludeVoiceMemos || finish !== 'Voice Memo') &&
       (selectedInstruments.length === 0 || getTags(file, 'instruments', 'instrument').some(tag => selectedInstruments.includes(tag))) &&
       (selectedVibes.length === 0 || getTags(file, 'vibes', 'vibe').some(tag => selectedVibes.includes(tag))) &&
       (selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection))) &&
       (selectedYears.length === 0 || selectedYears.includes(file.year || 0))
     );
-  }, [likedOnly, randomIncludeVoiceMemos, searchNotes, searchQuery, selectedCollections, selectedInstruments, selectedVibes, selectedYears]);
+  }, [likedOnly, randomIncludeVoiceMemos, searchNotes, searchQuery, selectedCollections, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
 
   const sortedFilteredFiles = useMemo(() => {
     return files.filter(matchesFilters).sort(compareFiles);
@@ -1587,11 +1605,12 @@ export default function Home() {
     selectedVibes,
     selectedYears,
     likedOnly,
+    untaggedOnly,
     randomTrackIds,
     randomSortSeed,
     sortBy,
     sortDirection,
-  }), [likedOnly, randomSortSeed, randomTrackIds, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, sortBy, sortDirection]);
+  }), [likedOnly, randomSortSeed, randomTrackIds, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, sortBy, sortDirection, untaggedOnly]);
 
   const renderLimit = renderWindow.key === filterKey ? renderWindow.limit : INITIAL_RENDER_LIMIT;
 
@@ -1901,7 +1920,7 @@ export default function Home() {
     return selected.map(value => typeof value === 'string' ? displayTag(value) : value).join(', ');
   };
 
-  const activeFilterCount = selectedInstruments.length + selectedVibes.length + selectedCollections.length + selectedFinishes.length + selectedYears.length + (likedOnly ? 1 : 0) + (searchQuery.trim() ? 1 : 0);
+  const activeFilterCount = selectedInstruments.length + selectedVibes.length + selectedCollections.length + selectedFinishes.length + selectedYears.length + (likedOnly ? 1 : 0) + (untaggedOnly ? 1 : 0) + (searchQuery.trim() ? 1 : 0);
   const collapsedSummaryClass = "mb-2 w-full rounded border border-border/50 bg-muted/40 px-3 py-2 text-left text-xs font-light text-muted-foreground opacity-80 transition hover:border-border hover:text-foreground";
   const filterOptionClass = (selected: boolean) => `flex cursor-pointer items-center justify-between gap-3 rounded p-3 text-sm transition-colors md:p-2 ${
     selected ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'
@@ -1996,6 +2015,17 @@ export default function Home() {
               />
               Liked songs
             </label>
+            {currentUser?.id === 'adam' && (
+              <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={untaggedOnly}
+                  onChange={(event) => setUntaggedOnly(event.target.checked)}
+                  className="h-4 w-4 accent-accent"
+                />
+                Untagged songs
+              </label>
+            )}
           </div>
           <div className="mb-6">
             <button
@@ -2264,7 +2294,7 @@ export default function Home() {
             <div className="flex flex-1 flex-wrap items-center justify-end gap-3 sm:flex-none">
               <label className="text-foreground">Sort by:</label>
               <select
-                value={sortBy}
+                value={sortBy === 'adamsRatingRandom' ? 'adamsRating' : sortBy}
                 onChange={(e) => setSortBy(e.target.value as SortBy)}
                 className="min-h-11 flex-1 rounded border border-border bg-background p-2 text-foreground sm:flex-none"
               >
@@ -2275,7 +2305,12 @@ export default function Home() {
                 <option value="userRating">User Rating</option>
               </select>
               <button
-                onClick={() => setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')}
+                onClick={() => {
+                  if (sortBy === 'adamsRatingRandom') {
+                    setSortBy('adamsRating');
+                  }
+                  setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+                }}
                 className="min-h-11 rounded bg-accent px-4 py-2 text-accent-foreground hover:bg-accent/80"
               >
                 {sortDirection === 'asc' ? '↑' : '↓'}

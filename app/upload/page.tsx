@@ -58,6 +58,13 @@ const normalizeColorTags = (tags: unknown) => Array.isArray(tags)
     ))
   : [];
 
+const formatBytes = (bytes: number) => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+};
+
 interface AudioFile {
   instrument?: string;
   vibe?: string;
@@ -211,6 +218,9 @@ interface FolderEntry {
 export default function UploadPage() {
   const [fileEntries, setFileEntries] = useState<FileEntry[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadProgressKnown, setUploadProgressKnown] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState('');
   const [finderTagImportStatus, setFinderTagImportStatus] = useState('');
   const [importingFolder, setImportingFolder] = useState(false);
   const [loadingFolder, setLoadingFolder] = useState(false);
@@ -420,6 +430,9 @@ export default function UploadPage() {
     if (fileEntries.length === 0) return;
 
     setUploading(true);
+    setUploadProgress(0);
+    setUploadProgressKnown(false);
+    setUploadStatus('Preparing upload...');
     const formData = new FormData();
     fileEntries.forEach((entry, index) => {
       formData.append('files', entry.file);
@@ -436,19 +449,48 @@ export default function UploadPage() {
     });
 
     try {
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/upload');
+
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable && event.total > 0) {
+            const nextProgress = Math.min(99, Math.round((event.loaded / event.total) * 100));
+            setUploadProgressKnown(true);
+            setUploadProgress(nextProgress);
+            setUploadStatus(`Uploading ${formatBytes(event.loaded)} of ${formatBytes(event.total)}`);
+          } else {
+            setUploadProgressKnown(false);
+            setUploadStatus(`Uploading ${formatBytes(event.loaded)}`);
+          }
+        };
+
+        xhr.upload.onload = () => {
+          setUploadProgressKnown(true);
+          setUploadProgress(100);
+          setUploadStatus('Upload sent. Server is saving files...');
+        };
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve();
+            return;
+          }
+
+          reject(new Error(xhr.responseText || 'Upload failed'));
+        };
+
+        xhr.onerror = () => reject(new Error('Network error while uploading'));
+        xhr.onabort = () => reject(new Error('Upload canceled'));
+        xhr.send(formData);
       });
-      if (res.ok) {
-        window.location.href = '/';
-      } else {
-        alert('Upload failed');
-      }
-    } catch {
-      alert('Error uploading');
+
+      window.location.href = '/';
+    } catch (error) {
+      setUploadStatus(error instanceof Error ? error.message : 'Error uploading');
+      alert(error instanceof Error ? error.message : 'Error uploading');
+      setUploading(false);
     }
-    setUploading(false);
   };
 
   const loadFolder = async () => {
@@ -537,6 +579,24 @@ export default function UploadPage() {
         <h1 className="text-2xl font-bold">Upload Audio Files</h1>
       </div>
       <form onSubmit={handleSubmit}>
+        {uploading && (
+          <div className="fixed inset-x-3 bottom-3 z-50 rounded border border-accent/40 bg-background/95 p-4 shadow-2xl shadow-black/30 backdrop-blur sm:left-auto sm:w-[26rem]">
+            <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+              <span className="font-medium text-foreground">{uploadStatus || 'Uploading...'}</span>
+              <span className="shrink-0 text-muted-foreground">{uploadProgressKnown ? `${uploadProgress}%` : 'Sending...'}</span>
+            </div>
+            <div className="h-3 overflow-hidden rounded bg-muted">
+              {uploadProgressKnown ? (
+                <div
+                  className="h-full rounded bg-accent transition-all"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              ) : (
+                <div className="h-full w-1/3 animate-pulse rounded bg-accent" />
+              )}
+            </div>
+          </div>
+        )}
         <div {...getRootProps()} className="border-2 border-dashed border-border p-8 mb-4 cursor-pointer bg-muted">
           <input {...getInputProps()} />
           {isDragActive ? (
@@ -851,10 +911,31 @@ export default function UploadPage() {
         <button
           type="submit"
           disabled={fileEntries.length === 0 || uploading}
-          className="rounded bg-accent px-4 py-3 text-accent-foreground hover:bg-accent/80 disabled:opacity-50 sm:py-2"
+          className="relative overflow-hidden rounded bg-accent px-4 py-3 text-accent-foreground hover:bg-accent/80 disabled:opacity-50 sm:py-2"
         >
-          {uploading ? 'Uploading...' : 'Upload All'}
+          {uploading && uploadProgressKnown && (
+            <span
+              className="absolute inset-y-0 left-0 bg-white/20 transition-all"
+              style={{ width: `${uploadProgress}%` }}
+              aria-hidden="true"
+            />
+          )}
+          <span className="relative">{uploading ? `Uploading${uploadProgressKnown ? ` ${uploadProgress}%` : '...'}` : 'Upload All'}</span>
         </button>
+        {uploading && (
+          <div className="mt-4 max-w-xl rounded border border-border bg-muted p-3">
+            <div className="mb-2 flex items-center justify-between gap-3 text-sm text-muted-foreground">
+              <span>{uploadStatus || 'Uploading...'}</span>
+              <span>{uploadProgress}%</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded bg-background">
+              <div
+                className="h-full rounded bg-accent transition-all"
+                style={{ width: `${uploadProgress}%` }}
+              />
+            </div>
+          </div>
+        )}
       </form>
     </div>
   );
