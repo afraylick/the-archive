@@ -128,8 +128,8 @@ const deriveRatingFromColorTags = (colorTags: string[], fallbackRating: number) 
   const colors = new Set(colorTags);
   if (colorTags.length > 3) return 5;
   if (colors.has('yellow') && colors.has('green')) return 2;
-  if (colors.has('blue') && colors.has('green')) return 5;
-  if (colors.has('blue')) return 4;
+  if (colors.has('blue') && colors.has('green')) return 4;
+  if (colors.has('blue')) return 5;
   if (colors.has('green')) return 3;
   if (colorTags.length === 1 && colors.has('yellow')) return 2;
   return fallbackRating;
