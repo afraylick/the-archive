@@ -54,6 +54,7 @@ interface ImportFolderRequest {
     vibes?: string[];
     finish?: string;
     rating?: number;
+    notes?: string;
     bobs?: boolean;
   }[];
 }
@@ -229,7 +230,7 @@ export async function POST(req: NextRequest) {
           const resolvedPath = path.resolve(file.path);
           return resolvedPath.startsWith(sourceDir + path.sep) || resolvedPath === sourceDir;
         })
-      : audioFiles.map(filePath => ({ path: filePath, instruments: cleanInstruments, vibes: cleanVibes, finish: undefined, rating, bobs }));
+      : audioFiles.map(filePath => ({ path: filePath, instruments: cleanInstruments, vibes: cleanVibes, finish: undefined, rating, notes: '', bobs }));
 
     importFiles.forEach((fileMetadata, index) => {
       const filePath = path.resolve(fileMetadata.path);
@@ -262,7 +263,7 @@ export async function POST(req: NextRequest) {
         ratings: { adam: adamRating },
         myRating: adamRating,
         userRating: 0,
-        notes: '',
+        notes: typeof fileMetadata.notes === 'string' ? fileMetadata.notes : '',
         comments: [],
         uploadedAt: new Date().toISOString(),
       });

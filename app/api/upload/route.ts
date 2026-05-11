@@ -15,6 +15,7 @@ interface UploadMetadata {
   year?: number;
   createdAt?: string;
   rating?: number;
+  notes?: string;
   bobs?: boolean;
 }
 
@@ -131,7 +132,7 @@ export async function POST(req: NextRequest) {
         ratings: { adam: metadata.rating || 0 },
         myRating: metadata.rating || 0,
         userRating: 0,
-        notes: '',
+        notes: typeof metadata.notes === 'string' ? metadata.notes : '',
         comments: [],
         uploadedAt: new Date().toISOString(),
       };

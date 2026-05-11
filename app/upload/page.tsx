@@ -195,6 +195,7 @@ interface FileEntry {
   instruments: string[];
   vibes: string[];
   finish: string;
+  notes: string;
   year: number;
   createdAt: string;
   colorTags: string[];
@@ -208,6 +209,7 @@ interface FolderEntry {
   instruments: string[];
   vibes: string[];
   finish: string;
+  notes: string;
   year: number;
   createdAt: string;
   colorTags: string[];
@@ -268,6 +270,7 @@ export default function UploadPage() {
         instruments: [],
         vibes: [],
         finish: filenameRecordedDate ? 'Tracked' : deriveFinishFromFilename(file.name),
+        notes: '',
         year: filenameRecordedDate?.year || new Date(createdAt).getFullYear(),
         createdAt,
         colorTags: [],
@@ -284,7 +287,7 @@ export default function UploadPage() {
     multiple: true,
   });
 
-  const updateEntry = (index: number, field: keyof FileEntry, value: string[] | number | boolean) => {
+  const updateEntry = (index: number, field: keyof FileEntry, value: string[] | number | string | boolean) => {
     setFileEntries(prev => prev.map((entry, i) =>
       i === index ? { ...entry, [field]: value } : entry
     ));
@@ -393,6 +396,7 @@ export default function UploadPage() {
     instruments: folderInstruments,
     vibes: folderVibes,
     finish: folderFinish || entry.finish,
+    notes: entry.notes,
     rating: entry.rating || folderRating,
     bobs: folderBobs,
   }));
@@ -440,6 +444,7 @@ export default function UploadPage() {
         instruments: entry.instruments,
         vibes: entry.vibes,
         finish: entry.finish,
+        notes: entry.notes,
         year: entry.year,
         createdAt: entry.createdAt,
         colorTags: entry.colorTags,
@@ -517,6 +522,7 @@ export default function UploadPage() {
           instruments: folderInstruments,
           vibes: folderVibes,
           finish: folderFinish || file.finish,
+          notes: file.notes || '',
           bobs: folderBobs,
         }))));
       } else {
@@ -547,6 +553,7 @@ export default function UploadPage() {
             instruments: entry.instruments,
             vibes: entry.vibes,
             finish: entry.finish,
+            notes: entry.notes,
             rating: entry.rating,
             bobs: entry.bobs,
           })),
@@ -825,6 +832,15 @@ export default function UploadPage() {
                     </button>
                   </div>
                 </div>
+                <div className="mt-4">
+                  <label className="block text-sm font-medium mb-1 text-foreground">Notes</label>
+                  <textarea
+                    value={entry.notes}
+                    onChange={(event) => updateEntry(index, 'notes', event.target.value)}
+                    placeholder="Add notes for this song..."
+                    className="min-h-24 w-full resize-y rounded border border-border bg-background p-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent"
+                  />
+                </div>
               </div>
             ))}
           </div>
@@ -903,6 +919,15 @@ export default function UploadPage() {
                       Bobs
                     </button>
                   </div>
+                </div>
+                <div className="mt-4">
+                  <label className="block text-sm font-medium mb-1 text-foreground">Notes</label>
+                  <textarea
+                    value={entry.notes}
+                    onChange={(event) => updateFolderEntry(index, 'notes', event.target.value)}
+                    placeholder="Add notes for this song..."
+                    className="min-h-24 w-full resize-y rounded border border-border bg-background p-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent"
+                  />
                 </div>
               </div>
             ))}
