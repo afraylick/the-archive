@@ -2697,6 +2697,9 @@ export default function Home() {
                     if (!element || file.id !== targetTrackId) return;
                     window.setTimeout(() => {
                       element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      if (activityTargetTrackId === file.id) {
+                        setActivityTargetTrackId(null);
+                      }
                     }, 100);
                   }}
                 >
