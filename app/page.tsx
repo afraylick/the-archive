@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import WaveSurfer from 'wavesurfer.js';
@@ -21,6 +21,7 @@ interface AudioFile {
   year?: number;
   createdAt?: string;
   ratings?: Record<string, number>;
+  ratingUpdatedAt?: Record<string, string>;
   liked?: boolean;
   likedBy?: string[];
   stems?: StemAttachment;
@@ -68,9 +69,22 @@ interface AudioCardProps {
   onDestroy: (file: AudioFile, wavesurfer: WaveSurfer) => void;
 }
 
+interface ActivityEntry {
+  id: string;
+  type: 'comment' | 'rating';
+  file: AudioFile;
+  userName: string;
+  text: string;
+  rating?: number;
+  createdAt?: string;
+  sortTime: number;
+}
+
 type EndMode = 'repeat' | 'next' | 'stop';
 type SortBy = 'random' | 'name' | 'date' | 'adamsRatingRandom' | 'adamsRating' | 'userRating';
 type FilterCategory = 'instruments' | 'vibes' | 'collections' | 'finish' | 'years';
+type FilterMode = 'none' | 'include' | 'exclude';
+type FilterValue = string | number;
 
 interface PlayerRegistryEntry {
   cardElement: HTMLDivElement;
@@ -126,6 +140,8 @@ const isUntaggedFile = (file: AudioFile) => (
   getTags(file, 'instruments', 'instrument').length === 0 &&
   getTags(file, 'vibes', 'vibe').length === 0
 );
+
+const hasAny = <T,>(values: T[], selected: T[]) => values.some(value => selected.includes(value));
 
 const getRandomSortValue = (id: string, seed: number) => {
   let hash = Math.floor(seed * 1000000000);
@@ -225,6 +241,38 @@ const formatCommentDate = (createdAt: string) => {
   }).format(date);
 
   return `Commented at ${time}, ${day}`;
+};
+
+const formatActivityTime = (createdAt?: string) => {
+  if (!createdAt) return 'current';
+
+  const timestamp = new Date(createdAt).getTime();
+  if (Number.isNaN(timestamp)) return 'unknown';
+
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (elapsedSeconds < 60) return 'just now';
+
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) return `${elapsedMinutes}m ago`;
+
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) return `${elapsedHours}h ago`;
+
+  const elapsedDays = Math.floor(elapsedHours / 24);
+  if (elapsedDays < 7) return `${elapsedDays}d ago`;
+
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+  }).format(new Date(timestamp));
+};
+
+const formatActivityTitle = (activity: ActivityEntry) => {
+  if (!activity.createdAt) return activity.type === 'rating' ? 'Rating timestamp unavailable' : 'Current activity';
+  if (activity.type === 'comment') return formatCommentDate(activity.createdAt);
+
+  const commentTitle = formatCommentDate(activity.createdAt);
+  return commentTitle.replace('Commented', 'Rated');
 };
 
 const getRatingColor = (rating: number) => {
@@ -427,7 +475,7 @@ const AudioCard = ({
 
     if (!res.ok) return;
 
-    const ratingData = await res.json() as Pick<AudioFile, 'ratings' | 'myRating' | 'userRating'>;
+    const ratingData = await res.json() as Pick<AudioFile, 'ratings' | 'myRating' | 'userRating' | 'ratingUpdatedAt'>;
     const updatedFile = { ...file, ...ratingData };
     setFiles(prev => prev.map(f => f.id === file.id ? updatedFile : f));
   };
@@ -1423,8 +1471,14 @@ export default function Home() {
   const [selectedFinishes, setSelectedFinishes] = useState<string[]>(['Tracked', 'Recorder']);
   const [selectedCollections, setSelectedCollections] = useState<string[]>([]);
   const [selectedYears, setSelectedYears] = useState<number[]>([]);
+  const [excludedInstruments, setExcludedInstruments] = useState<string[]>([]);
+  const [excludedVibes, setExcludedVibes] = useState<string[]>([]);
+  const [excludedFinishes, setExcludedFinishes] = useState<string[]>([]);
+  const [excludedCollections, setExcludedCollections] = useState<string[]>([]);
+  const [excludedYears, setExcludedYears] = useState<number[]>([]);
   const [likedOnly, setLikedOnly] = useState(false);
   const [untaggedOnly, setUntaggedOnly] = useState(false);
+  const [showActivity, setShowActivity] = useState(false);
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchNotes, setSearchNotes] = useState(false);
@@ -1449,7 +1503,9 @@ export default function Home() {
   const [progress, setProgress] = useState(0);
   const [endMode, setEndMode] = useState<EndMode>('stop');
   const [renderWindow, setRenderWindow] = useState({ key: '', limit: INITIAL_RENDER_LIMIT });
-  const targetTrackId = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('track');
+  const [activityTargetTrackId, setActivityTargetTrackId] = useState<string | null>(null);
+  const urlTargetTrackId = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('track');
+  const targetTrackId = activityTargetTrackId || urlTargetTrackId;
   const activeWaveSurferRef = useRef<WaveSurfer | null>(null);
   const activeTrackIdRef = useRef<string | null>(null);
   const activeCardElementRef = useRef<HTMLDivElement | null>(null);
@@ -1522,7 +1578,10 @@ export default function Home() {
 
   const matchesFilters = useCallback((file: AudioFile) => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
+    const instruments = getTags(file, 'instruments', 'instrument');
+    const vibes = getTags(file, 'vibes', 'vibe');
     const fileCollections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
+    const fileYear = file.year || 0;
     const matchesSearch = normalizedSearch.length === 0
       || file.name.toLowerCase().includes(normalizedSearch)
       || (searchNotes && getNoteText(file).toLowerCase().includes(normalizedSearch));
@@ -1531,17 +1590,25 @@ export default function Home() {
       matchesSearch &&
       (!likedOnly || Boolean(file.liked)) &&
       (!untaggedOnly || isUntaggedFile(file)) &&
-      (selectedInstruments.length === 0 || getTags(file, 'instruments', 'instrument').some(tag => selectedInstruments.includes(tag))) &&
-      (selectedVibes.length === 0 || getTags(file, 'vibes', 'vibe').some(tag => selectedVibes.includes(tag))) &&
+      (selectedInstruments.length === 0 || hasAny(instruments, selectedInstruments)) &&
+      !hasAny(instruments, excludedInstruments) &&
+      (selectedVibes.length === 0 || hasAny(vibes, selectedVibes)) &&
+      !hasAny(vibes, excludedVibes) &&
       (selectedFinishes.length === 0 || (file.finish ? selectedFinishes.includes(file.finish) : false)) &&
+      (!file.finish || !excludedFinishes.includes(file.finish)) &&
       (selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection))) &&
-      (selectedYears.length === 0 || selectedYears.includes(file.year || 0))
+      !hasAny(fileCollections, excludedCollections) &&
+      (selectedYears.length === 0 || selectedYears.includes(fileYear)) &&
+      !excludedYears.includes(fileYear)
     );
-  }, [likedOnly, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
+  }, [excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, likedOnly, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
 
   const matchesFiltersExcept = useCallback((file: AudioFile, except: FilterCategory) => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
+    const instruments = getTags(file, 'instruments', 'instrument');
+    const vibes = getTags(file, 'vibes', 'vibe');
     const fileCollections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
+    const fileYear = file.year || 0;
     const matchesSearch = normalizedSearch.length === 0
       || file.name.toLowerCase().includes(normalizedSearch)
       || (searchNotes && getNoteText(file).toLowerCase().includes(normalizedSearch));
@@ -1550,17 +1617,20 @@ export default function Home() {
       matchesSearch &&
       (!likedOnly || Boolean(file.liked)) &&
       (!untaggedOnly || isUntaggedFile(file)) &&
-      (except === 'instruments' || selectedInstruments.length === 0 || getTags(file, 'instruments', 'instrument').some(tag => selectedInstruments.includes(tag))) &&
-      (except === 'vibes' || selectedVibes.length === 0 || getTags(file, 'vibes', 'vibe').some(tag => selectedVibes.includes(tag))) &&
-      (except === 'finish' || selectedFinishes.length === 0 || (file.finish ? selectedFinishes.includes(file.finish) : false)) &&
-      (except === 'collections' || selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection))) &&
-      (except === 'years' || selectedYears.length === 0 || selectedYears.includes(file.year || 0))
+      (except === 'instruments' || ((selectedInstruments.length === 0 || hasAny(instruments, selectedInstruments)) && !hasAny(instruments, excludedInstruments))) &&
+      (except === 'vibes' || ((selectedVibes.length === 0 || hasAny(vibes, selectedVibes)) && !hasAny(vibes, excludedVibes))) &&
+      (except === 'finish' || ((selectedFinishes.length === 0 || (file.finish ? selectedFinishes.includes(file.finish) : false)) && (!file.finish || !excludedFinishes.includes(file.finish)))) &&
+      (except === 'collections' || ((selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection))) && !hasAny(fileCollections, excludedCollections))) &&
+      (except === 'years' || ((selectedYears.length === 0 || selectedYears.includes(fileYear)) && !excludedYears.includes(fileYear)))
     );
-  }, [likedOnly, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
+  }, [excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, likedOnly, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
 
   const matchesRandomFilters = useCallback((file: AudioFile) => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
+    const instruments = getTags(file, 'instruments', 'instrument');
+    const vibes = getTags(file, 'vibes', 'vibe');
     const fileCollections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
+    const fileYear = file.year || 0;
     const matchesSearch = normalizedSearch.length === 0
       || file.name.toLowerCase().includes(normalizedSearch)
       || (searchNotes && getNoteText(file).toLowerCase().includes(normalizedSearch));
@@ -1571,12 +1641,18 @@ export default function Home() {
       (!likedOnly || Boolean(file.liked)) &&
       (!untaggedOnly || isUntaggedFile(file)) &&
       (randomIncludeVoiceMemos || finish !== 'Voice Memo') &&
-      (selectedInstruments.length === 0 || getTags(file, 'instruments', 'instrument').some(tag => selectedInstruments.includes(tag))) &&
-      (selectedVibes.length === 0 || getTags(file, 'vibes', 'vibe').some(tag => selectedVibes.includes(tag))) &&
+      (selectedInstruments.length === 0 || hasAny(instruments, selectedInstruments)) &&
+      !hasAny(instruments, excludedInstruments) &&
+      (selectedVibes.length === 0 || hasAny(vibes, selectedVibes)) &&
+      !hasAny(vibes, excludedVibes) &&
+      (selectedFinishes.length === 0 || (file.finish ? selectedFinishes.includes(file.finish) : false)) &&
+      (!file.finish || !excludedFinishes.includes(file.finish)) &&
       (selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection))) &&
-      (selectedYears.length === 0 || selectedYears.includes(file.year || 0))
+      !hasAny(fileCollections, excludedCollections) &&
+      (selectedYears.length === 0 || selectedYears.includes(fileYear)) &&
+      !excludedYears.includes(fileYear)
     );
-  }, [likedOnly, randomIncludeVoiceMemos, searchNotes, searchQuery, selectedCollections, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
+  }, [excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, likedOnly, randomIncludeVoiceMemos, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
 
   const sortedFilteredFiles = useMemo(() => {
     return files.filter(matchesFilters).sort(compareFiles);
@@ -1604,13 +1680,18 @@ export default function Home() {
     selectedInstruments,
     selectedVibes,
     selectedYears,
+    excludedCollections,
+    excludedFinishes,
+    excludedInstruments,
+    excludedVibes,
+    excludedYears,
     likedOnly,
     untaggedOnly,
     randomTrackIds,
     randomSortSeed,
     sortBy,
     sortDirection,
-  }), [likedOnly, randomSortSeed, randomTrackIds, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, sortBy, sortDirection, untaggedOnly]);
+  }), [excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, likedOnly, randomSortSeed, randomTrackIds, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, sortBy, sortDirection, untaggedOnly]);
 
   const renderLimit = renderWindow.key === filterKey ? renderWindow.limit : INITIAL_RENDER_LIMIT;
 
@@ -1645,6 +1726,56 @@ export default function Home() {
   const yearOptions = Array.from(new Set(files.map(f => f.year || 0))).sort((a, b) => b - a);
   const finishOptions = Array.from(new Set([...FINISH_OPTIONS, ...files.map(file => file.finish || '').filter(Boolean)]));
   const collectionOptions = Array.from(new Set(files.flatMap(file => Array.isArray(file.collections) ? file.collections.filter(Boolean) : []))).sort((a, b) => a.localeCompare(b));
+
+  const activityEntries = useMemo<ActivityEntry[]>(() => {
+    if (!currentUser?.isAdmin) return [];
+
+    const userNameById = new Map(accountUsers.map(user => [user.id, user.name]));
+    const commentActivities = files.flatMap(file => (
+      (Array.isArray(file.comments) ? file.comments : [])
+        .filter(comment => comment.userId && comment.userId !== 'adam' && comment.text)
+        .map(comment => {
+          const timestamp = new Date(comment.createdAt).getTime();
+          return {
+            id: `comment-${file.id}-${comment.id}`,
+            type: 'comment' as const,
+            file,
+            userName: comment.userName || userNameById.get(comment.userId) || comment.userId,
+            text: comment.timestamp !== undefined
+              ? `commented at @${formatDuration(comment.timestamp)}: ${comment.text}`
+              : `commented: ${comment.text}`,
+            createdAt: comment.createdAt,
+            sortTime: Number.isNaN(timestamp) ? 0 : timestamp,
+          };
+        })
+    ));
+
+    const ratingActivities = files.flatMap(file => (
+      Object.entries(file.ratings || {})
+        .filter(([userId, rating]) => userId !== 'adam' && (rating || 0) > 0)
+        .map(([userId, rating]) => {
+          const createdAt = file.ratingUpdatedAt?.[userId];
+          const timestamp = createdAt ? new Date(createdAt).getTime() : 0;
+          return {
+            id: `rating-${file.id}-${userId}`,
+            type: 'rating' as const,
+            file,
+            userName: userNameById.get(userId) || userId,
+            text: 'rated',
+            rating,
+            createdAt,
+            sortTime: Number.isNaN(timestamp) ? 0 : timestamp,
+          };
+        })
+    ));
+
+    return [...commentActivities, ...ratingActivities]
+      .sort((a, b) => {
+        if (a.sortTime !== b.sortTime) return b.sortTime - a.sortTime;
+        if (a.type !== b.type) return a.type === 'comment' ? -1 : 1;
+        return compareByName(a.file, b.file);
+      });
+  }, [accountUsers, currentUser?.isAdmin, files]);
 
   const filterCounts = useMemo(() => {
     const counts = {
@@ -1893,38 +2024,152 @@ export default function Home() {
     if (selectedInstruments.length > 0 && !activeInstruments.some(tag => selectedInstruments.includes(tag)) && activeInstruments[0]) {
       setSelectedInstruments(prev => prev.includes(activeInstruments[0]) ? prev : [...prev, activeInstruments[0]]);
     }
+    if (activeInstruments.some(tag => excludedInstruments.includes(tag))) {
+      setExcludedInstruments(prev => prev.filter(tag => !activeInstruments.includes(tag)));
+    }
     if (selectedVibes.length > 0 && !activeVibes.some(tag => selectedVibes.includes(tag)) && activeVibes[0]) {
       setSelectedVibes(prev => prev.includes(activeVibes[0]) ? prev : [...prev, activeVibes[0]]);
+    }
+    if (activeVibes.some(tag => excludedVibes.includes(tag))) {
+      setExcludedVibes(prev => prev.filter(tag => !activeVibes.includes(tag)));
     }
     if (selectedFinishes.length > 0 && activeFinish && !selectedFinishes.includes(activeFinish)) {
       setSelectedFinishes(prev => prev.includes(activeFinish) ? prev : [...prev, activeFinish]);
     }
+    if (activeFinish && excludedFinishes.includes(activeFinish)) {
+      setExcludedFinishes(prev => prev.filter(finish => finish !== activeFinish));
+    }
     if (selectedCollections.length > 0 && !activeCollections.some(collection => selectedCollections.includes(collection)) && activeCollections[0]) {
       setSelectedCollections(prev => prev.includes(activeCollections[0]) ? prev : [...prev, activeCollections[0]]);
     }
+    if (activeCollections.some(collection => excludedCollections.includes(collection))) {
+      setExcludedCollections(prev => prev.filter(collection => !activeCollections.includes(collection)));
+    }
     if (selectedYears.length > 0 && !selectedYears.includes(activeYear) && activeYear) {
       setSelectedYears(prev => prev.includes(activeYear) ? prev : [...prev, activeYear]);
+    }
+    if (activeYear && excludedYears.includes(activeYear)) {
+      setExcludedYears(prev => prev.filter(year => year !== activeYear));
     }
 
     window.setTimeout(() => {
       activeCardElementRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 0);
-  }, [activeTrack, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears]);
+  }, [activeTrack, excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears]);
+
+  const showActivityTrack = useCallback((file: AudioFile) => {
+    const fileInstruments = getTags(file, 'instruments', 'instrument');
+    const fileVibes = getTags(file, 'vibes', 'vibe');
+    const fileFinish = file.finish || '';
+    const fileCollections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
+    const fileYear = file.year || 0;
+
+    setRandomTrackIds(null);
+    setLikedOnly(false);
+    setUntaggedOnly(false);
+    setSearchQuery('');
+    setActivityTargetTrackId(file.id);
+    setRenderWindow(prev => ({ ...prev, key: '', limit: INITIAL_RENDER_LIMIT }));
+
+    if (selectedInstruments.length > 0 && !fileInstruments.some(tag => selectedInstruments.includes(tag)) && fileInstruments[0]) {
+      setSelectedInstruments(prev => prev.includes(fileInstruments[0]) ? prev : [...prev, fileInstruments[0]]);
+    }
+    if (fileInstruments.some(tag => excludedInstruments.includes(tag))) {
+      setExcludedInstruments(prev => prev.filter(tag => !fileInstruments.includes(tag)));
+    }
+    if (selectedVibes.length > 0 && !fileVibes.some(tag => selectedVibes.includes(tag)) && fileVibes[0]) {
+      setSelectedVibes(prev => prev.includes(fileVibes[0]) ? prev : [...prev, fileVibes[0]]);
+    }
+    if (fileVibes.some(tag => excludedVibes.includes(tag))) {
+      setExcludedVibes(prev => prev.filter(tag => !fileVibes.includes(tag)));
+    }
+    if (selectedFinishes.length > 0 && fileFinish && !selectedFinishes.includes(fileFinish)) {
+      setSelectedFinishes(prev => prev.includes(fileFinish) ? prev : [...prev, fileFinish]);
+    }
+    if (fileFinish && excludedFinishes.includes(fileFinish)) {
+      setExcludedFinishes(prev => prev.filter(finish => finish !== fileFinish));
+    }
+    if (selectedCollections.length > 0 && !fileCollections.some(collection => selectedCollections.includes(collection)) && fileCollections[0]) {
+      setSelectedCollections(prev => prev.includes(fileCollections[0]) ? prev : [...prev, fileCollections[0]]);
+    }
+    if (fileCollections.some(collection => excludedCollections.includes(collection))) {
+      setExcludedCollections(prev => prev.filter(collection => !fileCollections.includes(collection)));
+    }
+    if (selectedYears.length > 0 && fileYear && !selectedYears.includes(fileYear)) {
+      setSelectedYears(prev => prev.includes(fileYear) ? prev : [...prev, fileYear]);
+    }
+    if (fileYear && excludedYears.includes(fileYear)) {
+      setExcludedYears(prev => prev.filter(year => year !== fileYear));
+    }
+  }, [excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears]);
 
   const toggleFilterCollapsed = (filter: keyof typeof collapsedFilters) => {
     setCollapsedFilters(prev => ({ ...prev, [filter]: !prev[filter] }));
   };
 
-  const filterSummary = (selected: Array<string | number>) => {
-    if (selected.length === 0) return 'All';
-    return selected.map(value => typeof value === 'string' ? displayTag(value) : value).join(', ');
+  const filterSummary = (selected: Array<string | number>, excluded: Array<string | number> = []) => {
+    const includedText = selected.map(value => typeof value === 'string' ? displayTag(value) : value).join(', ');
+    const excludedText = excluded.map(value => typeof value === 'string' ? displayTag(value) : value).join(', ');
+    if (!includedText && !excludedText) return 'All';
+    return [
+      includedText,
+      excludedText ? `Not ${excludedText}` : '',
+    ].filter(Boolean).join(' · ');
   };
 
-  const activeFilterCount = selectedInstruments.length + selectedVibes.length + selectedCollections.length + selectedFinishes.length + selectedYears.length + (likedOnly ? 1 : 0) + (untaggedOnly ? 1 : 0) + (searchQuery.trim() ? 1 : 0);
+  const getFilterMode = <T extends FilterValue>(value: T, selected: T[], excluded: T[]): FilterMode => {
+    if (selected.includes(value)) return 'include';
+    if (excluded.includes(value)) return 'exclude';
+    return 'none';
+  };
+
+  const toggleFilterValue = <T extends FilterValue>(
+    value: T,
+    selected: T[],
+    setSelected: Dispatch<SetStateAction<T[]>>,
+    excluded: T[],
+    setExcluded: Dispatch<SetStateAction<T[]>>
+  ) => {
+    if (selected.includes(value)) {
+      setSelected(prev => prev.filter(selectedValue => selectedValue !== value));
+      return;
+    }
+    if (excluded.includes(value)) {
+      setExcluded(prev => prev.filter(excludedValue => excludedValue !== value));
+      return;
+    }
+    setSelected(prev => [...prev, value]);
+    setExcluded(prev => prev.filter(excludedValue => excludedValue !== value));
+  };
+
+  const excludeFilterValue = <T extends FilterValue>(
+    value: T,
+    setSelected: Dispatch<SetStateAction<T[]>>,
+    setExcluded: Dispatch<SetStateAction<T[]>>
+  ) => {
+    setSelected(prev => prev.filter(selectedValue => selectedValue !== value));
+    setExcluded(prev => prev.includes(value) ? prev : [...prev, value]);
+  };
+
+  const activeFilterCount =
+    selectedInstruments.length + selectedVibes.length + selectedCollections.length + selectedFinishes.length + selectedYears.length +
+    excludedInstruments.length + excludedVibes.length + excludedCollections.length + excludedFinishes.length + excludedYears.length +
+    (likedOnly ? 1 : 0) + (untaggedOnly ? 1 : 0) + (searchQuery.trim() ? 1 : 0);
   const collapsedSummaryClass = "mb-2 w-full rounded border border-border/50 bg-muted/40 px-3 py-2 text-left text-xs font-light text-muted-foreground opacity-80 transition hover:border-border hover:text-foreground";
-  const filterOptionClass = (selected: boolean) => `flex cursor-pointer items-center justify-between gap-3 rounded p-3 text-sm transition-colors md:p-2 ${
-    selected ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'
-  }`;
+  const filterOptionClass = (mode: FilterMode) => {
+    const modeClass = {
+      include: 'bg-accent text-accent-foreground',
+      exclude: 'border border-red-400/40 bg-red-500/10 text-red-300 hover:bg-red-500/15',
+      none: 'bg-muted text-muted-foreground hover:bg-muted/80',
+    }[mode];
+    return `flex cursor-pointer items-center justify-between gap-3 rounded p-3 text-sm transition-colors md:p-2 ${modeClass}`;
+  };
+
+  const filterCountClass = (mode: FilterMode) => {
+    if (mode === 'include') return 'text-accent-foreground/75';
+    if (mode === 'exclude') return 'text-red-200/75';
+    return 'text-muted-foreground/70';
+  };
 
   const cycleEndMode = () => {
     setEndMode(prev => {
@@ -2038,28 +2283,41 @@ export default function Home() {
             </button>
             {collapsedFilters.instruments && (
               <button type="button" onClick={() => toggleFilterCollapsed('instruments')} className={collapsedSummaryClass}>
-                {filterSummary(selectedInstruments)}
+                {filterSummary(selectedInstruments, excludedInstruments)}
               </button>
             )}
             {!collapsedFilters.instruments && <div className="space-y-1">
-              {instrumentOptions.map(inst => (
+              {instrumentOptions.map(inst => {
+                const mode = getFilterMode(inst, selectedInstruments, excludedInstruments);
+                return (
                 <div
                   key={inst}
-                  onClick={() => {
-                    if (selectedInstruments.includes(inst)) {
-                      setSelectedInstruments(selectedInstruments.filter(i => i !== inst));
-                    } else {
-                      setSelectedInstruments([...selectedInstruments, inst]);
-                    }
-                  }}
-                  className={filterOptionClass(selectedInstruments.includes(inst))}
+                  onClick={() => toggleFilterValue(inst, selectedInstruments, setSelectedInstruments, excludedInstruments, setExcludedInstruments)}
+                  className={filterOptionClass(mode)}
                 >
                   <span>{displayTag(inst)}</span>
-                  <span className={selectedInstruments.includes(inst) ? 'text-accent-foreground/75' : 'text-muted-foreground/70'}>
-                    {filterCounts.instruments.get(inst) || 0}
+                  <span className="flex items-center gap-2">
+                    {mode === 'include' && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          excludeFilterValue(inst, setSelectedInstruments, setExcludedInstruments);
+                        }}
+                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-accent-foreground/40 text-xs text-accent-foreground/80 hover:bg-accent-foreground/10"
+                        aria-label={`Exclude ${displayTag(inst)}`}
+                      >
+                        -
+                      </button>
+                    )}
+                    {mode === 'exclude' && (
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-red-200/70">Excluded</span>
+                    )}
+                    <span className={filterCountClass(mode)}>{filterCounts.instruments.get(inst) || 0}</span>
                   </span>
                 </div>
-              ))}
+                );
+              })}
             </div>}
           </div>
           <div className="mb-6">
@@ -2073,28 +2331,41 @@ export default function Home() {
             </button>
             {collapsedFilters.vibes && (
               <button type="button" onClick={() => toggleFilterCollapsed('vibes')} className={collapsedSummaryClass}>
-                {filterSummary(selectedVibes)}
+                {filterSummary(selectedVibes, excludedVibes)}
               </button>
             )}
             {!collapsedFilters.vibes && <div className="space-y-1">
-              {vibeOptions.map(v => (
+              {vibeOptions.map(v => {
+                const mode = getFilterMode(v, selectedVibes, excludedVibes);
+                return (
                 <div
                   key={v}
-                  onClick={() => {
-                    if (selectedVibes.includes(v)) {
-                      setSelectedVibes(selectedVibes.filter(vb => vb !== v));
-                    } else {
-                      setSelectedVibes([...selectedVibes, v]);
-                    }
-                  }}
-                  className={filterOptionClass(selectedVibes.includes(v))}
+                  onClick={() => toggleFilterValue(v, selectedVibes, setSelectedVibes, excludedVibes, setExcludedVibes)}
+                  className={filterOptionClass(mode)}
                 >
                   <span>{displayTag(v)}</span>
-                  <span className={selectedVibes.includes(v) ? 'text-accent-foreground/75' : 'text-muted-foreground/70'}>
-                    {filterCounts.vibes.get(v) || 0}
+                  <span className="flex items-center gap-2">
+                    {mode === 'include' && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          excludeFilterValue(v, setSelectedVibes, setExcludedVibes);
+                        }}
+                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-accent-foreground/40 text-xs text-accent-foreground/80 hover:bg-accent-foreground/10"
+                        aria-label={`Exclude ${displayTag(v)}`}
+                      >
+                        -
+                      </button>
+                    )}
+                    {mode === 'exclude' && (
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-red-200/70">Excluded</span>
+                    )}
+                    <span className={filterCountClass(mode)}>{filterCounts.vibes.get(v) || 0}</span>
                   </span>
                 </div>
-              ))}
+                );
+              })}
             </div>}
           </div>
           <div className="mb-6">
@@ -2108,28 +2379,41 @@ export default function Home() {
             </button>
             {collapsedFilters.collections && (
               <button type="button" onClick={() => toggleFilterCollapsed('collections')} className={collapsedSummaryClass}>
-                {filterSummary(selectedCollections)}
+                {filterSummary(selectedCollections, excludedCollections)}
               </button>
             )}
             {!collapsedFilters.collections && <div className="space-y-1">
-              {collectionOptions.length > 0 ? collectionOptions.map(collection => (
+              {collectionOptions.length > 0 ? collectionOptions.map(collection => {
+                const mode = getFilterMode(collection, selectedCollections, excludedCollections);
+                return (
                 <div
                   key={collection}
-                  onClick={() => {
-                    if (selectedCollections.includes(collection)) {
-                      setSelectedCollections(selectedCollections.filter(selectedCollection => selectedCollection !== collection));
-                    } else {
-                      setSelectedCollections([...selectedCollections, collection]);
-                    }
-                  }}
-                  className={filterOptionClass(selectedCollections.includes(collection))}
+                  onClick={() => toggleFilterValue(collection, selectedCollections, setSelectedCollections, excludedCollections, setExcludedCollections)}
+                  className={filterOptionClass(mode)}
                 >
                   <span>{displayTag(collection)}</span>
-                  <span className={selectedCollections.includes(collection) ? 'text-accent-foreground/75' : 'text-muted-foreground/70'}>
-                    {filterCounts.collections.get(collection) || 0}
+                  <span className="flex items-center gap-2">
+                    {mode === 'include' && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          excludeFilterValue(collection, setSelectedCollections, setExcludedCollections);
+                        }}
+                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-accent-foreground/40 text-xs text-accent-foreground/80 hover:bg-accent-foreground/10"
+                        aria-label={`Exclude ${displayTag(collection)}`}
+                      >
+                        -
+                      </button>
+                    )}
+                    {mode === 'exclude' && (
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-red-200/70">Excluded</span>
+                    )}
+                    <span className={filterCountClass(mode)}>{filterCounts.collections.get(collection) || 0}</span>
                   </span>
                 </div>
-              )) : (
+                );
+              }) : (
                 <p className="rounded border border-border/50 bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">No collections yet</p>
               )}
             </div>}
@@ -2145,28 +2429,41 @@ export default function Home() {
             </button>
             {collapsedFilters.finish && (
               <button type="button" onClick={() => toggleFilterCollapsed('finish')} className={collapsedSummaryClass}>
-                {filterSummary(selectedFinishes)}
+                {filterSummary(selectedFinishes, excludedFinishes)}
               </button>
             )}
             {!collapsedFilters.finish && <div className="space-y-1">
-              {finishOptions.map(finish => (
+              {finishOptions.map(finish => {
+                const mode = getFilterMode(finish, selectedFinishes, excludedFinishes);
+                return (
                 <div
                   key={finish}
-                  onClick={() => {
-                    if (selectedFinishes.includes(finish)) {
-                      setSelectedFinishes(selectedFinishes.filter(selectedFinish => selectedFinish !== finish));
-                    } else {
-                      setSelectedFinishes([...selectedFinishes, finish]);
-                    }
-                  }}
-                  className={filterOptionClass(selectedFinishes.includes(finish))}
+                  onClick={() => toggleFilterValue(finish, selectedFinishes, setSelectedFinishes, excludedFinishes, setExcludedFinishes)}
+                  className={filterOptionClass(mode)}
                 >
                   <span>{displayTag(finish)}</span>
-                  <span className={selectedFinishes.includes(finish) ? 'text-accent-foreground/75' : 'text-muted-foreground/70'}>
-                    {filterCounts.finish.get(finish) || 0}
+                  <span className="flex items-center gap-2">
+                    {mode === 'include' && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          excludeFilterValue(finish, setSelectedFinishes, setExcludedFinishes);
+                        }}
+                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-accent-foreground/40 text-xs text-accent-foreground/80 hover:bg-accent-foreground/10"
+                        aria-label={`Exclude ${displayTag(finish)}`}
+                      >
+                        -
+                      </button>
+                    )}
+                    {mode === 'exclude' && (
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-red-200/70">Excluded</span>
+                    )}
+                    <span className={filterCountClass(mode)}>{filterCounts.finish.get(finish) || 0}</span>
                   </span>
                 </div>
-              ))}
+                );
+              })}
             </div>}
           </div>
           <div className="mb-6">
@@ -2180,28 +2477,41 @@ export default function Home() {
             </button>
             {collapsedFilters.years && (
               <button type="button" onClick={() => toggleFilterCollapsed('years')} className={collapsedSummaryClass}>
-                {filterSummary(selectedYears)}
+                {filterSummary(selectedYears, excludedYears)}
               </button>
             )}
             {!collapsedFilters.years && <div className="space-y-1">
-              {yearOptions.map(year => (
+              {yearOptions.map(year => {
+                const mode = getFilterMode(year, selectedYears, excludedYears);
+                return (
                 <div
                   key={year}
-                  onClick={() => {
-                    if (selectedYears.includes(year)) {
-                      setSelectedYears(selectedYears.filter(y => y !== year));
-                    } else {
-                      setSelectedYears([...selectedYears, year]);
-                    }
-                  }}
-                  className={filterOptionClass(selectedYears.includes(year))}
+                  onClick={() => toggleFilterValue(year, selectedYears, setSelectedYears, excludedYears, setExcludedYears)}
+                  className={filterOptionClass(mode)}
                 >
                   <span>{year}</span>
-                  <span className={selectedYears.includes(year) ? 'text-accent-foreground/75' : 'text-muted-foreground/70'}>
-                    {filterCounts.years.get(year) || 0}
+                  <span className="flex items-center gap-2">
+                    {mode === 'include' && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          excludeFilterValue(year, setSelectedYears, setExcludedYears);
+                        }}
+                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-accent-foreground/40 text-xs text-accent-foreground/80 hover:bg-accent-foreground/10"
+                        aria-label={`Exclude ${year}`}
+                      >
+                        -
+                      </button>
+                    )}
+                    {mode === 'exclude' && (
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-red-200/70">Excluded</span>
+                    )}
+                    <span className={filterCountClass(mode)}>{filterCounts.years.get(year) || 0}</span>
                   </span>
                 </div>
-              ))}
+                );
+              })}
             </div>}
           </div>
           <div className="mb-6 rounded border border-border/50 bg-muted/30 p-3">
@@ -2258,6 +2568,63 @@ export default function Home() {
           </div>
         </div>
         <div className="flex-1 md:pl-4">
+          {currentUser?.isAdmin && (
+            <div className="mb-4 rounded border border-border/60 bg-muted/25 p-3">
+              <button
+                type="button"
+                onClick={() => setShowActivity(prev => !prev)}
+                className="flex w-full items-center justify-between gap-3 text-left"
+                aria-expanded={showActivity}
+              >
+                <h2 className="text-sm font-medium text-foreground">Activity</h2>
+                <span className="flex items-center gap-3 text-xs text-muted-foreground">
+                  {activityEntries.length} item{activityEntries.length === 1 ? '' : 's'}
+                  <span>{showActivity ? '-' : '+'}</span>
+                </span>
+              </button>
+              {showActivity && activityEntries.length > 0 && (
+                <div className="mt-3 max-h-[18rem] divide-y divide-border/50 overflow-y-auto border-y border-border/50">
+                  {activityEntries.map(activity => (
+                    <button
+                      key={activity.id}
+                      type="button"
+                      onClick={() => showActivityTrack(activity.file)}
+                      className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-background/60"
+                    >
+                      <span
+                        className={`w-16 shrink-0 text-[10px] uppercase tracking-wide ${
+                          activity.type === 'comment' ? 'text-accent' : 'text-muted-foreground'
+                        }`}
+                        title={formatActivityTitle(activity)}
+                      >
+                        {activity.type}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm text-foreground">{activity.file.name}</p>
+                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                          <span className="font-medium text-foreground/80">{activity.userName}</span>
+                          <span>{activity.text}</span>
+                          {activity.type === 'rating' && activity.rating !== undefined && (
+                            <span className={`inline-flex items-center ${getRatingColor(activity.rating)}`}>
+                              {[1, 2, 3, 4, 5].map(star => (
+                                <StarIcon key={star} filled={star <= (activity.rating || 0)} size="h-3 w-3" />
+                              ))}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <span className="shrink-0 text-[10px] text-muted-foreground/75">
+                        {formatActivityTime(activity.createdAt)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {showActivity && activityEntries.length === 0 && (
+                <p className="mt-3 text-sm text-muted-foreground">No ratings or comments from other users yet.</p>
+              )}
+            </div>
+          )}
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2 rounded border border-border/60 bg-muted/30 p-1.5">
               <button

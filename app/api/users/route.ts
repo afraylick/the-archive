@@ -20,6 +20,7 @@ interface AudioFileRecord {
   id: string;
   name: string;
   ratings?: Partial<Record<UserId, number>>;
+  ratingUpdatedAt?: Partial<Record<UserId, string>>;
   likedBy?: string[];
   comments?: AudioComment[];
   collections?: string[];
@@ -127,6 +128,9 @@ export async function DELETE(req: NextRequest) {
       ...file,
       ratings: Object.fromEntries(
         Object.entries(file.ratings || {}).filter(([ratingUserId]) => ratingUserId !== userId)
+      ),
+      ratingUpdatedAt: Object.fromEntries(
+        Object.entries(file.ratingUpdatedAt || {}).filter(([ratingUserId]) => ratingUserId !== userId)
       ),
       likedBy: (file.likedBy || []).filter(likedUserId => likedUserId !== userId),
       comments: (file.comments || []).filter(comment => comment.userId !== userId),

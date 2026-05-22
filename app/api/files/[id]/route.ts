@@ -20,6 +20,7 @@ interface AudioFileRecord {
   myRating?: number;
   userRating?: number;
   ratings?: Partial<Record<UserId, number>>;
+  ratingUpdatedAt?: Partial<Record<UserId, string>>;
   likedBy?: string[];
   bobs?: boolean;
   stems?: {
@@ -82,6 +83,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     data[index] = {
       ...updatedFile,
       likedBy: data[index].likedBy,
+      ratingUpdatedAt: updatedFile.ratingUpdatedAt || data[index].ratingUpdatedAt,
     };
     fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
     return NextResponse.json({ message: 'Updated successfully' });

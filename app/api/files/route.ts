@@ -25,6 +25,7 @@ interface AudioFileRecord {
   myRating?: number;
   userRating?: number;
   ratings?: Partial<Record<UserId, number>>;
+  ratingUpdatedAt?: Partial<Record<UserId, string>>;
   likedBy?: string[];
   stems?: {
     id: string;
@@ -54,11 +55,18 @@ const getRating = (file: AudioFileRecord, userId: UserId) => file.ratings?.[user
 
 const sanitizeFileForUser = (file: AudioFileRecord, userId: UserId, isAdmin: boolean) => {
   const ratings = file.ratings || {};
+  const ratingUpdatedAt = file.ratingUpdatedAt || {};
   const visibleRatings = isAdmin
     ? ratings
     : {
         adam: ratings.adam || file.myRating || 0,
         [userId]: getRating(file, userId),
+      };
+  const visibleRatingUpdatedAt = isAdmin
+    ? ratingUpdatedAt
+    : {
+        adam: ratingUpdatedAt.adam || '',
+        [userId]: ratingUpdatedAt[userId] || '',
       };
 
   return {
@@ -67,6 +75,7 @@ const sanitizeFileForUser = (file: AudioFileRecord, userId: UserId, isAdmin: boo
     liked: file.likedBy?.includes(userId) || false,
     likedBy: isAdmin ? (file.likedBy || []) : file.likedBy?.includes(userId) ? [userId] : [],
     ratings: visibleRatings,
+    ratingUpdatedAt: visibleRatingUpdatedAt,
     myRating: ratings.adam || file.myRating || 0,
     userRating: getRating(file, userId),
   };

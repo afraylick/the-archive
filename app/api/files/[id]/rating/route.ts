@@ -8,6 +8,7 @@ interface AudioFileRecord {
   myRating?: number;
   userRating?: number;
   ratings?: Partial<Record<UserId, number>>;
+  ratingUpdatedAt?: Partial<Record<UserId, string>>;
 }
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -35,8 +36,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     const updatedFile = data[index];
     updatedFile.ratings = updatedFile.ratings || {};
+    updatedFile.ratingUpdatedAt = updatedFile.ratingUpdatedAt || {};
     updatedFile.ratings.adam = updatedFile.ratings.adam || updatedFile.myRating || 0;
     updatedFile.ratings[ratingUserId] = normalizedRating;
+    updatedFile.ratingUpdatedAt[ratingUserId] = new Date().toISOString();
     updatedFile.myRating = updatedFile.ratings.adam || 0;
     updatedFile.userRating = ratingUserId === 'adam' ? 0 : normalizedRating;
     data[index] = updatedFile;
@@ -52,6 +55,12 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           },
       myRating: updatedFile.ratings.adam || 0,
       userRating: updatedFile.ratings[user.id] || 0,
+      ratingUpdatedAt: user.isAdmin
+        ? updatedFile.ratingUpdatedAt
+        : {
+            adam: updatedFile.ratingUpdatedAt.adam || '',
+            [user.id]: updatedFile.ratingUpdatedAt[user.id] || '',
+          },
     });
   } catch {
     return NextResponse.json({ error: 'Rating update failed' }, { status: 500 });
