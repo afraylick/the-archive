@@ -22,6 +22,32 @@ export const ensureStorageDirs = () => {
 export const getUploadPath = (id: string) => path.join(getUploadsDir(), id);
 export const getStemPath = (id: string) => path.join(getStemsDir(), id);
 
+export const isSafeStorageId = (id: string) => (
+  Boolean(id) &&
+  path.basename(id) === id &&
+  !id.includes('..') &&
+  !id.includes('/') &&
+  !id.includes('\\')
+);
+
+export const getAllowedImportRoots = () => (
+  (process.env.ARCHIVE_IMPORT_ROOTS || '')
+    .split(path.delimiter)
+    .map(root => root.trim())
+    .filter(Boolean)
+    .map(root => path.resolve(root))
+);
+
+export const isImportPathAllowed = (targetPath: string) => {
+  const allowedRoots = getAllowedImportRoots();
+  if (allowedRoots.length === 0) {
+    return process.env.NODE_ENV !== 'production';
+  }
+
+  const resolvedTarget = path.resolve(targetPath);
+  return allowedRoots.some(root => resolvedTarget === root || resolvedTarget.startsWith(`${root}${path.sep}`));
+};
+
 export const getAudioContentType = (filename: string) => {
   const ext = path.extname(filename).toLowerCase();
   const types: Record<string, string> = {

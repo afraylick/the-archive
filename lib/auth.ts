@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import type { NextRequest } from 'next/server';
+import { getStorageRoot } from './storage';
 
 export type UserId = string;
 
@@ -12,6 +13,8 @@ export interface ArchiveUser {
 }
 
 export const SESSION_COOKIE = 'archive_session';
+const DEFAULT_DEV_SECRET = 'songie-local-dev-secret';
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 
 export const ARCHIVE_USERS: ArchiveUser[] = [
   { id: 'adam', name: 'Adam', isAdmin: true },
@@ -31,9 +34,33 @@ const DEFAULT_CODES: Record<UserId, string> = {
   bobs: 'bobs',
 };
 
-const getSecret = () => process.env.ARCHIVE_AUTH_SECRET || 'songie-local-dev-secret';
-const getUsersFile = () => path.join(process.cwd(), 'data/users.json');
-const getAccountsFile = () => path.join(process.cwd(), 'data/accounts.json');
+const isProduction = () => process.env.NODE_ENV === 'production';
+
+const getSecret = () => {
+  const secret = process.env.ARCHIVE_AUTH_SECRET?.trim();
+  if (secret) return secret;
+  if (isProduction()) {
+    throw new Error('ARCHIVE_AUTH_SECRET must be set in production.');
+  }
+  return DEFAULT_DEV_SECRET;
+};
+const getUsersFile = () => path.join(getStorageRoot(), 'users.json');
+const getAccountsFile = () => path.join(getStorageRoot(), 'accounts.json');
+
+const timingSafeEqualText = (a: string, b: string) => {
+  const aBuffer = Buffer.from(a);
+  const bBuffer = Buffer.from(b);
+  return aBuffer.length === bBuffer.length && timingSafeEqual(aBuffer, bBuffer);
+};
+
+const validatePasscode = (passcode: string) => {
+  const cleanPasscode = passcode.trim();
+  if (!cleanPasscode) throw new Error('Password is required');
+  if (isProduction() && cleanPasscode.length < 8) {
+    throw new Error('Password must be at least 8 characters');
+  }
+  return cleanPasscode;
+};
 
 const parseConfiguredCodes = () => {
   if (!process.env.ARCHIVE_ACCOUNT_CODES) return {};
@@ -91,15 +118,21 @@ export const verifyPasscode = (userId: string, passcode: string) => {
   const configuredCodes = parseConfiguredCodes();
   const storedHash = getStoredPasswordHash(user.id);
   if (storedHash) {
-    return storedHash === hashPasscode(passcode);
+    return timingSafeEqualText(storedHash, hashPasscode(passcode)) ||
+      timingSafeEqualText(storedHash, hashPasscodeWithSecret(passcode, DEFAULT_DEV_SECRET));
   }
 
   const expectedCode = configuredCodes[user.id] || DEFAULT_CODES[user.id];
-  return passcode === expectedCode;
+  if (isProduction() && !configuredCodes[user.id]) return false;
+  return timingSafeEqualText(passcode, expectedCode);
 };
 
 export const hashPasscode = (passcode: string) => (
-  createHmac('sha256', getSecret()).update(passcode).digest('base64url')
+  hashPasscodeWithSecret(passcode, getSecret())
+);
+
+const hashPasscodeWithSecret = (passcode: string, secret: string) => (
+  createHmac('sha256', secret).update(passcode).digest('base64url')
 );
 
 const readPasswordHashes = () => {
@@ -114,15 +147,24 @@ const readPasswordHashes = () => {
 
 const getStoredPasswordHash = (userId: UserId) => readPasswordHashes()[userId];
 
-export const getUserByPasscode = (passcode: string) => (
-  getAllUsers().find(user => verifyPasscode(user.id, passcode))
-);
+export const getUserByPasscode = (passcode: string) => {
+  const user = getAllUsers().find(candidate => verifyPasscode(candidate.id, passcode));
+  if (!user) return undefined;
+
+  const storedHash = getStoredPasswordHash(user.id);
+  if (storedHash && timingSafeEqualText(storedHash, hashPasscodeWithSecret(passcode, DEFAULT_DEV_SECRET))) {
+    setUserPasscode(user.id, passcode);
+  }
+
+  return user;
+};
 
 export const isPasscodeInUse = (passcode: string, exceptUserId?: string) => (
   getAllUsers().some(user => user.id !== exceptUserId && verifyPasscode(user.id, passcode))
 );
 
 export const setUserPasscode = (userId: UserId, passcode: string) => {
+  const cleanPasscode = validatePasscode(passcode);
   const usersFile = getUsersFile();
   const dir = path.dirname(usersFile);
   if (!fs.existsSync(dir)) {
@@ -130,7 +172,7 @@ export const setUserPasscode = (userId: UserId, passcode: string) => {
   }
 
   const hashes = readPasswordHashes();
-  hashes[userId] = hashPasscode(passcode);
+  hashes[userId] = hashPasscode(cleanPasscode);
   fs.writeFileSync(usersFile, JSON.stringify(hashes, null, 2));
 };
 
@@ -154,8 +196,8 @@ const getUserIdFromName = (name: string) => {
 export const createUser = (name: string, passcode: string) => {
   const cleanName = name.trim();
   if (!cleanName) throw new Error('User name is required');
-  if (!passcode.trim()) throw new Error('Password is required');
-  if (isPasscodeInUse(passcode.trim())) throw new Error('Password is already in use');
+  const cleanPasscode = validatePasscode(passcode);
+  if (isPasscodeInUse(cleanPasscode)) throw new Error('Password is already in use');
 
   const user: ArchiveUser = {
     id: getUserIdFromName(cleanName),
@@ -163,7 +205,7 @@ export const createUser = (name: string, passcode: string) => {
     isAdmin: false,
   };
   writeCustomUsers([...readCustomUsers(), user]);
-  setUserPasscode(user.id, passcode.trim());
+  setUserPasscode(user.id, cleanPasscode);
   return user;
 };
 
@@ -188,21 +230,35 @@ const signUserId = (userId: string) => (
   createHmac('sha256', getSecret()).update(userId).digest('base64url')
 );
 
-export const createSessionToken = (userId: UserId) => `${userId}.${signUserId(userId)}`;
+const signSession = (userId: string, expiresAt: number) => (
+  createHmac('sha256', getSecret()).update(`${userId}.${expiresAt}`).digest('base64url')
+);
+
+export const createSessionToken = (userId: UserId) => {
+  const expiresAt = Date.now() + SESSION_TTL_MS;
+  return `v2.${userId}.${expiresAt}.${signSession(userId, expiresAt)}`;
+};
 
 export const getUserFromSessionToken = (token: string | undefined) => {
   if (!token) return null;
 
-  const [userId, signature] = token.split('.');
+  const tokenParts = token.split('.');
+  if (tokenParts[0] === 'v2') {
+    const [, userId, expiresAtText, signature] = tokenParts;
+    const expiresAt = Number(expiresAtText);
+    const user = getUserById(userId);
+    if (!user || !signature || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
+
+    const expectedSignature = signSession(user.id, expiresAt);
+    return timingSafeEqualText(signature, expectedSignature) ? user : null;
+  }
+
+  const [userId, signature] = tokenParts;
   const user = getUserById(userId);
   if (!user || !signature) return null;
 
   const expectedSignature = signUserId(user.id);
-  const signatureBuffer = Buffer.from(signature);
-  const expectedBuffer = Buffer.from(expectedSignature);
-
-  if (signatureBuffer.length !== expectedBuffer.length) return null;
-  return timingSafeEqual(signatureBuffer, expectedBuffer) ? user : null;
+  return timingSafeEqualText(signature, expectedSignature) ? user : null;
 };
 
 export const getSessionUser = (req: NextRequest) => (

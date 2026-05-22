@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getSessionUser, type UserId } from '@/lib/auth';
 import fs from 'fs';
 import type { NextRequest } from 'next/server';
-import { getDataFilePath, getUploadPath } from '@/lib/storage';
+import { getDataFilePath, getUploadPath, isSafeStorageId } from '@/lib/storage';
 
 interface AudioFileRecord {
   id: string;
@@ -145,7 +145,7 @@ export async function GET(req: NextRequest) {
       file.myRating = file.ratings.adam || 0;
       file.userRating = getRating(file, user.id);
       return file;
-    }).filter((file) => fs.existsSync(getUploadPath(file.id)));
+    }).filter((file) => isSafeStorageId(file.id) && fs.existsSync(getUploadPath(file.id)));
 
     // Save migrated data
     fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));

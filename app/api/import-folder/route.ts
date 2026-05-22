@@ -4,7 +4,7 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { getRecordedDateFromFilename } from '@/lib/recorded-date';
-import { ensureStorageDirs, getDataFilePath, getUploadsDir } from '@/lib/storage';
+import { ensureStorageDirs, getDataFilePath, getUploadsDir, isImportPathAllowed } from '@/lib/storage';
 import { Readable } from 'stream';
 
 interface AudioFileRecord {
@@ -27,6 +27,7 @@ interface AudioFileRecord {
   year: number;
   createdAt: string;
   ratings: Partial<Record<UserId, number>>;
+  ratingUpdatedAt?: Partial<Record<UserId, string>>;
   myRating: number;
   userRating: number;
   notes: string;
@@ -60,6 +61,10 @@ interface ImportFolderRequest {
 }
 
 const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.aiff', '.aif']);
+const MAX_IMPORT_FILES = 1000;
+const MAX_TAGS_PER_CATEGORY = 25;
+const MAX_TAG_LENGTH = 80;
+const MAX_NOTES_LENGTH = 10000;
 const AUDIO_MIME_BY_EXTENSION: Record<string, string> = {
   '.aac': 'audio/aac',
   '.aif': 'audio/aiff',
@@ -82,16 +87,30 @@ const FINDER_COLOR_BY_INDEX: Record<string, string> = {
 const FINDER_COLOR_NAMES = new Set(Object.values(FINDER_COLOR_BY_INDEX));
 
 const isAudioFile = (filePath: string) => AUDIO_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+const cleanTagArray = (tags: unknown) => Array.isArray(tags)
+  ? Array.from(new Set(tags
+      .map(tag => String(tag).trim())
+      .filter(Boolean)
+      .slice(0, MAX_TAGS_PER_CATEGORY)
+      .map(tag => tag.slice(0, MAX_TAG_LENGTH))
+    ))
+  : [];
 
-const getAudioFiles = (dir: string): string[] => {
+const getAudioFiles = (dir: string, limit = MAX_IMPORT_FILES): string[] => {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const files: string[] = [];
 
-  return entries.flatMap((entry) => {
+  for (const entry of entries) {
+    if (files.length >= limit) break;
     const entryPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) return getAudioFiles(entryPath);
-    if (entry.isFile() && isAudioFile(entryPath)) return [entryPath];
-    return [];
-  });
+    if (entry.isDirectory()) {
+      files.push(...getAudioFiles(entryPath, limit - files.length));
+    } else if (entry.isFile() && isAudioFile(entryPath)) {
+      files.push(entryPath);
+    }
+  }
+
+  return files;
 };
 
 const parseFinderTagOutput = (rawOutput: string) => {
@@ -169,6 +188,9 @@ export async function GET(req: NextRequest) {
     }
 
     const resolvedPath = path.resolve(filePath);
+    if (!isImportPathAllowed(resolvedPath)) {
+      return NextResponse.json({ error: 'Folder preview path is not allowed' }, { status: 403 });
+    }
     if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile() || !isAudioFile(resolvedPath)) {
       return NextResponse.json({ error: 'Audio file not found' }, { status: 404 });
     }
@@ -199,6 +221,9 @@ export async function POST(req: NextRequest) {
     }
 
     const sourceDir = path.resolve(folderPath);
+    if (!isImportPathAllowed(sourceDir)) {
+      return NextResponse.json({ error: 'Folder import path is not allowed' }, { status: 403 });
+    }
     if (!fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
       return NextResponse.json({ error: 'Folder not found' }, { status: 404 });
     }
@@ -223,8 +248,8 @@ export async function POST(req: NextRequest) {
       : [];
 
     const results: { id: string; name: string; colorTags: string[] }[] = [];
-    const cleanInstruments = instruments.filter(Boolean);
-    const cleanVibes = vibes.filter(Boolean);
+    const cleanInstruments = cleanTagArray(instruments);
+    const cleanVibes = cleanTagArray(vibes);
     const importFiles = files && files.length > 0
       ? files.filter(file => {
           const resolvedPath = path.resolve(file.path);
@@ -239,8 +264,8 @@ export async function POST(req: NextRequest) {
       const ext = path.extname(filePath);
       const filename = Date.now() + '-' + Math.random().toString(36).slice(2, 11) + '-' + index + ext;
       const sourceMetadata = getFileMetadata(filePath, fileMetadata.rating ?? rating);
-      const fileInstruments = Array.isArray(fileMetadata.instruments) ? fileMetadata.instruments.filter(Boolean) : cleanInstruments;
-      const fileVibes = Array.isArray(fileMetadata.vibes) ? fileMetadata.vibes.filter(Boolean) : cleanVibes;
+      const fileInstruments = Array.isArray(fileMetadata.instruments) ? cleanTagArray(fileMetadata.instruments) : cleanInstruments;
+      const fileVibes = Array.isArray(fileMetadata.vibes) ? cleanTagArray(fileMetadata.vibes) : cleanVibes;
       const finish = fileMetadata.finish || sourceMetadata.finish;
       const adamRating = deriveRatingFromColorTags(sourceMetadata.colorTags, fileMetadata.rating ?? rating);
 
@@ -261,9 +286,10 @@ export async function POST(req: NextRequest) {
         year: sourceMetadata.year,
         createdAt: sourceMetadata.createdAt,
         ratings: { adam: adamRating },
+        ratingUpdatedAt: adamRating > 0 ? { adam: new Date().toISOString() } : {},
         myRating: adamRating,
         userRating: 0,
-        notes: typeof fileMetadata.notes === 'string' ? fileMetadata.notes : '',
+        notes: typeof fileMetadata.notes === 'string' ? fileMetadata.notes.slice(0, MAX_NOTES_LENGTH) : '',
         comments: [],
         uploadedAt: new Date().toISOString(),
       });

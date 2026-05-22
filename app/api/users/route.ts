@@ -81,16 +81,23 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
   }
 
-  const { userId, passcode } = await req.json() as { userId?: UserId; passcode?: string };
-  if (!userId || !getUserById(userId) || !passcode?.trim()) {
-    return NextResponse.json({ error: 'User and password are required' }, { status: 400 });
-  }
-  if (isPasscodeInUse(passcode.trim(), userId)) {
-    return NextResponse.json({ error: 'Password is already in use' }, { status: 409 });
-  }
+  try {
+    const { userId, passcode } = await req.json() as { userId?: UserId; passcode?: string };
+    if (!userId || !getUserById(userId) || !passcode?.trim()) {
+      return NextResponse.json({ error: 'User and password are required' }, { status: 400 });
+    }
+    if (isPasscodeInUse(passcode.trim(), userId)) {
+      return NextResponse.json({ error: 'Password is already in use' }, { status: 409 });
+    }
 
-  setUserPasscode(userId, passcode.trim());
-  return NextResponse.json({ message: 'Password updated' });
+    setUserPasscode(userId, passcode.trim());
+    return NextResponse.json({ message: 'Password updated' });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Password update failed' },
+      { status: 400 }
+    );
+  }
 }
 
 export async function POST(req: NextRequest) {

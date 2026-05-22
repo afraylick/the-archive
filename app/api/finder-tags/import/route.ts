@@ -10,6 +10,7 @@ interface AudioFileRecord {
   originalName?: string;
   colorTags?: string[];
   ratings?: Partial<Record<UserId, number>>;
+  ratingUpdatedAt?: Partial<Record<UserId, string>>;
   myRating?: number;
 }
 
@@ -122,6 +123,12 @@ export async function POST(req: NextRequest) {
           ...ratings,
           adam: nextAdamRating,
         },
+        ratingUpdatedAt: nextAdamRating > 0 && currentAdamRating === 0
+          ? {
+              ...(data[index].ratingUpdatedAt || {}),
+              adam: new Date().toISOString(),
+            }
+          : data[index].ratingUpdatedAt,
         myRating: nextAdamRating,
       };
       matched += 1;

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser, type UserId } from '@/lib/auth';
 import fs from 'fs';
-import { getDataFilePath, getStemPath, getUploadPath } from '@/lib/storage';
+import { getDataFilePath, getStemPath, getUploadPath, isSafeStorageId } from '@/lib/storage';
 
 interface AudioFileRecord {
   id: string;
@@ -46,6 +46,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     }
     const index = data.findIndex((f) => f.id === id);
     if (index === -1) {
+      return NextResponse.json({ error: 'File not found' }, { status: 404 });
+    }
+    if (user.id === 'bobs' && !data[index].bobs) {
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
 
@@ -109,11 +112,14 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     if (index === -1) {
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
+    if (!isSafeStorageId(id)) {
+      return NextResponse.json({ error: 'Invalid file id' }, { status: 400 });
+    }
     const filePath = getUploadPath(id);
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
-    if (data[index].stems?.id) {
+    if (data[index].stems?.id && isSafeStorageId(data[index].stems.id)) {
       const stemPath = getStemPath(data[index].stems.id);
       if (fs.existsSync(stemPath)) {
         fs.unlinkSync(stemPath);

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
-import { getAudioContentType, getDataFilePath, getUploadPath } from '@/lib/storage';
+import { getAudioContentType, getDataFilePath, getUploadPath, isSafeStorageId } from '@/lib/storage';
 import fs from 'fs';
 import { Readable } from 'stream';
 
@@ -41,7 +41,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
       : [];
     const file = data.find(item => item.id === id);
-    if (!file || (user.id === 'bobs' && !file.bobs)) {
+    if (!file || !isSafeStorageId(file.id) || (user.id === 'bobs' && !file.bobs)) {
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
 

@@ -20,7 +20,10 @@ export default function LoginPage() {
     });
 
     if (res.ok) {
-      const nextUrl = new URLSearchParams(window.location.search).get('next') || '/';
+      const requestedNextUrl = new URLSearchParams(window.location.search).get('next') || '/';
+      const nextUrl = requestedNextUrl.startsWith('/') && !requestedNextUrl.startsWith('//')
+        ? requestedNextUrl
+        : '/';
       window.location.href = nextUrl;
       return;
     }

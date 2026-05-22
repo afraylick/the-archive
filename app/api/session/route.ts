@@ -8,6 +8,12 @@ import {
 } from '@/lib/auth';
 import { clearFailedLogins, getLoginRateLimitStatus, recordFailedLogin } from '@/lib/login-rate-limit';
 
+const isSecureRequest = (req: NextRequest) => (
+  req.nextUrl.protocol === 'https:' ||
+  req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim() === 'https' ||
+  process.env.NODE_ENV === 'production'
+);
+
 export async function GET(req: NextRequest) {
   const user = getSessionUser(req);
   return NextResponse.json({
@@ -49,6 +55,7 @@ export async function POST(req: NextRequest) {
     response.cookies.set(SESSION_COOKIE, createSessionToken(loginUser.id), {
       httpOnly: true,
       sameSite: 'lax',
+      secure: isSecureRequest(req),
       path: '/',
       maxAge: 60 * 60 * 24 * 30,
     });

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
 import fs from 'fs';
 import { Readable } from 'stream';
-import { ensureStorageDirs, getDataFilePath, getSafeDownloadName, getStemPath } from '@/lib/storage';
+import { ensureStorageDirs, getDataFilePath, getSafeDownloadName, getStemPath, isSafeStorageId } from '@/lib/storage';
 
 interface StemAttachment {
   id: string;
@@ -15,6 +15,8 @@ interface AudioFileRecord {
   stems?: StemAttachment;
   bobs?: boolean;
 }
+
+const MAX_STEMS_ZIP_BYTES = 2 * 1024 * 1024 * 1024;
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -30,6 +32,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (!zipFile || !zipFile.name.toLowerCase().endsWith('.zip')) {
       return NextResponse.json({ error: 'A ZIP file is required' }, { status: 400 });
     }
+    if (zipFile.size > MAX_STEMS_ZIP_BYTES) {
+      return NextResponse.json({ error: 'ZIP file is too large' }, { status: 413 });
+    }
 
     const dataFile = getDataFilePath();
     const data: AudioFileRecord[] = fs.existsSync(dataFile)
@@ -42,7 +47,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     ensureStorageDirs();
 
-    if (data[index].stems?.id) {
+    if (data[index].stems?.id && isSafeStorageId(data[index].stems.id)) {
       const oldPath = getStemPath(data[index].stems.id);
       if (fs.existsSync(oldPath)) {
         fs.unlinkSync(oldPath);
@@ -85,7 +90,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     }
 
     const stemId = data[index].stems?.id;
-    if (stemId) {
+    if (stemId && isSafeStorageId(stemId)) {
       const stemPath = getStemPath(stemId);
       if (fs.existsSync(stemPath)) {
         fs.unlinkSync(stemPath);
@@ -115,7 +120,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
       : [];
     const file = data.find(item => item.id === id);
-    if (!file?.stems?.id || (user.id === 'bobs' && !file.bobs)) {
+    if (!file?.stems?.id || !isSafeStorageId(file.stems.id) || (user.id === 'bobs' && !file.bobs)) {
       return NextResponse.json({ error: 'Stems not found' }, { status: 404 });
     }
 

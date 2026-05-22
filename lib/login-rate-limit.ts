@@ -101,7 +101,7 @@ export const recordFailedLogin = (req: NextRequest, userId: string | undefined) 
   writeAttempts(attempts);
 
   return {
-    locked: Boolean(record.lockedUntil && record.lockedUntil > now && record.count > MAX_FAILED_ATTEMPTS),
+    locked: Boolean(record.lockedUntil && record.lockedUntil > now && record.count >= MAX_FAILED_ATTEMPTS),
     retryAfterSeconds: record.lockedUntil ? Math.ceil((record.lockedUntil - now) / 1000) : 0,
   };
 };

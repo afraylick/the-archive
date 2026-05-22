@@ -19,6 +19,13 @@ interface UploadMetadata {
   bobs?: boolean;
 }
 
+const MAX_UPLOAD_FILES = 200;
+const MAX_UPLOAD_FILE_BYTES = 500 * 1024 * 1024;
+const MAX_UPLOAD_TOTAL_BYTES = 5 * 1024 * 1024 * 1024;
+const MAX_TAGS_PER_CATEGORY = 25;
+const MAX_TAG_LENGTH = 80;
+const MAX_NOTES_LENGTH = 10000;
+
 interface AudioFileRecord {
   id: string;
   name: string;
@@ -41,6 +48,7 @@ interface AudioFileRecord {
   year: number;
   createdAt: string;
   ratings: Partial<Record<UserId, number>>;
+  ratingUpdatedAt?: Partial<Record<UserId, string>>;
   myRating: number;
   userRating: number;
   notes: string;
@@ -56,6 +64,14 @@ interface AudioFileRecord {
 }
 
 const deriveFinishFromFilename = (filename: string) => filename.toLowerCase().includes('ste-0') ? 'Recorder' : 'Voice Memo';
+const cleanTagArray = (tags: unknown) => Array.isArray(tags)
+  ? Array.from(new Set(tags
+      .map(tag => String(tag).trim())
+      .filter(Boolean)
+      .slice(0, MAX_TAGS_PER_CATEGORY)
+      .map(tag => tag.slice(0, MAX_TAG_LENGTH))
+    ))
+  : [];
 
 export async function POST(req: NextRequest) {
   try {
@@ -76,6 +92,13 @@ export async function POST(req: NextRequest) {
     if (files.length === 0) {
       return NextResponse.json({ error: 'No files uploaded' }, { status: 400 });
     }
+    if (files.length > MAX_UPLOAD_FILES) {
+      return NextResponse.json({ error: `Upload is limited to ${MAX_UPLOAD_FILES} files at a time` }, { status: 413 });
+    }
+    const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+    if (files.some(file => file.size > MAX_UPLOAD_FILE_BYTES) || totalSize > MAX_UPLOAD_TOTAL_BYTES) {
+      return NextResponse.json({ error: 'Upload is too large' }, { status: 413 });
+    }
 
     const dataFile = getDataFilePath();
     const uploadsDir = getUploadsDir();
@@ -89,7 +112,7 @@ export async function POST(req: NextRequest) {
     const results: { id: string; name: string }[] = [];
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const metadata = JSON.parse(metadataStrings[i]) as UploadMetadata;
+      const metadata = metadataStrings[i] ? JSON.parse(metadataStrings[i]) as UploadMetadata : {};
 
       // Generate unique filename
       const ext = path.extname(file.name);
@@ -102,19 +125,20 @@ export async function POST(req: NextRequest) {
 
       // Save metadata
       const instruments = Array.isArray(metadata.instruments)
-        ? metadata.instruments.filter(Boolean)
+        ? cleanTagArray(metadata.instruments)
         : metadata.instrument
-          ? [metadata.instrument]
+          ? cleanTagArray([metadata.instrument])
           : [];
       const vibes = Array.isArray(metadata.vibes)
-        ? metadata.vibes.filter(Boolean)
+        ? cleanTagArray(metadata.vibes)
         : metadata.vibe
-          ? [metadata.vibe]
+          ? cleanTagArray([metadata.vibe])
           : [];
       const filenameRecordedDate = getRecordedDateFromFilename(file.name);
       const createdAt = filenameRecordedDate?.createdAt || metadata.createdAt || new Date().toISOString();
       const year = filenameRecordedDate?.year || metadata.year || new Date(createdAt).getFullYear();
       const finish = metadata.finish || (filenameRecordedDate ? 'Tracked' : deriveFinishFromFilename(file.name));
+      const adamRating = Number.isFinite(metadata.rating) ? Math.max(0, Math.min(5, Math.round(metadata.rating || 0))) : 0;
       const newEntry = {
         id: filename,
         name: file.name,
@@ -126,13 +150,14 @@ export async function POST(req: NextRequest) {
         collections: [],
         likedBy: [],
         bobs: Boolean(metadata.bobs),
-        colorTags: Array.isArray(metadata.colorTags) ? metadata.colorTags.filter(Boolean) : [],
+        colorTags: cleanTagArray(metadata.colorTags).slice(0, 10),
         year,
         createdAt,
-        ratings: { adam: metadata.rating || 0 },
-        myRating: metadata.rating || 0,
+        ratings: { adam: adamRating },
+        ratingUpdatedAt: adamRating > 0 ? { adam: new Date().toISOString() } : {},
+        myRating: adamRating,
         userRating: 0,
-        notes: typeof metadata.notes === 'string' ? metadata.notes : '',
+        notes: typeof metadata.notes === 'string' ? metadata.notes.slice(0, MAX_NOTES_LENGTH) : '',
         comments: [],
         uploadedAt: new Date().toISOString(),
       };

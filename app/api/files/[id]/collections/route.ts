@@ -5,8 +5,12 @@ import { getDataFilePath } from '@/lib/storage';
 
 interface AudioFileRecord {
   id: string;
+  bobs?: boolean;
   collections?: string[];
 }
+
+const MAX_COLLECTIONS_PER_FILE = 50;
+const MAX_COLLECTION_NAME_LENGTH = 80;
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -19,7 +23,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     const { collections } = await req.json() as { collections?: string[] };
     const nextCollections = Array.isArray(collections)
-      ? Array.from(new Set(collections.map(collection => collection.trim()).filter(Boolean)))
+      ? Array.from(new Set(collections
+          .map(collection => collection.trim().slice(0, MAX_COLLECTION_NAME_LENGTH))
+          .filter(Boolean)
+        )).slice(0, MAX_COLLECTIONS_PER_FILE)
       : [];
 
     const dataFile = getDataFilePath();
@@ -29,6 +36,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const index = data.findIndex(file => file.id === id);
 
     if (index === -1) {
+      return NextResponse.json({ error: 'File not found' }, { status: 404 });
+    }
+    if (user.id === 'bobs' && !data[index].bobs) {
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
 
