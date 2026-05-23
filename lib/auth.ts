@@ -46,6 +46,17 @@ const getSecret = () => {
 };
 const getUsersFile = () => path.join(getStorageRoot(), 'users.json');
 const getAccountsFile = () => path.join(getStorageRoot(), 'accounts.json');
+const getLegacyUsersFile = () => path.join(process.cwd(), 'data/users.json');
+const getLegacyAccountsFile = () => path.join(process.cwd(), 'data/accounts.json');
+
+const readJsonFile = <T,>(filePath: string, fallback: T): T => {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8')) as T;
+  } catch {
+    return fallback;
+  }
+};
 
 const timingSafeEqualText = (a: string, b: string) => {
   const aBuffer = Buffer.from(a);
@@ -77,14 +88,15 @@ export const getUserById = (id: string | undefined) => (
 );
 
 const readCustomUsers = () => {
-  try {
-    const accountsFile = getAccountsFile();
-    if (!fs.existsSync(accountsFile)) return [];
-    const users = JSON.parse(fs.readFileSync(accountsFile, 'utf8')) as ArchiveUser[];
-    return users.filter(user => user.id && user.name && user.id !== 'adam');
-  } catch {
-    return [];
-  }
+  const legacyUsers = readJsonFile<ArchiveUser[]>(getLegacyAccountsFile(), []);
+  const storageUsers = readJsonFile<ArchiveUser[]>(getAccountsFile(), []);
+  const usersById = new Map<string, ArchiveUser>();
+
+  [...legacyUsers, ...storageUsers]
+    .filter(user => user.id && user.name && user.id !== 'adam')
+    .forEach(user => usersById.set(user.id, user));
+
+  return Array.from(usersById.values());
 };
 
 const writeCustomUsers = (users: ArchiveUser[]) => {
@@ -136,24 +148,41 @@ const hashPasscodeWithSecret = (passcode: string, secret: string) => (
 );
 
 const readPasswordHashes = () => {
-  try {
-    const usersFile = getUsersFile();
-    if (!fs.existsSync(usersFile)) return {};
-    return JSON.parse(fs.readFileSync(usersFile, 'utf8')) as Partial<Record<UserId, string>>;
-  } catch {
-    return {};
-  }
+  const legacyHashes = readJsonFile<Partial<Record<UserId, string>>>(getLegacyUsersFile(), {});
+  const storageHashes = readJsonFile<Partial<Record<UserId, string>>>(getUsersFile(), {});
+  return { ...legacyHashes, ...storageHashes };
 };
 
 const getStoredPasswordHash = (userId: UserId) => readPasswordHashes()[userId];
+const getPrimaryStoredPasswordHash = (userId: UserId) => (
+  readJsonFile<Partial<Record<UserId, string>>>(getUsersFile(), {})[userId]
+);
+
+const writePasswordHashes = (hashes: Partial<Record<UserId, string>>) => {
+  const usersFile = getUsersFile();
+  const dir = path.dirname(usersFile);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(usersFile, JSON.stringify(hashes, null, 2));
+};
+
+const upgradeStoredPasscodeHash = (userId: UserId, passcode: string) => {
+  const hashes = readPasswordHashes();
+  hashes[userId] = hashPasscode(passcode);
+  writePasswordHashes(hashes);
+};
 
 export const getUserByPasscode = (passcode: string) => {
   const user = getAllUsers().find(candidate => verifyPasscode(candidate.id, passcode));
   if (!user) return undefined;
 
   const storedHash = getStoredPasswordHash(user.id);
-  if (storedHash && timingSafeEqualText(storedHash, hashPasscodeWithSecret(passcode, DEFAULT_DEV_SECRET))) {
-    setUserPasscode(user.id, passcode);
+  const primaryHash = getPrimaryStoredPasswordHash(user.id);
+  const currentHash = hashPasscode(passcode);
+  const isLegacyDevHash = storedHash && timingSafeEqualText(storedHash, hashPasscodeWithSecret(passcode, DEFAULT_DEV_SECRET));
+  if (storedHash && (!primaryHash || isLegacyDevHash || !timingSafeEqualText(storedHash, currentHash))) {
+    upgradeStoredPasscodeHash(user.id, passcode);
   }
 
   return user;
@@ -165,15 +194,9 @@ export const isPasscodeInUse = (passcode: string, exceptUserId?: string) => (
 
 export const setUserPasscode = (userId: UserId, passcode: string) => {
   const cleanPasscode = validatePasscode(passcode);
-  const usersFile = getUsersFile();
-  const dir = path.dirname(usersFile);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-
   const hashes = readPasswordHashes();
   hashes[userId] = hashPasscode(cleanPasscode);
-  fs.writeFileSync(usersFile, JSON.stringify(hashes, null, 2));
+  writePasswordHashes(hashes);
 };
 
 const getUserIdFromName = (name: string) => {
