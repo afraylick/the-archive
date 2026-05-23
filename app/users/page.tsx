@@ -28,6 +28,8 @@ export default function ManageUsersPage() {
   const [newUserName, setNewUserName] = useState('');
   const [newUserPassword, setNewUserPassword] = useState('');
   const [status, setStatus] = useState('');
+  const [addUserStatus, setAddUserStatus] = useState('');
+  const [isAddingUser, setIsAddingUser] = useState(false);
 
   const fetchUsers = () => {
     fetch('/api/users')
@@ -60,19 +62,34 @@ export default function ManageUsersPage() {
     event.preventDefault();
     const name = newUserName.trim();
     const passcode = newUserPassword.trim();
-    if (!name || !passcode) return;
+    if (!name || !passcode) {
+      setAddUserStatus('Name and password are required.');
+      return;
+    }
 
-    const res = await fetch('/api/users', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, passcode }),
-    });
-    const data = await res.json().catch(() => null) as { error?: string } | null;
-    setStatus(res.ok ? 'User added' : data?.error || 'User creation failed');
-    if (res.ok) {
-      setNewUserName('');
-      setNewUserPassword('');
-      fetchUsers();
+    setIsAddingUser(true);
+    setAddUserStatus('Adding user...');
+
+    try {
+      const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, passcode }),
+      });
+      const data = await res.json().catch(() => null) as { error?: string } | null;
+      const message = res.ok ? 'User added.' : data?.error || 'User creation failed.';
+      setStatus(message);
+      setAddUserStatus(message);
+      if (res.ok) {
+        setNewUserName('');
+        setNewUserPassword('');
+        fetchUsers();
+      }
+    } catch {
+      setStatus('User creation failed.');
+      setAddUserStatus('User creation failed. Check your connection and try again.');
+    } finally {
+      setIsAddingUser(false);
     }
   };
 
@@ -107,34 +124,48 @@ export default function ManageUsersPage() {
           <h1 className="text-3xl font-bold">Manage Users</h1>
           {status && <span className="text-sm text-muted-foreground">{status}</span>}
         </div>
-        <form onSubmit={addUser} className="mb-4 flex flex-col gap-2 rounded-lg border border-border bg-card p-4 md:flex-row md:items-end">
-          <label className="min-w-0 flex-1 text-sm text-muted-foreground">
-            New user
-            <input
-              type="text"
-              value={newUserName}
-              onChange={(event) => setNewUserName(event.target.value)}
-              placeholder="Name"
-              className="mt-1 w-full rounded border border-border bg-background p-3 text-foreground sm:p-2"
-            />
-          </label>
-          <label className="min-w-0 flex-1 text-sm text-muted-foreground">
-            Password
-            <input
-              type="password"
-              value={newUserPassword}
-              onChange={(event) => setNewUserPassword(event.target.value)}
-              placeholder="Password"
-              className="mt-1 w-full rounded border border-border bg-background p-3 text-foreground sm:p-2"
-            />
-          </label>
-          <button
-            type="submit"
-            disabled={!newUserName.trim() || !newUserPassword.trim()}
-            className="rounded bg-accent px-4 py-3 text-sm text-accent-foreground transition hover:bg-accent/80 disabled:opacity-50 md:py-2"
-          >
-            Add User
-          </button>
+        <form onSubmit={addUser} className="mb-4 rounded-lg border border-border bg-card p-4">
+          <div className="flex flex-col gap-2 md:flex-row md:items-end">
+            <label className="min-w-0 flex-1 text-sm text-muted-foreground">
+              New user
+              <input
+                type="text"
+                value={newUserName}
+                onChange={(event) => {
+                  setNewUserName(event.target.value);
+                  setAddUserStatus('');
+                }}
+                placeholder="Name"
+                className="mt-1 w-full rounded border border-border bg-background p-3 text-foreground sm:p-2"
+              />
+            </label>
+            <label className="min-w-0 flex-1 text-sm text-muted-foreground">
+              Password
+              <input
+                type="password"
+                value={newUserPassword}
+                onChange={(event) => {
+                  setNewUserPassword(event.target.value);
+                  setAddUserStatus('');
+                }}
+                placeholder="Password"
+                className="mt-1 w-full rounded border border-border bg-background p-3 text-foreground sm:p-2"
+              />
+              <span className="mt-1 block text-xs text-muted-foreground/80">8 characters minimum on the live site</span>
+            </label>
+            <button
+              type="submit"
+              disabled={isAddingUser || !newUserName.trim() || !newUserPassword.trim()}
+              className="rounded bg-accent px-4 py-3 text-sm text-accent-foreground transition hover:bg-accent/80 disabled:opacity-50 md:py-2"
+            >
+              {isAddingUser ? 'Adding...' : 'Add User'}
+            </button>
+          </div>
+          {addUserStatus && (
+            <p className="mt-3 text-sm text-muted-foreground" role="status">
+              {addUserStatus}
+            </p>
+          )}
         </form>
         <div className="space-y-4">
           {users.map(user => {
