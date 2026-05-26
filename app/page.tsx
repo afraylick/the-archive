@@ -117,6 +117,7 @@ const FINDER_COLOR_HEX: Record<string, string> = {
 };
 
 let sharedAudioContext: AudioContext | null = null;
+const tracksStartedFromWaveformClick = new Set<string>();
 
 const getSharedAudioContext = () => {
   sharedAudioContext ??= new AudioContext();
@@ -601,6 +602,23 @@ const AudioCard = ({
     wavesurferRef.current.seekTo(Math.min(1, Math.max(0, timestamp / markerDuration)));
     setCurrentTime(timestamp);
     wavesurferRef.current.play();
+  };
+
+  const handleWaveformClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    const wavesurfer = wavesurferRef.current;
+    const waveformElement = waveformRef.current;
+    if (!wavesurfer || !waveformElement) return;
+
+    const hasStartedFromClick = tracksStartedFromWaveformClick.has(file.id);
+    const rect = waveformElement.getBoundingClientRect();
+    const progress = hasStartedFromClick
+      ? Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
+      : 0;
+
+    tracksStartedFromWaveformClick.add(file.id);
+    wavesurfer.seekTo(progress);
+    setCurrentTime((duration || file.waveformDuration || 0) * progress);
+    wavesurfer.play();
   };
 
   const addComment = async () => {
@@ -1240,16 +1258,7 @@ const AudioCard = ({
           <div 
             ref={waveformRef} 
             className="mx-auto mb-2 min-h-56 w-full max-w-[760px] cursor-pointer sm:min-h-44" 
-            onClick={(e) => {
-              if (wavesurferRef.current) {
-                const rect = waveformRef.current!.getBoundingClientRect();
-                const x = e.clientX - rect.left;
-                const progress = x / rect.width;
-                wavesurferRef.current.seekTo(progress);
-                setCurrentTime((duration || file.waveformDuration || 0) * progress);
-                wavesurferRef.current.play();
-              }
-            }}
+            onClick={handleWaveformClick}
           >
             {!shouldRenderWaveform && (
               <div className="flex h-56 w-full items-center justify-center rounded border border-border/40 bg-muted/20 text-xs text-muted-foreground sm:h-44">
