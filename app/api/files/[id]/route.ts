@@ -30,6 +30,17 @@ interface AudioFileRecord {
   };
 }
 
+const isValidWaveformCache = (waveformPeaks: unknown, waveformDuration: unknown) => {
+  if (!Array.isArray(waveformPeaks) || waveformPeaks.length === 0) return false;
+  const peaks = waveformPeaks[0];
+  return Array.isArray(peaks) &&
+    peaks.length >= 512 &&
+    peaks.every(peak => typeof peak === 'number' && Number.isFinite(peak) && Math.abs(peak) <= 1) &&
+    typeof waveformDuration === 'number' &&
+    Number.isFinite(waveformDuration) &&
+    waveformDuration > 0;
+};
+
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
@@ -53,12 +64,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     }
 
     if (!user.isAdmin) {
-      if (
-        Array.isArray(updatedFile.waveformPeaks) &&
-        updatedFile.waveformPeaks.length > 0 &&
-        typeof updatedFile.waveformDuration === 'number' &&
-        updatedFile.waveformDuration > 0
-      ) {
+      if (updatedFile.waveformPeaks || updatedFile.waveformDuration) {
+        if (!isValidWaveformCache(updatedFile.waveformPeaks, updatedFile.waveformDuration)) {
+          return NextResponse.json({ error: 'Invalid waveform cache' }, { status: 400 });
+        }
         data[index] = {
           ...data[index],
           waveformPeaks: updatedFile.waveformPeaks,
@@ -83,6 +92,12 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     updatedFile.ratings = updatedFile.ratings || {};
     updatedFile.ratings.adam = updatedFile.ratings.adam || updatedFile.myRating || 0;
     updatedFile.myRating = updatedFile.ratings.adam || 0;
+    if (updatedFile.waveformPeaks || updatedFile.waveformDuration) {
+      if (!isValidWaveformCache(updatedFile.waveformPeaks, updatedFile.waveformDuration)) {
+        delete updatedFile.waveformPeaks;
+        delete updatedFile.waveformDuration;
+      }
+    }
     data[index] = {
       ...updatedFile,
       likedBy: data[index].likedBy,

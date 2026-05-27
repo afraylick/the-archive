@@ -50,7 +50,7 @@ interface ArchiveUser {
 
 const WAVEFORM_PEAK_LENGTH = 4000;
 const WAVEFORM_PEAK_PRECISION = 10000;
-const WAVEFORM_EXPORT_PRECISION = 4;
+const WAVEFORM_EXPORT_PRECISION = WAVEFORM_PEAK_PRECISION;
 const FINISH_OPTIONS = ['Tracked', 'Recorder', 'Voice Memo'];
 const FINDER_COLOR_HEX: Record<string, string> = {
   gray: '#8e8e93',
@@ -94,14 +94,29 @@ const getTags = (file: AudioFile, pluralKey: 'instruments' | 'vibes', singularKe
   return tag ? [normalizeTag(tag)] : [];
 };
 
-const hasCachedWaveform = (file: AudioFile) => (
-  Array.isArray(file.waveformPeaks) &&
-  file.waveformPeaks.length > 0 &&
-  Array.isArray(file.waveformPeaks[0]) &&
-  file.waveformPeaks[0].length > 0 &&
-  typeof file.waveformDuration === 'number' &&
-  file.waveformDuration > 0
-);
+const hasLegacyLowPrecisionWaveform = (peaks: number[]) => {
+  const sampleStep = Math.max(1, Math.floor(peaks.length / 200));
+  const sampledPeaks = peaks
+    .filter((_, index) => index % sampleStep === 0)
+    .filter(peak => Math.abs(peak) > 0.001);
+
+  if (sampledPeaks.length < 20) return false;
+
+  const quarterStepPeaks = sampledPeaks.filter(peak => Math.abs(peak * 4 - Math.round(peak * 4)) < 0.00001);
+  return quarterStepPeaks.length / sampledPeaks.length > 0.95;
+};
+
+const hasCachedWaveform = (file: AudioFile) => {
+  const peaks = file.waveformPeaks?.[0];
+  return Array.isArray(file.waveformPeaks) &&
+    file.waveformPeaks.length > 0 &&
+    Array.isArray(peaks) &&
+    peaks.length >= 512 &&
+    peaks.every(peak => Number.isFinite(peak) && Math.abs(peak) <= 1) &&
+    !hasLegacyLowPrecisionWaveform(peaks) &&
+    typeof file.waveformDuration === 'number' &&
+    file.waveformDuration > 0;
+};
 
 const createWaveformPeaks = (audioBuffer: AudioBuffer) => {
   const channelData = audioBuffer.getChannelData(0);
