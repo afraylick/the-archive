@@ -70,6 +70,7 @@ interface AudioFile {
   vibe?: string;
   instruments?: string[];
   vibes?: string[];
+  collections?: string[];
   finish?: string;
 }
 
@@ -194,6 +195,7 @@ interface FileEntry {
   previewUrl: string;
   instruments: string[];
   vibes: string[];
+  collections: string[];
   finish: string;
   notes: string;
   year: number;
@@ -208,6 +210,7 @@ interface FolderEntry {
   name: string;
   instruments: string[];
   vibes: string[];
+  collections: string[];
   finish: string;
   notes: string;
   year: number;
@@ -229,14 +232,17 @@ export default function UploadPage() {
   const [folderPath, setFolderPath] = useState('');
   const [folderInstruments, setFolderInstruments] = useState<string[]>([]);
   const [folderVibes, setFolderVibes] = useState<string[]>([]);
+  const [folderCollections, setFolderCollections] = useState<string[]>([]);
   const [folderFinish, setFolderFinish] = useState('');
   const [folderRating, setFolderRating] = useState(0);
   const [folderBobs, setFolderBobs] = useState(false);
   const [folderEntries, setFolderEntries] = useState<FolderEntry[]>([]);
   const [instrumentOptions, setInstrumentOptions] = useState<string[]>(DEFAULT_INSTRUMENTS);
   const [vibeOptions, setVibeOptions] = useState<string[]>(DEFAULT_VIBES);
+  const [collectionOptions, setCollectionOptions] = useState<string[]>([]);
   const [newInstrument, setNewInstrument] = useState('');
   const [newVibe, setNewVibe] = useState('');
+  const [newCollection, setNewCollection] = useState('');
   const activeAudioRef = useRef<HTMLAudioElement | null>(null);
   const fileEntriesRef = useRef<FileEntry[]>([]);
 
@@ -256,6 +262,7 @@ export default function UploadPage() {
       .then((files: AudioFile[]) => {
         setInstrumentOptions(prev => Array.from(new Set([...prev, ...files.flatMap(file => getTags(file, 'instruments', 'instrument'))])));
         setVibeOptions(prev => Array.from(new Set([...prev, ...files.flatMap(file => getTags(file, 'vibes', 'vibe'))])));
+        setCollectionOptions(prev => Array.from(new Set([...prev, ...files.flatMap(file => Array.isArray(file.collections) ? file.collections.filter(Boolean) : [])])).sort((a, b) => a.localeCompare(b)));
       });
   }, []);
 
@@ -269,6 +276,7 @@ export default function UploadPage() {
         previewUrl: URL.createObjectURL(file),
         instruments: [],
         vibes: [],
+        collections: [],
         finish: filenameRecordedDate ? 'Tracked' : deriveFinishFromFilename(file.name),
         notes: '',
         year: filenameRecordedDate?.year || new Date(createdAt).getFullYear(),
@@ -305,7 +313,7 @@ export default function UploadPage() {
     ));
   };
 
-  const toggleEntryTag = (index: number, field: 'instruments' | 'vibes', tag: string) => {
+  const toggleEntryTag = (index: number, field: 'instruments' | 'vibes' | 'collections', tag: string) => {
     setFileEntries(prev => prev.map((entry, i) => {
       if (i !== index) return entry;
       const selectedTags = entry[field];
@@ -318,15 +326,19 @@ export default function UploadPage() {
     }));
   };
 
-  const toggleFolderTag = (field: 'instruments' | 'vibes', tag: string) => {
-    const setter = field === 'instruments' ? setFolderInstruments : setFolderVibes;
+  const toggleFolderTag = (field: 'instruments' | 'vibes' | 'collections', tag: string) => {
+    const setter = field === 'instruments'
+      ? setFolderInstruments
+      : field === 'vibes'
+        ? setFolderVibes
+        : setFolderCollections;
     setter(prev => prev.includes(tag)
       ? prev.filter(selectedTag => selectedTag !== tag)
       : [...prev, tag]
     );
   };
 
-  const toggleFolderEntryTag = (index: number, field: 'instruments' | 'vibes', tag: string) => {
+  const toggleFolderEntryTag = (index: number, field: 'instruments' | 'vibes' | 'collections', tag: string) => {
     setFolderEntries(prev => prev.map((entry, i) => {
       if (i !== index) return entry;
       const selectedTags = entry[field];
@@ -395,6 +407,7 @@ export default function UploadPage() {
     ...entry,
     instruments: folderInstruments,
     vibes: folderVibes,
+    collections: folderCollections,
     finish: folderFinish || entry.finish,
     notes: entry.notes,
     rating: entry.rating || folderRating,
@@ -422,6 +435,14 @@ export default function UploadPage() {
     }
   };
 
+  const addCollection = () => {
+    const tag = newCollection.trim();
+    if (tag && !collectionOptions.includes(tag)) {
+      setCollectionOptions([...collectionOptions, tag].sort((a, b) => a.localeCompare(b)));
+      setNewCollection('');
+    }
+  };
+
   const handlePreviewPlay = (audio: HTMLAudioElement) => {
     if (activeAudioRef.current && activeAudioRef.current !== audio) {
       activeAudioRef.current.pause();
@@ -443,6 +464,7 @@ export default function UploadPage() {
       formData.append(`metadata[${index}]`, JSON.stringify({
         instruments: entry.instruments,
         vibes: entry.vibes,
+        collections: entry.collections,
         finish: entry.finish,
         notes: entry.notes,
         year: entry.year,
@@ -516,11 +538,12 @@ export default function UploadPage() {
       });
 
       if (res.ok) {
-        const data = await res.json() as { files: Omit<FolderEntry, 'instruments' | 'vibes'>[] };
+        const data = await res.json() as { files: Omit<FolderEntry, 'instruments' | 'vibes' | 'collections'>[] };
         setFolderEntries(applyFolderDefaults(data.files.map(file => ({
           ...file,
           instruments: folderInstruments,
           vibes: folderVibes,
+          collections: folderCollections,
           finish: folderFinish || file.finish,
           notes: file.notes || '',
           bobs: folderBobs,
@@ -552,6 +575,7 @@ export default function UploadPage() {
             path: entry.path,
             instruments: entry.instruments,
             vibes: entry.vibes,
+            collections: entry.collections,
             finish: entry.finish,
             notes: entry.notes,
             rating: entry.rating,
@@ -665,7 +689,7 @@ export default function UploadPage() {
               {importingFolder ? 'Importing...' : 'Import Folder'}
             </button>
           </div>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-6">
             <TagPicker
               label="Instrument"
               options={instrumentOptions}
@@ -677,6 +701,12 @@ export default function UploadPage() {
               options={vibeOptions}
               selected={folderVibes}
               onToggle={(tag) => toggleFolderTag('vibes', tag)}
+            />
+            <TagPicker
+              label="Collections"
+              options={collectionOptions}
+              selected={folderCollections}
+              onToggle={(tag) => toggleFolderTag('collections', tag)}
             />
             <div>
               <label className="block text-sm font-medium mb-1 text-foreground">Finish</label>
@@ -729,7 +759,7 @@ export default function UploadPage() {
             </div>
           </div>
         </div>
-        <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+        <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
           <div className="flex">
             <input
               type="text"
@@ -753,6 +783,19 @@ export default function UploadPage() {
               onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addVibe())}
             />
             <button type="button" onClick={addVibe} className="rounded-r bg-accent px-4 py-3 text-accent-foreground hover:bg-accent/80 sm:px-3 sm:py-2">
+              +
+            </button>
+          </div>
+          <div className="flex">
+            <input
+              type="text"
+              value={newCollection}
+              onChange={(e) => setNewCollection(e.target.value)}
+              placeholder="Add collection"
+              className="min-w-0 flex-1 rounded-l border border-border bg-background p-3 text-sm text-foreground sm:p-2"
+              onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addCollection())}
+            />
+            <button type="button" onClick={addCollection} className="rounded-r bg-accent px-4 py-3 text-accent-foreground hover:bg-accent/80 sm:px-3 sm:py-2">
               +
             </button>
           </div>
@@ -780,7 +823,7 @@ export default function UploadPage() {
                   </div>
                   <button type="button" onClick={() => removeEntry(index)} className="text-red-500 hover:text-red-700">Remove</button>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-6">
                   <TagPicker
                     label="Instrument"
                     options={instrumentOptions}
@@ -792,6 +835,12 @@ export default function UploadPage() {
                     options={vibeOptions}
                     selected={entry.vibes}
                     onToggle={(tag) => toggleEntryTag(index, 'vibes', tag)}
+                  />
+                  <TagPicker
+                    label="Collections"
+                    options={collectionOptions}
+                    selected={entry.collections}
+                    onToggle={(tag) => toggleEntryTag(index, 'collections', tag)}
                   />
                   <div>
                     <label className="block text-sm font-medium mb-1 text-foreground">Rating</label>
@@ -868,7 +917,7 @@ export default function UploadPage() {
                     </div>
                   )}
                 </div>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-6">
                   <TagPicker
                     label="Instrument"
                     options={instrumentOptions}
@@ -880,6 +929,12 @@ export default function UploadPage() {
                     options={vibeOptions}
                     selected={entry.vibes}
                     onToggle={(tag) => toggleFolderEntryTag(index, 'vibes', tag)}
+                  />
+                  <TagPicker
+                    label="Collections"
+                    options={collectionOptions}
+                    selected={entry.collections}
+                    onToggle={(tag) => toggleFolderEntryTag(index, 'collections', tag)}
                   />
                   <div>
                     <label className="block text-sm font-medium mb-1 text-foreground">Rating</label>

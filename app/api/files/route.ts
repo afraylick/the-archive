@@ -53,6 +53,17 @@ const normalizeTag = (tag: string) => TAG_NORMALIZATIONS[tag.toLowerCase()] || t
 
 const getRating = (file: AudioFileRecord, userId: UserId) => file.ratings?.[userId] || 0;
 
+const getUploadedAtFromId = (id: string | undefined) => {
+  const timestampText = id?.match(/^(\d{12,})-/)?.[1];
+  if (!timestampText) return undefined;
+
+  const timestamp = Number(timestampText);
+  if (!Number.isFinite(timestamp)) return undefined;
+
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+};
+
 const sanitizeFileForUser = (file: AudioFileRecord, userId: UserId, isAdmin: boolean) => {
   const ratings = file.ratings || {};
   const ratingUpdatedAt = file.ratingUpdatedAt || {};
@@ -138,6 +149,9 @@ export async function GET(req: NextRequest) {
       if (!file.createdAt) {
         const fallbackYear = file.year || new Date(file.uploadedAt || Date.now()).getFullYear();
         file.createdAt = new Date(Date.UTC(fallbackYear, 0, 1)).toISOString();
+      }
+      if (!file.uploadedAt) {
+        file.uploadedAt = getUploadedAtFromId(file.id) || file.createdAt || new Date().toISOString();
       }
       file.instrument = file.instruments[0] || '';
       file.vibe = file.vibes[0] || '';

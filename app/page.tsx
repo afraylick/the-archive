@@ -81,7 +81,7 @@ interface ActivityEntry {
 }
 
 type EndMode = 'repeat' | 'next' | 'stop';
-type SortBy = 'random' | 'name' | 'date' | 'adamsRatingRandom' | 'adamsRating' | 'userRating';
+type SortBy = 'random' | 'name' | 'date' | 'uploadDate' | 'adamsRatingRandom' | 'adamsRating' | 'userRating';
 type FilterCategory = 'instruments' | 'vibes' | 'collections' | 'finish' | 'years';
 type FilterMode = 'none' | 'include' | 'exclude';
 type FilterValue = string | number;
@@ -205,6 +205,22 @@ const getCreatedDateValue = (file: AudioFile) => {
   }
   if (file.year) return Date.UTC(file.year, 0, 1);
   return 0;
+};
+
+const getUploadedDateFromId = (id: string) => {
+  const timestampText = id.match(/^(\d{12,})-/)?.[1];
+  if (!timestampText) return 0;
+
+  const timestamp = Number(timestampText);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const getUploadedDateValue = (file: AudioFile) => {
+  if (file.uploadedAt) {
+    const timestamp = new Date(file.uploadedAt).getTime();
+    if (!Number.isNaN(timestamp)) return timestamp;
+  }
+  return getUploadedDateFromId(file.id) || getCreatedDateValue(file);
 };
 
 const formatCreatedDate = (file: AudioFile) => {
@@ -1558,6 +1574,10 @@ export default function Home() {
         aVal = getCreatedDateValue(a);
         bVal = getCreatedDateValue(b);
         break;
+      case 'uploadDate':
+        aVal = getUploadedDateValue(a);
+        bVal = getUploadedDateValue(b);
+        break;
       case 'adamsRating':
       case 'adamsRatingRandom':
         aVal = a.myRating;
@@ -2677,6 +2697,7 @@ export default function Home() {
                 <option value="random">Random</option>
                 <option value="name">Name</option>
                 <option value="date">Date</option>
+                <option value="uploadDate">Upload Date</option>
                 <option value="adamsRating">Adam&apos;s Rating</option>
                 <option value="userRating">User Rating</option>
               </select>

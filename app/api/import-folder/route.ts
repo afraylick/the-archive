@@ -47,12 +47,14 @@ interface ImportFolderRequest {
   folderPath?: string;
   instruments?: string[];
   vibes?: string[];
+  collections?: string[];
   rating?: number;
   bobs?: boolean;
   files?: {
     path: string;
     instruments?: string[];
     vibes?: string[];
+    collections?: string[];
     finish?: string;
     rating?: number;
     notes?: string;
@@ -215,7 +217,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
     }
 
-    const { action = 'import', folderPath, files, instruments = [], vibes = [], rating = 0, bobs = false } = await req.json() as ImportFolderRequest;
+    const { action = 'import', folderPath, files, instruments = [], vibes = [], collections = [], rating = 0, bobs = false } = await req.json() as ImportFolderRequest;
     if (!folderPath) {
       return NextResponse.json({ error: 'Folder path is required' }, { status: 400 });
     }
@@ -250,12 +252,13 @@ export async function POST(req: NextRequest) {
     const results: { id: string; name: string; colorTags: string[] }[] = [];
     const cleanInstruments = cleanTagArray(instruments);
     const cleanVibes = cleanTagArray(vibes);
+    const cleanCollections = cleanTagArray(collections);
     const importFiles = files && files.length > 0
       ? files.filter(file => {
           const resolvedPath = path.resolve(file.path);
           return resolvedPath.startsWith(sourceDir + path.sep) || resolvedPath === sourceDir;
         })
-      : audioFiles.map(filePath => ({ path: filePath, instruments: cleanInstruments, vibes: cleanVibes, finish: undefined, rating, notes: '', bobs }));
+      : audioFiles.map(filePath => ({ path: filePath, instruments: cleanInstruments, vibes: cleanVibes, collections: cleanCollections, finish: undefined, rating, notes: '', bobs }));
 
     importFiles.forEach((fileMetadata, index) => {
       const filePath = path.resolve(fileMetadata.path);
@@ -266,6 +269,7 @@ export async function POST(req: NextRequest) {
       const sourceMetadata = getFileMetadata(filePath, fileMetadata.rating ?? rating);
       const fileInstruments = Array.isArray(fileMetadata.instruments) ? cleanTagArray(fileMetadata.instruments) : cleanInstruments;
       const fileVibes = Array.isArray(fileMetadata.vibes) ? cleanTagArray(fileMetadata.vibes) : cleanVibes;
+      const fileCollections = Array.isArray(fileMetadata.collections) ? cleanTagArray(fileMetadata.collections) : cleanCollections;
       const finish = fileMetadata.finish || sourceMetadata.finish;
       const adamRating = deriveRatingFromColorTags(sourceMetadata.colorTags, fileMetadata.rating ?? rating);
 
@@ -279,7 +283,7 @@ export async function POST(req: NextRequest) {
         instruments: fileInstruments,
         vibes: fileVibes,
         finish,
-        collections: [],
+        collections: fileCollections,
         likedBy: [],
         bobs: Boolean(fileMetadata.bobs ?? bobs),
         colorTags: sourceMetadata.colorTags,

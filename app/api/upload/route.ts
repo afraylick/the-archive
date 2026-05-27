@@ -10,6 +10,7 @@ interface UploadMetadata {
   vibe?: string;
   instruments?: string[];
   vibes?: string[];
+  collections?: string[];
   finish?: string;
   colorTags?: string[];
   year?: number;
@@ -134,6 +135,7 @@ export async function POST(req: NextRequest) {
         : metadata.vibe
           ? cleanTagArray([metadata.vibe])
           : [];
+      const collections = cleanTagArray(metadata.collections);
       const filenameRecordedDate = getRecordedDateFromFilename(file.name);
       const createdAt = filenameRecordedDate?.createdAt || metadata.createdAt || new Date().toISOString();
       const year = filenameRecordedDate?.year || metadata.year || new Date(createdAt).getFullYear();
@@ -147,7 +149,7 @@ export async function POST(req: NextRequest) {
         instruments,
         vibes,
         finish,
-        collections: [],
+        collections,
         likedBy: [],
         bobs: Boolean(metadata.bobs),
         colorTags: cleanTagArray(metadata.colorTags).slice(0, 10),
