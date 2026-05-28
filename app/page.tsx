@@ -82,7 +82,7 @@ interface ActivityEntry {
 
 type EndMode = 'repeat' | 'next' | 'stop';
 type SortBy = 'random' | 'name' | 'date' | 'uploadDate' | 'adamsRatingRandom' | 'adamsRating' | 'userRating';
-type FilterCategory = 'instruments' | 'vibes' | 'collections' | 'finish' | 'years';
+type FilterCategory = 'instruments' | 'vibes' | 'collections' | 'finish' | 'years' | 'adamsRatings';
 type FilterMode = 'none' | 'include' | 'exclude';
 type FilterValue = string | number;
 
@@ -143,6 +143,7 @@ const isUntaggedFile = (file: AudioFile) => (
 );
 
 const hasAny = <T,>(values: T[], selected: T[]) => values.some(value => selected.includes(value));
+const getAdamRating = (file: AudioFile) => file.ratings?.adam || file.myRating || 0;
 
 const getRandomSortValue = (id: string, seed: number) => {
   let hash = Math.floor(seed * 1000000000);
@@ -1511,11 +1512,13 @@ export default function Home() {
   const [selectedFinishes, setSelectedFinishes] = useState<string[]>(['Tracked', 'Recorder']);
   const [selectedCollections, setSelectedCollections] = useState<string[]>([]);
   const [selectedYears, setSelectedYears] = useState<number[]>([]);
+  const [selectedAdamRatings, setSelectedAdamRatings] = useState<number[]>([]);
   const [excludedInstruments, setExcludedInstruments] = useState<string[]>([]);
   const [excludedVibes, setExcludedVibes] = useState<string[]>([]);
   const [excludedFinishes, setExcludedFinishes] = useState<string[]>([]);
   const [excludedCollections, setExcludedCollections] = useState<string[]>([]);
   const [excludedYears, setExcludedYears] = useState<number[]>([]);
+  const [excludedAdamRatings, setExcludedAdamRatings] = useState<number[]>([]);
   const [likedOnly, setLikedOnly] = useState(false);
   const [untaggedOnly, setUntaggedOnly] = useState(false);
   const [showActivity, setShowActivity] = useState(false);
@@ -1528,6 +1531,7 @@ export default function Home() {
     finish: true,
     collections: true,
     years: true,
+    adamsRatings: true,
   });
   const [instrumentOptions, setInstrumentOptions] = useState<string[]>(DEFAULT_INSTRUMENTS);
   const [vibeOptions, setVibeOptions] = useState<string[]>(DEFAULT_VIBES);
@@ -1626,6 +1630,7 @@ export default function Home() {
     const vibes = getTags(file, 'vibes', 'vibe');
     const fileCollections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
     const fileYear = file.year || 0;
+    const adamRating = getAdamRating(file);
     const matchesSearch = normalizedSearch.length === 0
       || file.name.toLowerCase().includes(normalizedSearch)
       || (searchNotes && getNoteText(file).toLowerCase().includes(normalizedSearch));
@@ -1643,9 +1648,11 @@ export default function Home() {
       (selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection))) &&
       !hasAny(fileCollections, excludedCollections) &&
       (selectedYears.length === 0 || selectedYears.includes(fileYear)) &&
-      !excludedYears.includes(fileYear)
+      !excludedYears.includes(fileYear) &&
+      (selectedAdamRatings.length === 0 || selectedAdamRatings.includes(adamRating)) &&
+      !excludedAdamRatings.includes(adamRating)
     );
-  }, [excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, likedOnly, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
+  }, [excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, likedOnly, searchNotes, searchQuery, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
 
   const matchesFiltersExcept = useCallback((file: AudioFile, except: FilterCategory) => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
@@ -1653,6 +1660,7 @@ export default function Home() {
     const vibes = getTags(file, 'vibes', 'vibe');
     const fileCollections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
     const fileYear = file.year || 0;
+    const adamRating = getAdamRating(file);
     const matchesSearch = normalizedSearch.length === 0
       || file.name.toLowerCase().includes(normalizedSearch)
       || (searchNotes && getNoteText(file).toLowerCase().includes(normalizedSearch));
@@ -1665,9 +1673,10 @@ export default function Home() {
       (except === 'vibes' || ((selectedVibes.length === 0 || hasAny(vibes, selectedVibes)) && !hasAny(vibes, excludedVibes))) &&
       (except === 'finish' || ((selectedFinishes.length === 0 || (file.finish ? selectedFinishes.includes(file.finish) : false)) && (!file.finish || !excludedFinishes.includes(file.finish)))) &&
       (except === 'collections' || ((selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection))) && !hasAny(fileCollections, excludedCollections))) &&
-      (except === 'years' || ((selectedYears.length === 0 || selectedYears.includes(fileYear)) && !excludedYears.includes(fileYear)))
+      (except === 'years' || ((selectedYears.length === 0 || selectedYears.includes(fileYear)) && !excludedYears.includes(fileYear))) &&
+      (except === 'adamsRatings' || ((selectedAdamRatings.length === 0 || selectedAdamRatings.includes(adamRating)) && !excludedAdamRatings.includes(adamRating)))
     );
-  }, [excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, likedOnly, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
+  }, [excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, likedOnly, searchNotes, searchQuery, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
 
   const matchesRandomFilters = useCallback((file: AudioFile) => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
@@ -1675,6 +1684,7 @@ export default function Home() {
     const vibes = getTags(file, 'vibes', 'vibe');
     const fileCollections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
     const fileYear = file.year || 0;
+    const adamRating = getAdamRating(file);
     const matchesSearch = normalizedSearch.length === 0
       || file.name.toLowerCase().includes(normalizedSearch)
       || (searchNotes && getNoteText(file).toLowerCase().includes(normalizedSearch));
@@ -1694,9 +1704,11 @@ export default function Home() {
       (selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection))) &&
       !hasAny(fileCollections, excludedCollections) &&
       (selectedYears.length === 0 || selectedYears.includes(fileYear)) &&
-      !excludedYears.includes(fileYear)
+      !excludedYears.includes(fileYear) &&
+      (selectedAdamRatings.length === 0 || selectedAdamRatings.includes(adamRating)) &&
+      !excludedAdamRatings.includes(adamRating)
     );
-  }, [excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, likedOnly, randomIncludeVoiceMemos, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
+  }, [excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, likedOnly, randomIncludeVoiceMemos, searchNotes, searchQuery, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
 
   const sortedFilteredFiles = useMemo(() => {
     return files.filter(matchesFilters).sort(compareFiles);
@@ -1724,18 +1736,20 @@ export default function Home() {
     selectedInstruments,
     selectedVibes,
     selectedYears,
+    selectedAdamRatings,
     excludedCollections,
     excludedFinishes,
     excludedInstruments,
     excludedVibes,
     excludedYears,
+    excludedAdamRatings,
     likedOnly,
     untaggedOnly,
     randomTrackIds,
     randomSortSeed,
     sortBy,
     sortDirection,
-  }), [excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, likedOnly, randomSortSeed, randomTrackIds, searchNotes, searchQuery, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, sortBy, sortDirection, untaggedOnly]);
+  }), [excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, likedOnly, randomSortSeed, randomTrackIds, searchNotes, searchQuery, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, sortBy, sortDirection, untaggedOnly]);
 
   const renderLimit = renderWindow.key === filterKey ? renderWindow.limit : INITIAL_RENDER_LIMIT;
 
@@ -1768,6 +1782,7 @@ export default function Home() {
   const hasMoreFiles = effectiveRenderLimit < renderedFiles.length;
 
   const yearOptions = Array.from(new Set(files.map(f => f.year || 0))).sort((a, b) => b - a);
+  const adamRatingOptions = [5, 4, 3, 2, 1, 0];
   const finishOptions = Array.from(new Set([...FINISH_OPTIONS, ...files.map(file => file.finish || '').filter(Boolean)]));
   const collectionOptions = Array.from(new Set(files.flatMap(file => Array.isArray(file.collections) ? file.collections.filter(Boolean) : []))).sort((a, b) => a.localeCompare(b));
 
@@ -1828,6 +1843,7 @@ export default function Home() {
       collections: new Map<string, number>(),
       finish: new Map<string, number>(),
       years: new Map<number, number>(),
+      adamsRatings: new Map<number, number>(),
     };
 
     const increment = <T,>(map: Map<T, number>, value: T) => {
@@ -1849,6 +1865,9 @@ export default function Home() {
       }
       if (matchesFiltersExcept(file, 'years')) {
         increment(counts.years, file.year || 0);
+      }
+      if (matchesFiltersExcept(file, 'adamsRatings')) {
+        increment(counts.adamsRatings, getAdamRating(file));
       }
     });
 
@@ -2095,11 +2114,18 @@ export default function Home() {
     if (activeYear && excludedYears.includes(activeYear)) {
       setExcludedYears(prev => prev.filter(year => year !== activeYear));
     }
+    const activeAdamRating = getAdamRating(activeTrack);
+    if (selectedAdamRatings.length > 0 && !selectedAdamRatings.includes(activeAdamRating)) {
+      setSelectedAdamRatings(prev => prev.includes(activeAdamRating) ? prev : [...prev, activeAdamRating]);
+    }
+    if (excludedAdamRatings.includes(activeAdamRating)) {
+      setExcludedAdamRatings(prev => prev.filter(rating => rating !== activeAdamRating));
+    }
 
     window.setTimeout(() => {
       activeCardElementRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 0);
-  }, [activeTrack, excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears]);
+  }, [activeTrack, excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears]);
 
   const showActivityTrack = useCallback((file: AudioFile) => {
     const fileInstruments = getTags(file, 'instruments', 'instrument');
@@ -2107,6 +2133,7 @@ export default function Home() {
     const fileFinish = file.finish || '';
     const fileCollections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
     const fileYear = file.year || 0;
+    const fileAdamRating = getAdamRating(file);
 
     setRandomTrackIds(null);
     setLikedOnly(false);
@@ -2145,7 +2172,13 @@ export default function Home() {
     if (fileYear && excludedYears.includes(fileYear)) {
       setExcludedYears(prev => prev.filter(year => year !== fileYear));
     }
-  }, [excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears]);
+    if (selectedAdamRatings.length > 0 && !selectedAdamRatings.includes(fileAdamRating)) {
+      setSelectedAdamRatings(prev => prev.includes(fileAdamRating) ? prev : [...prev, fileAdamRating]);
+    }
+    if (excludedAdamRatings.includes(fileAdamRating)) {
+      setExcludedAdamRatings(prev => prev.filter(rating => rating !== fileAdamRating));
+    }
+  }, [excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears]);
 
   const toggleFilterCollapsed = (filter: keyof typeof collapsedFilters) => {
     setCollapsedFilters(prev => ({ ...prev, [filter]: !prev[filter] }));
@@ -2154,6 +2187,18 @@ export default function Home() {
   const filterSummary = (selected: Array<string | number>, excluded: Array<string | number> = []) => {
     const includedText = selected.map(value => typeof value === 'string' ? displayTag(value) : value).join(', ');
     const excludedText = excluded.map(value => typeof value === 'string' ? displayTag(value) : value).join(', ');
+    if (!includedText && !excludedText) return 'All';
+    return [
+      includedText,
+      excludedText ? `Not ${excludedText}` : '',
+    ].filter(Boolean).join(' · ');
+  };
+
+  const ratingFilterLabel = (rating: number) => rating > 0 ? `${rating} Star${rating === 1 ? '' : 's'}` : 'Unrated';
+
+  const ratingFilterSummary = (selected: number[], excluded: number[]) => {
+    const includedText = selected.map(ratingFilterLabel).join(', ');
+    const excludedText = excluded.map(ratingFilterLabel).join(', ');
     if (!includedText && !excludedText) return 'All';
     return [
       includedText,
@@ -2196,8 +2241,8 @@ export default function Home() {
   };
 
   const activeFilterCount =
-    selectedInstruments.length + selectedVibes.length + selectedCollections.length + selectedFinishes.length + selectedYears.length +
-    excludedInstruments.length + excludedVibes.length + excludedCollections.length + excludedFinishes.length + excludedYears.length +
+    selectedInstruments.length + selectedVibes.length + selectedCollections.length + selectedFinishes.length + selectedYears.length + selectedAdamRatings.length +
+    excludedInstruments.length + excludedVibes.length + excludedCollections.length + excludedFinishes.length + excludedYears.length + excludedAdamRatings.length +
     (likedOnly ? 1 : 0) + (untaggedOnly ? 1 : 0) + (searchQuery.trim() ? 1 : 0);
   const collapsedSummaryClass = "mb-2 w-full rounded border border-border/50 bg-muted/40 px-3 py-2 text-left text-xs font-light text-muted-foreground opacity-80 transition hover:border-border hover:text-foreground";
   const filterOptionClass = (mode: FilterMode) => {
@@ -2552,6 +2597,56 @@ export default function Home() {
                       <span className="text-[10px] font-medium uppercase tracking-wide text-red-200/70">Excluded</span>
                     )}
                     <span className={filterCountClass(mode)}>{filterCounts.years.get(year) || 0}</span>
+                  </span>
+                </div>
+                );
+              })}
+            </div>}
+          </div>
+          <div className="mb-6">
+            <button
+              type="button"
+              onClick={() => toggleFilterCollapsed('adamsRatings')}
+              className="mb-2 flex w-full items-center justify-between pr-4 text-left text-md font-medium"
+            >
+              <span>Adam&apos;s Rating</span>
+              <span className="text-muted-foreground">{collapsedFilters.adamsRatings ? '+' : '-'}</span>
+            </button>
+            {collapsedFilters.adamsRatings && (
+              <button type="button" onClick={() => toggleFilterCollapsed('adamsRatings')} className={collapsedSummaryClass}>
+                {ratingFilterSummary(selectedAdamRatings, excludedAdamRatings)}
+              </button>
+            )}
+            {!collapsedFilters.adamsRatings && <div className="space-y-1">
+              {adamRatingOptions.map(rating => {
+                const mode = getFilterMode(rating, selectedAdamRatings, excludedAdamRatings);
+                return (
+                <div
+                  key={rating}
+                  onClick={() => toggleFilterValue(rating, selectedAdamRatings, setSelectedAdamRatings, excludedAdamRatings, setExcludedAdamRatings)}
+                  className={filterOptionClass(mode)}
+                >
+                  <span className={rating > 0 ? getRatingColor(rating) : undefined}>
+                    {ratingFilterLabel(rating)}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    {mode === 'include' && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          excludeFilterValue(rating, setSelectedAdamRatings, setExcludedAdamRatings);
+                        }}
+                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-accent-foreground/40 text-xs text-accent-foreground/80 hover:bg-accent-foreground/10"
+                        aria-label={`Exclude ${ratingFilterLabel(rating)}`}
+                      >
+                        -
+                      </button>
+                    )}
+                    {mode === 'exclude' && (
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-red-200/70">Excluded</span>
+                    )}
+                    <span className={filterCountClass(mode)}>{filterCounts.adamsRatings.get(rating) || 0}</span>
                   </span>
                 </div>
                 );
