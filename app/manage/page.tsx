@@ -94,6 +94,23 @@ const getTags = (file: AudioFile, pluralKey: 'instruments' | 'vibes', singularKe
   return tag ? [normalizeTag(tag)] : [];
 };
 
+const getCreatedAtWithYear = (createdAt: string | undefined, year: number) => {
+  const existingDate = createdAt ? new Date(createdAt) : null;
+  if (!existingDate || Number.isNaN(existingDate.getTime())) {
+    return new Date(Date.UTC(year, 0, 1)).toISOString();
+  }
+
+  return new Date(Date.UTC(
+    year,
+    existingDate.getUTCMonth(),
+    existingDate.getUTCDate(),
+    existingDate.getUTCHours(),
+    existingDate.getUTCMinutes(),
+    existingDate.getUTCSeconds(),
+    existingDate.getUTCMilliseconds()
+  )).toISOString();
+};
+
 const hasLegacyLowPrecisionWaveform = (peaks: number[]) => {
   const sampleStep = Math.max(1, Math.floor(peaks.length / 200));
   const sampledPeaks = peaks
@@ -510,6 +527,29 @@ export default function ManagePage() {
     }
   };
 
+  const updateYear = async (file: AudioFile, value: string) => {
+    const year = Number(value);
+    if (!Number.isInteger(year) || year < 1900 || year > 2100) {
+      alert('Enter a valid year');
+      return;
+    }
+
+    if (file.year === year) return;
+
+    try {
+      await saveFile(
+        {
+          ...file,
+          year,
+          createdAt: getCreatedAtWithYear(file.createdAt, year),
+        },
+        'Failed to update year'
+      );
+    } catch {
+      alert('Failed to update year');
+    }
+  };
+
   const toggleBobs = async (file: AudioFile) => {
     try {
       await saveFile({ ...file, bobs: !file.bobs }, 'Failed to update Bobs tag');
@@ -802,7 +842,22 @@ export default function ManagePage() {
                       </button>
                     ))}
                   </div>
-                  <p className="text-muted-foreground">Year: {file.year || 'N/A'}</p>
+                  <label className="flex max-w-40 items-center gap-2 text-muted-foreground">
+                    <span>Year:</span>
+                    <input
+                      type="number"
+                      min="1900"
+                      max="2100"
+                      defaultValue={file.year || ''}
+                      onBlur={(event) => void updateYear(file, event.currentTarget.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.currentTarget.blur();
+                        }
+                      }}
+                      className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
+                    />
+                  </label>
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <span>Bobs:</span>
                     <button

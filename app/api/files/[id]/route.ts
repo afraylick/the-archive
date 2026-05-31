@@ -16,6 +16,7 @@ interface AudioFileRecord {
   colorTags?: string[];
   waveformPeaks?: number[][];
   waveformDuration?: number;
+  year?: number;
   createdAt?: string;
   myRating?: number;
   userRating?: number;
@@ -89,6 +90,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     updatedFile.collections = Array.isArray(updatedFile.collections)
       ? Array.from(new Set(updatedFile.collections.filter(Boolean)))
       : [];
+    if (updatedFile.year !== undefined && (!Number.isInteger(updatedFile.year) || updatedFile.year < 1900 || updatedFile.year > 2100)) {
+      updatedFile.year = data[index].year;
+      updatedFile.createdAt = data[index].createdAt;
+    }
     updatedFile.ratings = updatedFile.ratings || {};
     updatedFile.ratings.adam = updatedFile.ratings.adam || updatedFile.myRating || 0;
     updatedFile.myRating = updatedFile.ratings.adam || 0;
