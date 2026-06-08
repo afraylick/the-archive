@@ -808,8 +808,9 @@ const AudioCard = ({
   }, [comments, currentTime]);
 
   return (
-    <div ref={cardRef} className="relative rounded-lg border border-border bg-[#141414] p-3 shadow-md scroll-mt-24 sm:p-4">
-      <div className="grid gap-4 md:grid-cols-[minmax(220px,0.9fr)_minmax(360px,1.4fr)] md:items-center">
+    <div ref={cardRef} className="relative overflow-hidden rounded-md border border-border/70 bg-[#1d1f1d] p-3 shadow-[0_18px_50px_rgba(0,0,0,0.24)] scroll-mt-24 sm:p-4">
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-accent/35 to-transparent" />
+      <div className="grid gap-4 md:grid-cols-[minmax(240px,0.82fr)_minmax(420px,1.45fr)] md:items-center">
         <div className="order-2 min-w-0 flex-1 md:order-1">
           <div className="mb-3">
             <div className="flex items-start gap-2">
@@ -854,12 +855,14 @@ const AudioCard = ({
                 ) : (
                   <div className="flex min-w-0 items-start gap-2">
                     <div className="min-w-0">
-                      <h2 className="break-words text-lg font-semibold text-foreground sm:text-xl">{file.name}</h2>
-                      {file.originalName && file.originalName !== file.name && (
-                        <p className="mt-0.5 break-words text-[11px] font-light text-muted-foreground opacity-70">
-                          {file.originalName}
-                        </p>
-                      )}
+                      <h2 className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-lg font-semibold text-foreground sm:text-xl">
+                        <span className="break-words">{file.name}</span>
+                        {file.originalName && file.originalName !== file.name && (
+                          <span className="break-all text-[11px] font-light text-muted-foreground opacity-65 sm:text-xs">
+                            ({file.originalName})
+                          </span>
+                        )}
+                      </h2>
                     </div>
                     {currentUser.isAdmin && (
                       <button
@@ -892,7 +895,7 @@ const AudioCard = ({
                   <button
                     key={tag}
                     type="button"
-                    className="rounded border border-border bg-muted px-2 py-1.5 text-xs text-muted-foreground"
+                    className="rounded border border-border/65 bg-[#252824] px-2 py-1.5 text-xs text-muted-foreground shadow-inner shadow-black/10"
                   >
                     {displayTag(tag)}
                   </button>
@@ -901,7 +904,7 @@ const AudioCard = ({
                   <button
                     type="button"
                     onClick={() => setOpenTagPicker(prev => prev === 'instruments' ? null : 'instruments')}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded border border-border bg-muted text-sm text-muted-foreground hover:bg-muted/80 sm:h-6 sm:w-6"
+                    className="inline-flex h-9 w-9 items-center justify-center rounded border border-border/70 bg-[#252824] text-sm text-muted-foreground transition hover:border-accent/50 hover:text-foreground sm:h-6 sm:w-6"
                     aria-label={`Add instrument tag to ${file.name}`}
                   >
                     {openTagPicker === 'instruments' ? '-' : '+'}
@@ -909,7 +912,7 @@ const AudioCard = ({
                 )}
               </div>
               {currentUser.isAdmin && openTagPicker === 'instruments' && (
-                <div className="mt-2 flex flex-wrap gap-2 rounded border border-border bg-muted p-2">
+                <div className="mt-2 flex flex-wrap gap-2 rounded border border-border/70 bg-[#181a18] p-2">
                   {instrumentChoices.length > 0 ? instrumentChoices.map(tag => {
                     const selected = instruments.includes(tag);
                     return (
@@ -941,7 +944,7 @@ const AudioCard = ({
                   <button
                     key={tag}
                     type="button"
-                    className="rounded border border-border bg-muted px-2 py-1.5 text-xs text-muted-foreground"
+                    className="rounded border border-border/65 bg-[#252824] px-2 py-1.5 text-xs text-muted-foreground shadow-inner shadow-black/10"
                   >
                     {displayTag(tag)}
                   </button>
@@ -950,7 +953,7 @@ const AudioCard = ({
                   <button
                     type="button"
                     onClick={() => setOpenTagPicker(prev => prev === 'vibes' ? null : 'vibes')}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded border border-border bg-muted text-sm text-muted-foreground hover:bg-muted/80 sm:h-6 sm:w-6"
+                    className="inline-flex h-9 w-9 items-center justify-center rounded border border-border/70 bg-[#252824] text-sm text-muted-foreground transition hover:border-accent/50 hover:text-foreground sm:h-6 sm:w-6"
                     aria-label={`Add vibe tag to ${file.name}`}
                   >
                     {openTagPicker === 'vibes' ? '-' : '+'}
@@ -958,7 +961,7 @@ const AudioCard = ({
                 )}
               </div>
               {currentUser.isAdmin && openTagPicker === 'vibes' && (
-                <div className="mt-2 flex flex-wrap gap-2 rounded border border-border bg-muted p-2">
+                <div className="mt-2 flex flex-wrap gap-2 rounded border border-border/70 bg-[#181a18] p-2">
                   {vibeChoices.length > 0 ? vibeChoices.map(tag => {
                     const selected = vibes.includes(tag);
                     return (
@@ -982,8 +985,8 @@ const AudioCard = ({
               )}
             </div>
           </div>
-          <div className="grid grid-cols-[7.5rem_auto] items-center gap-x-2 gap-y-1 sm:grid-cols-[7.5rem_auto]">
-            <span className="text-sm text-foreground">Adam&apos;s Rating</span>
+          <div className="mt-3 grid grid-cols-[4.75rem_auto] items-center gap-x-3 gap-y-1 rounded border border-border/35 bg-[#181a18]/70 p-2 sm:grid-cols-[4.75rem_auto]">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Adam&apos;s</span>
             <div className="flex items-center">
             {[1, 2, 3, 4, 5].map((star) => (
               currentUser.isAdmin ? (
@@ -1011,7 +1014,7 @@ const AudioCard = ({
             </div>
             {currentUser.id !== 'adam' && (
               <>
-            <span className="text-sm text-foreground">Your Rating</span>
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Your&apos;s</span>
             <div className="flex items-center">
               {[1, 2, 3, 4, 5].map((star) => (
                 <button
@@ -1032,7 +1035,7 @@ const AudioCard = ({
               const rating = file.ratings?.[user.id] || 0;
               return (
                 <div key={user.id} className="contents">
-                  <span className="text-sm text-foreground">{user.name}</span>
+                  <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{user.name}</span>
                   <div className="flex items-center">
                     {[1, 2, 3, 4, 5].map(star => (
                       <span
@@ -1258,13 +1261,13 @@ const AudioCard = ({
             )}
           </div>
         </div>
-        <div className="order-1 relative flex min-h-56 min-w-0 items-center justify-center sm:min-h-48 md:order-2">
+        <div className="order-1 relative flex min-h-56 min-w-0 items-center justify-center rounded border border-border/35 bg-[#171917] px-2 shadow-inner shadow-black/20 sm:min-h-48 md:order-2">
           <div className="absolute right-0 top-0 z-10 flex items-start gap-1">
             <button
               type="button"
               onClick={refreshWaveform}
               disabled={waveformRefreshing}
-              className="inline-flex h-8 w-8 items-center justify-center rounded border border-border/60 bg-background/80 text-muted-foreground opacity-55 transition hover:border-border hover:text-foreground hover:opacity-85 disabled:opacity-35"
+              className="inline-flex h-8 w-8 items-center justify-center rounded border border-border/60 bg-background/80 text-muted-foreground opacity-55 shadow-sm backdrop-blur transition hover:border-accent/50 hover:text-foreground hover:opacity-85 disabled:opacity-35"
               title="Refresh waveform"
               aria-label={`Refresh waveform for ${file.name}`}
             >
@@ -1280,7 +1283,7 @@ const AudioCard = ({
                   ? 'border-accent/50 bg-accent/15 text-accent'
                   : volumeBoostConfirming
                     ? 'border-accent/40 bg-accent/10 text-accent'
-                    : 'border-border/60 bg-background/80 text-muted-foreground hover:border-border hover:text-foreground'
+                    : 'border-border/60 bg-background/80 text-muted-foreground hover:border-accent/50 hover:text-foreground'
               }`}
               title={`Boost this song by ${VOL_BOOST_DB} dB`}
             >
@@ -1289,7 +1292,7 @@ const AudioCard = ({
           </div>
           <div 
             ref={waveformRef} 
-            className="mx-auto mb-2 min-h-56 w-full max-w-[760px] cursor-pointer sm:min-h-44" 
+            className="mx-auto mb-2 min-h-56 w-full max-w-[820px] cursor-pointer sm:min-h-44" 
             onClick={handleWaveformClick}
           >
             {!shouldRenderWaveform && (
@@ -2244,12 +2247,12 @@ export default function Home() {
     selectedInstruments.length + selectedVibes.length + selectedCollections.length + selectedFinishes.length + selectedYears.length + selectedAdamRatings.length +
     excludedInstruments.length + excludedVibes.length + excludedCollections.length + excludedFinishes.length + excludedYears.length + excludedAdamRatings.length +
     (likedOnly ? 1 : 0) + (untaggedOnly ? 1 : 0) + (searchQuery.trim() ? 1 : 0);
-  const collapsedSummaryClass = "mb-2 w-full rounded border border-border/50 bg-muted/40 px-3 py-2 text-left text-xs font-light text-muted-foreground opacity-80 transition hover:border-border hover:text-foreground";
+  const collapsedSummaryClass = "mb-2 w-full rounded border border-border/50 bg-[#20231f] px-3 py-2 text-left text-xs font-light text-muted-foreground opacity-85 transition hover:border-accent/35 hover:text-foreground";
   const filterOptionClass = (mode: FilterMode) => {
     const modeClass = {
-      include: 'bg-accent text-accent-foreground',
+      include: 'border border-accent/55 bg-accent/85 text-accent-foreground shadow-sm shadow-accent/10',
       exclude: 'border border-red-400/40 bg-red-500/10 text-red-300 hover:bg-red-500/15',
-      none: 'bg-muted text-muted-foreground hover:bg-muted/80',
+      none: 'border border-border/40 bg-[#20231f] text-muted-foreground hover:border-accent/35 hover:text-foreground',
     }[mode];
     return `flex cursor-pointer items-center justify-between gap-3 rounded p-3 text-sm transition-colors md:p-2 ${modeClass}`;
   };
@@ -2275,8 +2278,8 @@ export default function Home() {
   }[endMode];
 
   return (
-    <div className="bg-background text-foreground min-h-screen">
-      <header className="container mx-auto grid gap-4 p-3 sm:p-4 md:grid-cols-[16rem_minmax(0,1fr)]">
+    <div className="archive-shell min-h-screen text-foreground">
+      <header className="container mx-auto grid gap-4 p-3 pb-1 sm:p-4 sm:pb-2 md:grid-cols-[16rem_minmax(0,1fr)]">
         <div className="hidden md:block" />
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <Image
@@ -2289,7 +2292,7 @@ export default function Home() {
           />
           <div className="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
             {currentUser && (
-              <span className="col-span-2 rounded border border-border px-3 py-2 text-center text-sm text-muted-foreground sm:col-span-1">
+              <span className="col-span-2 rounded border border-border/60 bg-muted/25 px-3 py-2 text-center text-sm text-muted-foreground sm:col-span-1">
                 {currentUser.name}
               </span>
             )}
@@ -2297,19 +2300,19 @@ export default function Home() {
               <>
               <Link
                 href="/manage"
-                className="rounded bg-muted px-4 py-3 text-center text-sm text-muted-foreground transition hover:bg-muted/80 sm:py-2"
+                className="rounded border border-border/50 bg-muted/35 px-4 py-3 text-center text-sm text-muted-foreground transition hover:border-accent/40 hover:text-foreground sm:py-2"
               >
                 Manage
               </Link>
               <Link
                 href="/users"
-                className="rounded bg-muted px-4 py-3 text-center text-sm text-muted-foreground transition hover:bg-muted/80 sm:py-2"
+                className="rounded border border-border/50 bg-muted/35 px-4 py-3 text-center text-sm text-muted-foreground transition hover:border-accent/40 hover:text-foreground sm:py-2"
               >
                 Users
               </Link>
               <Link
                 href="/upload"
-                  className="rounded bg-accent px-4 py-3 text-center text-sm text-accent-foreground transition hover:bg-accent/80 sm:py-2"
+                  className="rounded border border-accent/55 bg-accent/85 px-4 py-3 text-center text-sm text-accent-foreground shadow-sm shadow-accent/10 transition hover:bg-accent sm:py-2"
                 >
                   Upload
                 </Link>
@@ -2318,7 +2321,7 @@ export default function Home() {
             <button
               type="button"
               onClick={logout}
-              className="rounded bg-muted px-4 py-3 text-sm text-muted-foreground transition hover:bg-muted/80 sm:py-2"
+              className="rounded border border-border/50 bg-muted/35 px-4 py-3 text-sm text-muted-foreground transition hover:border-accent/40 hover:text-foreground sm:py-2"
             >
               Logout
             </button>
@@ -2337,7 +2340,7 @@ export default function Home() {
             <span className="text-muted-foreground">{showMobileFilters ? '-' : '+'}</span>
           </button>
         </div>
-        <div className={`${showMobileFilters ? 'block' : 'hidden'} w-full rounded border border-border/60 bg-background/95 p-3 pb-6 md:sticky md:top-4 md:block md:max-h-[calc(100vh-2rem)] md:w-64 md:shrink-0 md:overflow-y-auto md:rounded-none md:border-0 md:border-r md:bg-transparent md:p-0 md:pr-4 md:pb-44`}>
+        <div className={`${showMobileFilters ? 'block' : 'hidden'} w-full rounded border border-border/60 bg-[#191b19]/95 p-3 pb-6 shadow-2xl shadow-black/20 md:sticky md:top-4 md:block md:max-h-[calc(100vh-2rem)] md:w-64 md:shrink-0 md:overflow-y-auto md:rounded-none md:border-0 md:border-r md:border-border/60 md:bg-transparent md:p-0 md:pr-4 md:pb-44 md:shadow-none`}>
           <h2 className="mb-4 hidden text-lg font-semibold md:block">Filters</h2>
           <div className="mb-6 rounded border border-border/50 bg-muted/30 p-3">
             <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
@@ -2764,8 +2767,8 @@ export default function Home() {
               )}
             </div>
           )}
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2 rounded border border-border/60 bg-muted/30 p-1.5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border/50 bg-[#1b1d1b]/80 p-2 shadow-sm shadow-black/10">
+            <div className="flex flex-wrap items-center gap-2 rounded border border-border/45 bg-[#151716] p-1.5">
               <button
                 type="button"
                 onClick={pickRandomTracks}
@@ -2773,7 +2776,7 @@ export default function Home() {
                 className={`min-h-9 rounded px-3 py-1.5 text-sm transition disabled:opacity-50 ${
                   randomTrackIds
                     ? 'bg-accent text-accent-foreground hover:bg-accent/90'
-                    : 'bg-background text-muted-foreground hover:text-foreground'
+                    : 'bg-[#20231f] text-muted-foreground hover:text-foreground'
                 }`}
               >
                 Random
@@ -2791,7 +2794,7 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => setRandomTrackIds(null)}
-                  className="min-h-9 rounded px-3 py-1.5 text-xs text-muted-foreground transition hover:bg-background hover:text-foreground"
+                  className="min-h-9 rounded px-3 py-1.5 text-xs text-muted-foreground transition hover:bg-[#20231f] hover:text-foreground"
                 >
                   All
                 </button>
@@ -2802,7 +2805,7 @@ export default function Home() {
               <select
                 value={sortBy === 'adamsRatingRandom' ? 'adamsRating' : sortBy}
                 onChange={(e) => setSortBy(e.target.value as SortBy)}
-                className="min-h-11 flex-1 rounded border border-border bg-background p-2 text-foreground sm:flex-none"
+                className="min-h-11 flex-1 rounded border border-border/60 bg-[#151716] p-2 text-foreground outline-none transition focus:border-accent/60 sm:flex-none"
               >
                 <option value="random">Random</option>
                 <option value="name">Name</option>
@@ -2818,7 +2821,7 @@ export default function Home() {
                   }
                   setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
                 }}
-                className="min-h-11 rounded bg-accent px-4 py-2 text-accent-foreground hover:bg-accent/80"
+                className="min-h-11 rounded border border-accent/50 bg-accent/85 px-4 py-2 text-accent-foreground transition hover:bg-accent"
               >
                 {sortDirection === 'asc' ? '↑' : '↓'}
               </button>
@@ -2882,16 +2885,16 @@ export default function Home() {
         </div>
       </div>
       {activeTrack && (
-        <div className="fixed bottom-3 left-3 right-3 z-50 rounded-lg border border-border bg-background/95 p-2 shadow-2xl backdrop-blur sm:bottom-4 sm:left-4 sm:right-4 sm:p-3 md:right-auto md:w-[min(360px,calc(100vw-2rem))]">
+        <div className="fixed bottom-3 left-3 right-3 z-50 rounded-md border border-border/70 bg-[#1b1d1b]/95 p-2 shadow-2xl shadow-black/45 backdrop-blur sm:bottom-4 sm:left-4 sm:right-4 sm:p-3 md:right-auto md:w-[min(360px,calc(100vw-2rem))]">
           <div className="flex flex-col gap-2 sm:gap-3 md:flex-row md:items-center">
             <div className="min-w-0 flex-1">
               <div className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">
-                  <h3 className="text-[10px] font-semibold uppercase leading-tight text-muted-foreground sm:text-xs">Now Playing</h3>
+                  <h3 className="text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground sm:text-xs">Now Playing</h3>
                   <button
                     type="button"
                     onClick={scrollToActiveCard}
-                    className="block max-w-full truncate text-left text-sm font-semibold leading-tight hover:text-accent sm:text-base"
+                    className="block max-w-full truncate text-left text-sm font-semibold leading-tight text-foreground hover:text-accent sm:text-base"
                   >
                     {activeTrack.name}
                   </button>
@@ -2936,7 +2939,7 @@ export default function Home() {
                 {[...getTags(activeTrack, 'instruments', 'instrument'), ...getTags(activeTrack, 'vibes', 'vibe'), activeTrack.finish || ''].filter(Boolean).map(displayTag).join(' · ') || 'No tags'}
               </p>
               <div
-                className="mt-2 h-3 w-full cursor-pointer overflow-hidden rounded-full bg-muted"
+                className="mt-2 h-3 w-full cursor-pointer overflow-hidden rounded-full border border-border/30 bg-[#101211]"
                 onPointerDown={seekMiniPlayer}
                 role="slider"
                 aria-label={`Seek ${activeTrack.name}`}
@@ -2950,7 +2953,7 @@ export default function Home() {
             <div className="hidden items-center gap-2 sm:flex">
               <button
                 onClick={toggleMiniPlayer}
-                className="flex h-10 w-12 items-center justify-center rounded bg-accent text-accent-foreground transition hover:bg-accent/90"
+              className="flex h-10 w-12 items-center justify-center rounded border border-accent/50 bg-accent/85 text-accent-foreground transition hover:bg-accent"
                 aria-label={isPlaying ? `Pause ${activeTrack.name}` : `Play ${activeTrack.name}`}
               >
                 {isPlaying ? (
