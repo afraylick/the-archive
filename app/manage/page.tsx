@@ -16,6 +16,7 @@ interface AudioFile {
   colorTags?: string[];
   waveformPeaks?: number[][];
   waveformDuration?: number;
+  waveformCacheVersion?: number;
   year?: number;
   createdAt?: string;
   ratings?: Record<string, number>;
@@ -51,6 +52,7 @@ interface ArchiveUser {
 const WAVEFORM_PEAK_LENGTH = 4000;
 const WAVEFORM_PEAK_PRECISION = 10000;
 const WAVEFORM_EXPORT_PRECISION = WAVEFORM_PEAK_PRECISION;
+const WAVEFORM_CACHE_VERSION = 2;
 const FINISH_OPTIONS = ['Tracked', 'Recorder', 'Voice Memo'];
 const FINDER_COLOR_HEX: Record<string, string> = {
   gray: '#8e8e93',
@@ -132,23 +134,25 @@ const hasCachedWaveform = (file: AudioFile) => {
     peaks.every(peak => Number.isFinite(peak) && Math.abs(peak) <= 1) &&
     !hasLegacyLowPrecisionWaveform(peaks) &&
     typeof file.waveformDuration === 'number' &&
-    file.waveformDuration > 0;
+    file.waveformDuration > 0 &&
+    file.waveformCacheVersion === WAVEFORM_CACHE_VERSION;
 };
 
 const createWaveformPeaks = (audioBuffer: AudioBuffer) => {
-  const channelData = audioBuffer.getChannelData(0);
   const peaks: number[] = [];
-  const samplesPerPeak = channelData.length / WAVEFORM_PEAK_LENGTH;
+  const samplesPerPeak = audioBuffer.length / WAVEFORM_PEAK_LENGTH;
 
   for (let i = 0; i < WAVEFORM_PEAK_LENGTH; i++) {
     const start = Math.floor(i * samplesPerPeak);
     const end = Math.max(start + 1, Math.ceil((i + 1) * samplesPerPeak));
     let peak = 0;
 
-    for (let sampleIndex = start; sampleIndex < end && sampleIndex < channelData.length; sampleIndex++) {
-      const sample = channelData[sampleIndex];
-      if (Math.abs(sample) > Math.abs(peak)) {
-        peak = sample;
+    for (let sampleIndex = start; sampleIndex < end && sampleIndex < audioBuffer.length; sampleIndex++) {
+      for (let channelIndex = 0; channelIndex < audioBuffer.numberOfChannels; channelIndex++) {
+        const sample = audioBuffer.getChannelData(channelIndex)[sampleIndex] || 0;
+        if (Math.abs(sample) > Math.abs(peak)) {
+          peak = sample;
+        }
       }
     }
 
@@ -426,6 +430,7 @@ export default function ManagePage() {
         ...file,
         waveformPeaks,
         waveformDuration,
+        waveformCacheVersion: WAVEFORM_CACHE_VERSION,
       },
       'Failed to save refreshed waveform'
     );
@@ -435,7 +440,7 @@ export default function ManagePage() {
     setWaveformProcessingId(file.id);
     try {
       await saveFile(
-        { ...file, waveformPeaks: undefined, waveformDuration: undefined },
+        { ...file, waveformPeaks: undefined, waveformDuration: undefined, waveformCacheVersion: undefined },
         'Failed to cull waveform'
       );
     } catch {
@@ -462,6 +467,7 @@ export default function ManagePage() {
           ...file,
           waveformPeaks: createWaveformPeaks(audioBuffer),
           waveformDuration: audioBuffer.duration,
+          waveformCacheVersion: WAVEFORM_CACHE_VERSION,
         },
         'Failed to save waveform'
       );
@@ -479,7 +485,7 @@ export default function ManagePage() {
       for (let i = 0; i < files.length; i++) {
         setWaveformBulkStatus(`Culling ${i + 1}/${files.length}`);
         await saveFile(
-          { ...files[i], waveformPeaks: undefined, waveformDuration: undefined },
+          { ...files[i], waveformPeaks: undefined, waveformDuration: undefined, waveformCacheVersion: undefined },
           'Failed to cull waveform'
         );
       }

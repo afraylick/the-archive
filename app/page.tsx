@@ -17,6 +17,7 @@ interface AudioFile {
   colorTags?: string[];
   waveformPeaks?: number[][];
   waveformDuration?: number;
+  waveformCacheVersion?: number;
   year?: number;
   createdAt?: string;
   ratings?: Record<string, number>;
@@ -98,7 +99,8 @@ const RENDER_BATCH_SIZE = 30;
 const WAVEFORM_PEAK_LENGTH = 4000;
 const WAVEFORM_PEAK_PRECISION = 10000;
 const WAVEFORM_EXPORT_PRECISION = WAVEFORM_PEAK_PRECISION;
-const USE_CACHED_WAVEFORM_RENDERING = false;
+const WAVEFORM_CACHE_VERSION = 2;
+const USE_CACHED_WAVEFORM_RENDERING = true;
 const VOL_BOOST_DB = 12;
 const VOL_BOOST_GAIN = Math.pow(10, VOL_BOOST_DB / 20);
 const TAG_LABELS: Record<string, string> = {
@@ -178,7 +180,8 @@ const hasCachedWaveform = (file: AudioFile) => {
     peaks.every(peak => Number.isFinite(peak) && Math.abs(peak) <= 1) &&
     !hasLegacyLowPrecisionWaveform(peaks) &&
     typeof file.waveformDuration === 'number' &&
-    file.waveformDuration > 0;
+    file.waveformDuration > 0 &&
+    file.waveformCacheVersion === WAVEFORM_CACHE_VERSION;
 };
 
 const createWaveformPeaks = (audioBuffer: AudioBuffer) => {
@@ -554,6 +557,7 @@ const AudioCard = ({
         ...latestFile,
         waveformPeaks,
         waveformDuration: duration,
+        waveformCacheVersion: WAVEFORM_CACHE_VERSION,
       };
 
       try {
@@ -916,6 +920,7 @@ const AudioCard = ({
         ...latestFile,
         waveformPeaks,
         waveformDuration: audioBuffer.duration,
+        waveformCacheVersion: WAVEFORM_CACHE_VERSION,
       };
 
       const saveRes = await fetch(`/api/files/${encodeURIComponent(latestFile.id)}`, {

@@ -16,6 +16,7 @@ interface AudioFileRecord {
   colorTags?: string[];
   waveformPeaks?: number[][];
   waveformDuration?: number;
+  waveformCacheVersion?: number;
   year?: number;
   createdAt?: string;
   myRating?: number;
@@ -31,7 +32,9 @@ interface AudioFileRecord {
   };
 }
 
-const isValidWaveformCache = (waveformPeaks: unknown, waveformDuration: unknown) => {
+const WAVEFORM_CACHE_VERSION = 2;
+
+const isValidWaveformCache = (waveformPeaks: unknown, waveformDuration: unknown, waveformCacheVersion: unknown) => {
   if (!Array.isArray(waveformPeaks) || waveformPeaks.length === 0) return false;
   const peaks = waveformPeaks[0];
   return Array.isArray(peaks) &&
@@ -39,7 +42,8 @@ const isValidWaveformCache = (waveformPeaks: unknown, waveformDuration: unknown)
     peaks.every(peak => typeof peak === 'number' && Number.isFinite(peak) && Math.abs(peak) <= 1) &&
     typeof waveformDuration === 'number' &&
     Number.isFinite(waveformDuration) &&
-    waveformDuration > 0;
+    waveformDuration > 0 &&
+    waveformCacheVersion === WAVEFORM_CACHE_VERSION;
 };
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -66,13 +70,14 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     if (!user.isAdmin) {
       if (updatedFile.waveformPeaks || updatedFile.waveformDuration) {
-        if (!isValidWaveformCache(updatedFile.waveformPeaks, updatedFile.waveformDuration)) {
+        if (!isValidWaveformCache(updatedFile.waveformPeaks, updatedFile.waveformDuration, updatedFile.waveformCacheVersion)) {
           return NextResponse.json({ error: 'Invalid waveform cache' }, { status: 400 });
         }
         data[index] = {
           ...data[index],
           waveformPeaks: updatedFile.waveformPeaks,
           waveformDuration: updatedFile.waveformDuration,
+          waveformCacheVersion: updatedFile.waveformCacheVersion,
         };
         fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
         return NextResponse.json({ message: 'Waveform updated successfully' });
@@ -98,9 +103,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     updatedFile.ratings.adam = updatedFile.ratings.adam || updatedFile.myRating || 0;
     updatedFile.myRating = updatedFile.ratings.adam || 0;
     if (updatedFile.waveformPeaks || updatedFile.waveformDuration) {
-      if (!isValidWaveformCache(updatedFile.waveformPeaks, updatedFile.waveformDuration)) {
+      if (!isValidWaveformCache(updatedFile.waveformPeaks, updatedFile.waveformDuration, updatedFile.waveformCacheVersion)) {
         delete updatedFile.waveformPeaks;
         delete updatedFile.waveformDuration;
+        delete updatedFile.waveformCacheVersion;
       }
     }
     data[index] = {

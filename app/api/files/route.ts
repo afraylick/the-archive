@@ -18,6 +18,7 @@ interface AudioFileRecord {
   colorTags?: string[];
   waveformPeaks?: number[][];
   waveformDuration?: number;
+  waveformCacheVersion?: number;
   year?: number;
   createdAt?: string;
   uploadedAt?: string;
