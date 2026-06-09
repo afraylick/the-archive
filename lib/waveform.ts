@@ -1,6 +1,6 @@
 export const WAVEFORM_PEAK_LENGTH = 4000;
 export const WAVEFORM_PEAK_PRECISION = 10000;
-export const WAVEFORM_CACHE_VERSION = 4;
+export const WAVEFORM_CACHE_VERSION = 5;
 export const WAVEFORM_GENERATION_SAMPLE_RATE = 8000;
 
 export const hasLegacyLowPrecisionWaveform = (peaks: number[]) => {

@@ -97,6 +97,19 @@ const getTags = (file: AudioFile, pluralKey: 'instruments' | 'vibes', singularKe
   return tag ? [normalizeTag(tag)] : [];
 };
 
+const getPlayableDuration = (wavesurfer: WaveSurfer) => {
+  const mediaDuration = wavesurfer.getMediaElement().duration;
+  if (Number.isFinite(mediaDuration) && mediaDuration > 0) return mediaDuration;
+
+  const duration = wavesurfer.getDuration();
+  return Number.isFinite(duration) && duration > 0 ? duration : 0;
+};
+
+const seekToProgress = (wavesurfer: WaveSurfer, progress: number) => {
+  const duration = getPlayableDuration(wavesurfer);
+  wavesurfer.setTime(Math.min(1, Math.max(0, progress)) * duration);
+};
+
 export default function PlayerPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [file, setFile] = useState<AudioFile | null>(null);
@@ -256,10 +269,10 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
       <h1 className="text-2xl font-bold mb-4">{file.name}</h1>
       <div ref={waveformRef} className="mb-4 cursor-pointer" onClick={(e) => {
         if (wavesurferRef.current) {
-          const rect = waveformRef.current!.getBoundingClientRect();
+          const rect = wavesurferRef.current.getWrapper().getBoundingClientRect();
           const x = e.clientX - rect.left;
           const progress = x / rect.width;
-          wavesurferRef.current.seekTo(progress);
+          seekToProgress(wavesurferRef.current, progress);
           wavesurferRef.current.play();
         }
       }}></div>

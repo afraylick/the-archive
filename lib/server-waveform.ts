@@ -24,49 +24,32 @@ export interface GeneratedWaveform {
 }
 
 const getCommand = (envName: string, fallback: string) => process.env[envName] || fallback;
+const FFMPEG_PEAK_BLOCK_SIZE = 64;
 
-const runProcess = (command: string, args: string[], collectStdout = true) => (
-  new Promise<Buffer>((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', collectStdout ? 'pipe' : 'ignore', 'pipe'] });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
+const resampleBlockPeaks = (blockPeaks: number[], blockSize: number, totalSamples: number) => {
+  const peaks = new Array<number>(WAVEFORM_PEAK_LENGTH).fill(0);
+  const samplesPerPeak = totalSamples / WAVEFORM_PEAK_LENGTH;
 
-    child.stdout?.on('data', chunk => stdout.push(Buffer.from(chunk)));
-    child.stderr?.on('data', chunk => stderr.push(Buffer.from(chunk)));
-    child.on('error', reject);
-    child.on('close', code => {
-      if (code === 0) {
-        resolve(Buffer.concat(stdout));
-        return;
+  for (let i = 0; i < WAVEFORM_PEAK_LENGTH; i++) {
+    const startSample = i * samplesPerPeak;
+    const endSample = (i + 1) * samplesPerPeak;
+    const startBlock = Math.max(0, Math.floor(startSample / blockSize));
+    const endBlock = Math.min(blockPeaks.length - 1, Math.max(startBlock, Math.ceil(endSample / blockSize) - 1));
+
+    for (let blockIndex = startBlock; blockIndex <= endBlock; blockIndex++) {
+      const blockPeak = blockPeaks[blockIndex] || 0;
+      if (Math.abs(blockPeak) > Math.abs(peaks[i])) {
+        peaks[i] = blockPeak;
       }
-
-      const message = Buffer.concat(stderr).toString('utf8').trim() || `${command} exited with code ${code}`;
-      reject(new Error(message));
-    });
-  })
-);
-
-const getDurationWithFfprobe = async (filePath: string) => {
-  const output = await runProcess(getCommand('ARCHIVE_FFPROBE_PATH', 'ffprobe'), [
-    '-v',
-    'error',
-    '-show_entries',
-    'format=duration',
-    '-of',
-    'default=noprint_wrappers=1:nokey=1',
-    /* turbopackIgnore: true */ filePath,
-  ]);
-  const duration = Number(output.toString('utf8').trim());
-  if (!Number.isFinite(duration) || duration <= 0) {
-    throw new Error('Could not read audio duration');
+    }
   }
-  return duration;
+
+  return peaks.map(roundWaveformPeak);
 };
 
 const generateWithFfmpeg = async (filePath: string): Promise<GeneratedWaveform> => {
-  const duration = await getDurationWithFfprobe(filePath);
-  const totalSamples = Math.max(1, Math.round(duration * WAVEFORM_GENERATION_SAMPLE_RATE));
-  const peaks = new Array<number>(WAVEFORM_PEAK_LENGTH).fill(0);
+  const blockPeaks: number[] = [];
+  let totalSamples = 0;
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(getCommand('ARCHIVE_FFMPEG_PATH', 'ffmpeg'), [
@@ -87,7 +70,14 @@ const generateWithFfmpeg = async (filePath: string): Promise<GeneratedWaveform> 
 
     const stderr: Buffer[] = [];
     let leftover = Buffer.alloc(0);
-    let sampleIndex = 0;
+    let blockPeak = 0;
+    let blockSampleCount = 0;
+
+    const pushBlockPeak = () => {
+      blockPeaks.push(blockPeak);
+      blockPeak = 0;
+      blockSampleCount = 0;
+    };
 
     child.stdout.on('data', chunk => {
       const buffer = leftover.length ? Buffer.concat([leftover, Buffer.from(chunk)]) : Buffer.from(chunk);
@@ -95,12 +85,16 @@ const generateWithFfmpeg = async (filePath: string): Promise<GeneratedWaveform> 
 
       for (let offset = 0; offset < sampleBytes; offset += 4) {
         const sample = buffer.readFloatLE(offset);
-        const bucket = Math.min(WAVEFORM_PEAK_LENGTH - 1, Math.floor((sampleIndex / totalSamples) * WAVEFORM_PEAK_LENGTH));
         const amplitude = Math.abs(Number.isFinite(sample) ? sample : 0);
-        if (amplitude > Math.abs(peaks[bucket])) {
-          peaks[bucket] = sample;
+        if (amplitude > Math.abs(blockPeak)) {
+          blockPeak = Number.isFinite(sample) ? sample : 0;
         }
-        sampleIndex++;
+        blockSampleCount++;
+        totalSamples++;
+
+        if (blockSampleCount >= FFMPEG_PEAK_BLOCK_SIZE) {
+          pushBlockPeak();
+        }
       }
 
       leftover = sampleBytes < buffer.length ? buffer.subarray(sampleBytes) : Buffer.alloc(0);
@@ -109,7 +103,11 @@ const generateWithFfmpeg = async (filePath: string): Promise<GeneratedWaveform> 
     child.stderr.on('data', chunk => stderr.push(Buffer.from(chunk)));
     child.on('error', reject);
     child.on('close', code => {
-      if (code === 0 && sampleIndex > 0) {
+      if (blockSampleCount > 0) {
+        pushBlockPeak();
+      }
+
+      if (code === 0 && totalSamples > 0) {
         resolve();
         return;
       }
@@ -119,8 +117,9 @@ const generateWithFfmpeg = async (filePath: string): Promise<GeneratedWaveform> 
     });
   });
 
+  const duration = totalSamples / WAVEFORM_GENERATION_SAMPLE_RATE;
   return {
-    waveformPeaks: [peaks.map(roundWaveformPeak)],
+    waveformPeaks: [resampleBlockPeaks(blockPeaks, FFMPEG_PEAK_BLOCK_SIZE, totalSamples)],
     waveformDuration: duration,
     generator: 'ffmpeg',
   };

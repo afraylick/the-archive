@@ -232,6 +232,28 @@ const formatDuration = (duration: number | undefined) => {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 };
 
+const getWaveSurferPlayableDuration = (wavesurfer: WaveSurfer) => {
+  const mediaDuration = wavesurfer.getMediaElement().duration;
+  if (Number.isFinite(mediaDuration) && mediaDuration > 0) return mediaDuration;
+
+  const wavesurferDuration = wavesurfer.getDuration();
+  return Number.isFinite(wavesurferDuration) && wavesurferDuration > 0 ? wavesurferDuration : 0;
+};
+
+const seekWaveSurferToProgress = (wavesurfer: WaveSurfer, progress: number, fallbackDuration = 0) => {
+  const safeProgress = Math.min(1, Math.max(0, progress));
+  const duration = getWaveSurferPlayableDuration(wavesurfer) || fallbackDuration;
+  const time = duration * safeProgress;
+  wavesurfer.setTime(time);
+
+  return { duration, progress: safeProgress, time };
+};
+
+const getWaveSurferInteractionRect = (wavesurfer: WaveSurfer, fallbackElement: HTMLElement) => {
+  const wrapperRect = wavesurfer.getWrapper().getBoundingClientRect();
+  return wrapperRect.width > 0 ? wrapperRect : fallbackElement.getBoundingClientRect();
+};
+
 const formatCommentDate = (createdAt: string) => {
   const date = new Date(createdAt);
   if (Number.isNaN(date.getTime())) return 'Unknown comment date';
@@ -445,18 +467,19 @@ const AudioCard = ({
     const wavesurfer = wavesurferRef.current;
     if (!wavesurfer) return;
 
-    const safeProgress = Math.min(1, Math.max(0, progress));
-    const currentDuration = wavesurfer.getDuration() || durationRef.current || latestFileRef.current.waveformDuration || 0;
-    const nextTime = currentDuration * safeProgress;
+    const seekState = seekWaveSurferToProgress(
+      wavesurfer,
+      progress,
+      durationRef.current || latestFileRef.current.waveformDuration || 0
+    );
 
     tracksStartedFromWaveformClick.add(latestFileRef.current.id);
     setHasStartedPlayback(true);
-    wavesurfer.seekTo(safeProgress);
-    setDuration(currentDuration);
-    setCurrentTime(nextTime);
+    setDuration(seekState.duration);
+    setCurrentTime(seekState.time);
 
     if (!audioPlayableRef.current) {
-      pendingPlaybackRef.current = { progress: safeProgress, currentTime: nextTime };
+      pendingPlaybackRef.current = { progress: seekState.progress, currentTime: seekState.time };
       return;
     }
 
@@ -530,8 +553,13 @@ const AudioCard = ({
       if (!pendingPlayback) return;
 
       pendingPlaybackRef.current = null;
-      wavesurfer.seekTo(pendingPlayback.progress);
-      setCurrentTime(pendingPlayback.currentTime);
+      const seekState = seekWaveSurferToProgress(
+        wavesurfer,
+        pendingPlayback.progress,
+        durationRef.current || latestFileRef.current.waveformDuration || 0
+      );
+      setDuration(seekState.duration);
+      setCurrentTime(seekState.time);
       void wavesurfer.play();
     };
 
@@ -807,7 +835,7 @@ const AudioCard = ({
     if (!wavesurfer || !waveformElement) return;
 
     const hasStartedFromClick = tracksStartedFromWaveformClick.has(file.id);
-    const rect = waveformElement.getBoundingClientRect();
+    const rect = getWaveSurferInteractionRect(wavesurfer, waveformElement);
     const progress = hasStartedFromClick
       ? Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
       : 0;
@@ -2309,7 +2337,7 @@ export default function Home() {
 
     const rect = event.currentTarget.getBoundingClientRect();
     const progress = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-    wavesurfer.seekTo(progress);
+    seekWaveSurferToProgress(wavesurfer, progress);
     setProgress(progress * 100);
   }, []);
 
