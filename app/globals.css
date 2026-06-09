@@ -1,12 +1,12 @@
 @import "../node_modules/tailwindcss/index.css";
 
 :root {
-  --background: #151716;
-  --foreground: #eee9df;
-  --muted: #252826;
-  --muted-foreground: #aaa79c;
-  --border: #3b403d;
-  --accent: #74b5c9;
+  --background: #0b0f14;
+  --foreground: #ffffff;
+  --muted: #131a1f;
+  --muted-foreground: #a9a8a8;
+  --border: #1d2125;
+  --accent: #3680e9;
   --accent-foreground: #ffffff;
 }
 
@@ -30,7 +30,8 @@ body {
 
 .archive-shell {
   background:
-    linear-gradient(180deg, rgba(116, 181, 201, 0.045), transparent 340px),
+    radial-gradient(circle at 52% -12%, rgba(54, 128, 233, 0.14), transparent 30rem),
+    linear-gradient(180deg, rgba(13, 17, 22, 0.88), rgba(11, 15, 20, 0.98) 28rem),
     var(--background);
 }
 

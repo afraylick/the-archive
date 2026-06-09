@@ -1,7 +1,6 @@
 'use client';
 
-import { type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Image from 'next/image';
+import { Fragment, type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import WaveSurfer from 'wavesurfer.js';
 
@@ -99,6 +98,7 @@ const RENDER_BATCH_SIZE = 30;
 const WAVEFORM_PEAK_LENGTH = 4000;
 const WAVEFORM_PEAK_PRECISION = 10000;
 const WAVEFORM_EXPORT_PRECISION = WAVEFORM_PEAK_PRECISION;
+const USE_CACHED_WAVEFORM_RENDERING = false;
 const VOL_BOOST_DB = 12;
 const VOL_BOOST_GAIN = Math.pow(10, VOL_BOOST_DB / 20);
 const TAG_LABELS: Record<string, string> = {
@@ -106,16 +106,6 @@ const TAG_LABELS: Record<string, string> = {
   'e. guitar': 'E. Guitar',
   'acoustic guitar': 'Acoustic',
 };
-const FINDER_COLOR_HEX: Record<string, string> = {
-  gray: '#8e8e93',
-  green: '#34c759',
-  purple: '#af52de',
-  blue: '#0a84ff',
-  yellow: '#ffd60a',
-  red: '#ff453a',
-  orange: '#ff9f0a',
-};
-
 let sharedAudioContext: AudioContext | null = null;
 const tracksStartedFromWaveformClick = new Set<string>();
 
@@ -192,19 +182,20 @@ const hasCachedWaveform = (file: AudioFile) => {
 };
 
 const createWaveformPeaks = (audioBuffer: AudioBuffer) => {
-  const channelData = audioBuffer.getChannelData(0);
   const peaks: number[] = [];
-  const samplesPerPeak = channelData.length / WAVEFORM_PEAK_LENGTH;
+  const samplesPerPeak = audioBuffer.length / WAVEFORM_PEAK_LENGTH;
 
   for (let i = 0; i < WAVEFORM_PEAK_LENGTH; i++) {
     const start = Math.floor(i * samplesPerPeak);
     const end = Math.max(start + 1, Math.ceil((i + 1) * samplesPerPeak));
     let peak = 0;
 
-    for (let sampleIndex = start; sampleIndex < end && sampleIndex < channelData.length; sampleIndex++) {
-      const sample = channelData[sampleIndex];
-      if (Math.abs(sample) > Math.abs(peak)) {
-        peak = sample;
+    for (let sampleIndex = start; sampleIndex < end && sampleIndex < audioBuffer.length; sampleIndex++) {
+      for (let channelIndex = 0; channelIndex < audioBuffer.numberOfChannels; channelIndex++) {
+        const sample = audioBuffer.getChannelData(channelIndex)[sampleIndex] || 0;
+        if (Math.abs(sample) > Math.abs(peak)) {
+          peak = sample;
+        }
       }
     }
 
@@ -309,15 +300,15 @@ const formatActivityTitle = (activity: ActivityEntry) => {
 };
 
 const getRatingColor = (rating: number) => {
-  const colors = {
-    1: 'text-yellow-500',
-    2: 'text-lime-500',
-    3: 'text-green-500',
-    4: 'text-teal-500',
-    5: 'text-blue-500',
-  };
-  return colors[rating as keyof typeof colors] || 'text-yellow-400';
+  return rating > 0 ? 'text-[#3680e9]' : 'text-[#6e7273]/70';
 };
+
+const adamRatingColorClass = 'text-[#3680e9]';
+const userRatingColorClass = 'text-[#67974f]';
+const emptyRatingColorClass = 'text-[#6e7273]/70';
+const getResponsiveWaveformHeight = () => (
+  typeof window !== 'undefined' && window.innerWidth < 640 ? 176 : 92
+);
 
 const StarIcon = ({ filled, size = 'h-4 w-4' }: { filled: boolean; size?: string }) => (
   <svg className={size} viewBox="0 0 24 24" aria-hidden="true">
@@ -328,6 +319,63 @@ const StarIcon = ({ filled, size = 'h-4 w-4' }: { filled: boolean; size?: string
       strokeWidth="1.8"
       strokeLinejoin="round"
     />
+  </svg>
+);
+
+const SidebarIcon = ({ name }: { name: 'instruments' | 'vibes' | 'collections' | 'finish' | 'years' | 'rating' | 'liked' | 'untagged' | 'search' | 'plus' }) => {
+  const common = {
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    strokeWidth: 1.9,
+  };
+
+  return (
+    <svg className="h-5 w-5 shrink-0 text-muted-foreground" viewBox={name === 'instruments' ? '0 0 512 512' : '0 0 24 24'} aria-hidden="true">
+      {name === 'instruments' && (
+        <path
+          fill="currentColor"
+          stroke="none"
+          d="M502.7 39.02L473 9.37c-12.5-12.5-32.74-12.49-45.24 .0106l-46.24 46.37c-3.875 3.875-6.848 8.506-8.598 13.76l-12.19 36.51L284.5 182.3C272.4 173.5 259 166.5 244.4 163.1C211 155.4 177.4 162.3 154.5 185.1C145.3 194.5 138.3 206 134.3 218.6C128.3 237.1 111.1 251.3 92.14 253C68.52 255.4 46.39 264.5 29.52 281.5c-45.62 45.5-37.38 127.5 18.12 183c55.37 55.38 137.4 63.51 182.9 18c16.1-16.88 26.25-38.85 28.5-62.72c1.75-18.75 15.84-36.16 34.47-42.16c12.5-3.875 24.03-10.87 33.4-20.25c22.87-22.88 29.75-56.38 21.1-89.76c-3.375-14.63-10.39-27.99-19.14-40.11l76.25-76.26l36.53-12.17c5.125-1.75 9.894-4.715 13.77-8.59l46.36-46.29C515.2 71.72 515.2 51.52 502.7 39.02zM208 352c-26.5 0-48-21.5-48-48c0-26.5 21.5-48 48-48s47.1 21.5 47.1 48C256 330.5 234.5 352 208 352z"
+        />
+      )}
+      {name === 'vibes' && (
+        <>
+          <path {...common} d="M3 8c3-3 6 3 9 0s6 3 9 0" />
+          <path {...common} d="M3 14c3-3 6 3 9 0s6 3 9 0" />
+          <path {...common} d="M3 20c3-3 6 3 9 0s6 3 9 0" />
+        </>
+      )}
+      {name === 'collections' && <path {...common} d="M3.5 7.5h7l2 2H20.5v10H3.5z" />}
+      {name === 'finish' && (
+        <>
+          <path {...common} d="M12 3.5 19.5 9 12 20.5 4.5 9z" />
+          <path {...common} d="M4.5 9h15" />
+          <path {...common} d="m8.5 9 3.5 11.5L15.5 9" />
+          <path {...common} d="M8.5 9 12 3.5 15.5 9" />
+          <path {...common} d="M19.5 3.5v3" />
+          <path {...common} d="M18 5h3" />
+        </>
+      )}
+      {name === 'years' && (
+        <>
+          <path {...common} d="M5 5h14v16H5z" />
+          <path {...common} d="M8 3v4M16 3v4M5 10h14" />
+        </>
+      )}
+      {name === 'rating' && <path {...common} d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1L12 16.9 6.6 19.8l1-6.1-4.4-4.3 6.1-.9z" />}
+      {name === 'liked' && <path {...common} d="M20.8 8.5c0 5-8.8 10-8.8 10S3.2 13.5 3.2 8.5A4.4 4.4 0 0 1 11 5.7a4.4 4.4 0 0 1 8.8 2.8Z" />}
+      {name === 'untagged' && <path {...common} d="M4 4h8.5L20 11.5 11.5 20 4 12.5z" />}
+      {name === 'search' && <path {...common} d="m21 21-4.4-4.4M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z" />}
+      {name === 'plus' && <path {...common} d="M12 5v14M5 12h14" />}
+    </svg>
+  );
+};
+
+const SidebarChevron = ({ open }: { open: boolean }) => (
+  <svg className={`h-5 w-5 shrink-0 text-muted-foreground transition ${open ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="m6 9 6 6 6-6" />
   </svg>
 );
 
@@ -370,13 +418,18 @@ const AudioCard = ({
   const [waveformRefreshing, setWaveformRefreshing] = useState(false);
   const [waveformRefreshKey, setWaveformRefreshKey] = useState(0);
   const [shouldMountWaveform, setShouldMountWaveform] = useState(false);
+  const [hasStartedPlayback, setHasStartedPlayback] = useState(() => tracksStartedFromWaveformClick.has(file.id));
+  const [isCardPlaying, setIsCardPlaying] = useState(false);
   const [duration, setDuration] = useState(file.waveformDuration || 0);
   const [currentTime, setCurrentTime] = useState(0);
+  const waveformHeightRef = useRef(getResponsiveWaveformHeight());
+  const canRenderCachedWaveform = USE_CACHED_WAVEFORM_RENDERING && hasCachedWaveform(file);
   const initialWaveformCacheRef = useRef({
-    peaks: hasCachedWaveform(file) ? file.waveformPeaks : undefined,
-    duration: hasCachedWaveform(file) ? file.waveformDuration : undefined,
+    peaks: canRenderCachedWaveform ? file.waveformPeaks : undefined,
+    duration: canRenderCachedWaveform ? file.waveformDuration : undefined,
   });
   const latestFileRef = useRef(file);
+  const playWhenReadyRef = useRef(false);
 
   useEffect(() => {
     latestFileRef.current = file;
@@ -393,7 +446,7 @@ const AudioCard = ({
           observer.disconnect();
         }
       },
-      { rootMargin: '900px 0px' }
+      { rootMargin: '260px 0px' }
     );
 
     observer.observe(cardElement);
@@ -402,16 +455,52 @@ const AudioCard = ({
 
   const shouldRenderWaveform = shouldMountWaveform || isActive;
 
+  const handleTagRowWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    const element = event.currentTarget;
+    if (element.scrollWidth <= element.clientWidth) return;
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    if (delta === 0) return;
+    event.preventDefault();
+    element.scrollLeft += delta;
+  };
+
+  const handleTagRowPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    const element = event.currentTarget;
+    if (element.scrollWidth <= element.clientWidth) return;
+    const startX = event.clientX;
+    const startScrollLeft = element.scrollLeft;
+
+    element.setPointerCapture(event.pointerId);
+    element.dataset.draggingTags = 'true';
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      element.scrollLeft = startScrollLeft - (moveEvent.clientX - startX);
+    };
+    const handleEnd = () => {
+      element.dataset.draggingTags = 'false';
+      element.removeEventListener('pointermove', handleMove);
+      element.removeEventListener('pointerup', handleEnd);
+      element.removeEventListener('pointercancel', handleEnd);
+    };
+
+    element.addEventListener('pointermove', handleMove);
+    element.addEventListener('pointerup', handleEnd);
+    element.addEventListener('pointercancel', handleEnd);
+  };
+
   useEffect(() => {
     if (!shouldRenderWaveform) return;
     if (!waveformRef.current || !cardRef.current) return;
 
     const wavesurfer = WaveSurfer.create({
       container: waveformRef.current,
-      waveColor: '#a3a3a3',
-      progressColor: '#525252',
-      height: window.innerWidth < 640 ? 224 : 176,
+      waveColor: '#727479',
+      progressColor: tracksStartedFromWaveformClick.has(latestFileRef.current.id) ? '#525252' : '#727479',
+      cursorWidth: tracksStartedFromWaveformClick.has(latestFileRef.current.id) ? 1 : 0,
+      cursorColor: '#3680e9',
+      height: waveformHeightRef.current,
       interact: false,
+      backend: 'WebAudio',
       url: `/api/files/${encodeURIComponent(latestFileRef.current.id)}/audio`,
       peaks: initialWaveformCacheRef.current.peaks,
       duration: initialWaveformCacheRef.current.duration,
@@ -424,13 +513,29 @@ const AudioCard = ({
       if (cardRef.current) {
         onPlay(latestFileRef.current, cardRef.current, wavesurfer);
       }
+      setHasStartedPlayback(true);
+      setIsCardPlaying(true);
     };
-    const handlePause = () => onPause(latestFileRef.current, wavesurfer);
-    const handleFinish = () => onStop(latestFileRef.current, wavesurfer);
+    const handlePause = () => {
+      setIsCardPlaying(false);
+      onPause(latestFileRef.current, wavesurfer);
+    };
+    const handleFinish = () => {
+      setIsCardPlaying(false);
+      onStop(latestFileRef.current, wavesurfer);
+    };
     const handleError = (error: Error) => console.error('WaveSurfer error for', latestFileRef.current.id, error);
     const handleReady = (readyDuration: number) => {
       setDuration(readyDuration);
       setCurrentTime(wavesurfer.getCurrentTime());
+      if (playWhenReadyRef.current) {
+        playWhenReadyRef.current = false;
+        wavesurfer.seekTo(0);
+        setCurrentTime(0);
+        tracksStartedFromWaveformClick.add(latestFileRef.current.id);
+        setHasStartedPlayback(true);
+        void wavesurfer.play();
+      }
     };
     const handleTimeUpdate = (time: number) => setCurrentTime(time);
     const handleDecode = async (duration: number) => {
@@ -483,6 +588,7 @@ const AudioCard = ({
       mediaSourceRef.current = null;
       wavesurfer.destroy();
       wavesurferRef.current = null;
+      setIsCardPlaying(false);
     };
   }, [onDestroy, onPause, onPlay, onReady, onStop, setFiles, shouldRenderWaveform, waveformRefreshKey]);
 
@@ -495,9 +601,42 @@ const AudioCard = ({
 
   useEffect(() => {
     wavesurferRef.current?.setOptions({
-      progressColor: isActive ? '#5e9ec5' : '#525252',
+      progressColor: hasStartedPlayback ? (isActive ? '#3680e9' : '#525252') : '#727479',
+      cursorWidth: hasStartedPlayback ? 1 : 0,
     });
-  }, [isActive]);
+  }, [hasStartedPlayback, isActive]);
+
+  useEffect(() => {
+    if (!shouldRenderWaveform || !waveformRef.current) return;
+
+    let resizeTimer: number | undefined;
+    const updateResponsiveWaveformSize = () => {
+      if (resizeTimer) {
+        window.clearTimeout(resizeTimer);
+      }
+      resizeTimer = window.setTimeout(() => {
+        const nextHeight = getResponsiveWaveformHeight();
+        if (nextHeight !== waveformHeightRef.current) {
+          waveformHeightRef.current = nextHeight;
+          wavesurferRef.current?.setOptions({ height: nextHeight });
+        }
+      }, 100);
+    };
+
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(updateResponsiveWaveformSize)
+      : undefined;
+    resizeObserver?.observe(waveformRef.current);
+    window.addEventListener('resize', updateResponsiveWaveformSize);
+
+    return () => {
+      if (resizeTimer) {
+        window.clearTimeout(resizeTimer);
+      }
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', updateResponsiveWaveformSize);
+    };
+  }, [shouldRenderWaveform]);
 
   const handleUserRatingChange = async (newRating: number, userId = currentUser.id) => {
     const res = await fetch(`/api/files/${encodeURIComponent(file.id)}/rating`, {
@@ -631,6 +770,8 @@ const AudioCard = ({
   const seekAndPlayComment = (timestamp: number) => {
     if (!wavesurferRef.current || !markerDuration) return;
 
+    setHasStartedPlayback(true);
+    tracksStartedFromWaveformClick.add(file.id);
     wavesurferRef.current.seekTo(Math.min(1, Math.max(0, timestamp / markerDuration)));
     setCurrentTime(timestamp);
     wavesurferRef.current.play();
@@ -648,9 +789,36 @@ const AudioCard = ({
       : 0;
 
     tracksStartedFromWaveformClick.add(file.id);
+    setHasStartedPlayback(true);
     wavesurfer.seekTo(progress);
-    setCurrentTime((duration || file.waveformDuration || 0) * progress);
+    const currentDuration = wavesurfer.getDuration() || duration || file.waveformDuration || 0;
+    setDuration(currentDuration);
+    setCurrentTime(currentDuration * progress);
     wavesurfer.play();
+  };
+
+  const handleCardPlayButton = () => {
+    const wavesurfer = wavesurferRef.current;
+    if (!wavesurfer) {
+      playWhenReadyRef.current = true;
+      tracksStartedFromWaveformClick.add(file.id);
+      setHasStartedPlayback(true);
+      setShouldMountWaveform(true);
+      return;
+    }
+
+    if (wavesurfer.isPlaying()) {
+      wavesurfer.pause();
+      return;
+    }
+
+    if (!tracksStartedFromWaveformClick.has(file.id)) {
+      tracksStartedFromWaveformClick.add(file.id);
+      setHasStartedPlayback(true);
+      wavesurfer.seekTo(0);
+      setCurrentTime(0);
+    }
+    void wavesurfer.play();
   };
 
   const addComment = async () => {
@@ -758,8 +926,8 @@ const AudioCard = ({
       if (!saveRes.ok) throw new Error('Failed to save waveform');
 
       initialWaveformCacheRef.current = {
-        peaks: waveformPeaks,
-        duration: audioBuffer.duration,
+        peaks: USE_CACHED_WAVEFORM_RENDERING ? waveformPeaks : undefined,
+        duration: USE_CACHED_WAVEFORM_RENDERING ? audioBuffer.duration : undefined,
       };
       setDuration(audioBuffer.duration);
       setCurrentTime(0);
@@ -782,7 +950,12 @@ const AudioCard = ({
   const displayedAdamRating = hoveredAdamRating || adamRating;
   const currentUserRating = file.ratings?.[currentUser.id] || file.userRating || 0;
   const displayedUserRating = hoveredUserRating || currentUserRating;
-  const friendRatings = accountUsers.filter(user => user.id !== 'adam' && (file.ratings?.[user.id] || 0) > 0);
+  const otherUserRatings = currentUser.isAdmin
+    ? accountUsers
+        .filter(user => user.id !== 'adam')
+        .map(user => ({ user, rating: file.ratings?.[user.id] || 0 }))
+        .filter(({ rating }) => rating > 0)
+    : [];
   const instrumentChoices = Array.from(new Set([...instruments, ...instrumentOptions]));
   const vibeChoices = Array.from(new Set([...vibes, ...vibeOptions]));
   const collectionChoices = Array.from(new Set([...collections, ...collectionOptions]));
@@ -793,9 +966,9 @@ const AudioCard = ({
   );
   const hasComments = comments.length > 0;
   const hasCollections = collections.length > 0;
-  const colorTags = (file.colorTags || []).filter(color => FINDER_COLOR_HEX[color]);
   const durationLabel = formatDuration(duration || file.waveformDuration);
   const playheadLabel = formatDuration(currentTime) || '0:00';
+  const timeLabel = hasStartedPlayback ? `${playheadLabel}/${durationLabel}` : durationLabel;
   const markerDuration = duration || file.waveformDuration || 0;
   const highlightedCommentId = useMemo(() => {
     const closestComment = comments.reduce<AudioComment | null>((closest, comment) => {
@@ -808,186 +981,505 @@ const AudioCard = ({
   }, [comments, currentTime]);
 
   return (
-    <div ref={cardRef} className="relative overflow-hidden rounded-md border border-border/70 bg-[#1d1f1d] p-3 shadow-[0_18px_50px_rgba(0,0,0,0.24)] scroll-mt-24 sm:p-4">
-      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-accent/35 to-transparent" />
-      <div className="grid gap-4 md:grid-cols-[minmax(240px,0.82fr)_minmax(420px,1.45fr)] md:items-center">
-        <div className="order-2 min-w-0 flex-1 md:order-1">
-          <div className="mb-3">
-            <div className="flex items-start gap-2">
-              <button
-                type="button"
-                onClick={toggleLike}
-                className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded border transition sm:mt-1 sm:h-7 sm:w-7 ${
-                  file.liked
-                    ? 'border-red-400/50 bg-red-400/10 text-red-400'
-                    : 'border-border/60 text-muted-foreground hover:text-red-300'
-                }`}
-                aria-label={file.liked ? `Unlike ${file.name}` : `Like ${file.name}`}
-                title={file.liked ? 'Liked' : 'Like'}
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
-                  <path
-                    d="M12 20s-7.5-4.6-9.4-9.1C1.2 7.5 3.1 4 6.6 4c2 0 3.4 1 4.2 2.2C11.6 5 13 4 15 4c3.5 0 5.4 3.5 4 6.9C17.5 15.4 12 20 12 20z"
-                    fill={file.liked ? 'currentColor' : 'none'}
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </button>
-              <div className="min-w-0 flex-1">
-                {isRenaming ? (
-                  <input
-                    type="text"
-                    value={renameDraft}
-                    onChange={(event) => setRenameDraft(event.target.value)}
-                    onBlur={saveRename}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') void saveRename();
-                      if (event.key === 'Escape') {
+    <div ref={cardRef} className="relative border-b border-border/70 bg-[#10181e]/92 px-3 py-3 scroll-mt-24 transition hover:bg-[#11191f] sm:px-4 md:px-6">
+      <div className="grid gap-3 md:grid-cols-[2.75rem_minmax(0,1fr)] md:items-start md:gap-3">
+        <div className="relative z-40 order-1 flex items-center justify-between gap-3 md:hidden">
+          <span className="truncate text-[11px] font-light text-muted-foreground opacity-75 md:hidden" title={`Recorded ${formatCreatedDate(file)}`}>
+            {[finish ? displayTag(finish) : '', file.year || 'N/A'].filter(Boolean).join(' - ')}
+          </span>
+          <button
+            type="button"
+            onClick={handleCardPlayButton}
+            className={`relative z-40 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition md:hidden ${
+              isActive
+                ? 'border-accent/60 bg-accent/15 text-accent'
+                : 'border-border/70 bg-background/55 text-foreground hover:border-accent/45 hover:text-accent'
+            }`}
+            aria-label={isCardPlaying ? `Pause ${file.name}` : `Play ${file.name}`}
+            title={isCardPlaying ? `Pause ${file.name}` : `Play ${file.name}`}
+          >
+            {isCardPlaying ? (
+              <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M5.5 4.5h3v11h-3zm6 0h3v11h-3z" />
+              </svg>
+            ) : (
+              <svg className="ml-0.5 h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M7 4.5v11l9-5.5-9-5.5z" />
+              </svg>
+            )}
+          </button>
+        </div>
+
+        <div className="relative z-40 order-2 hidden md:flex md:justify-center md:pt-0">
+          <button
+            type="button"
+            onClick={handleCardPlayButton}
+            className={`relative z-40 flex h-9 w-9 items-center justify-center rounded-full border transition ${
+              isActive
+                ? 'border-accent/60 bg-accent/15 text-accent'
+                : 'border-border/70 bg-background/55 text-foreground hover:border-accent/45 hover:text-accent'
+            }`}
+            aria-label={isCardPlaying ? `Pause ${file.name}` : `Play ${file.name}`}
+            title={isCardPlaying ? `Pause ${file.name}` : `Play ${file.name}`}
+          >
+            {isCardPlaying ? (
+              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M5.5 4.5h3v11h-3zm6 0h3v11h-3z" />
+              </svg>
+            ) : (
+              <svg className="ml-0.5 h-4 w-4" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M7 4.5v11l9-5.5-9-5.5z" />
+              </svg>
+            )}
+          </button>
+        </div>
+
+        <div className="relative order-3 min-w-0">
+          <div className="relative z-20 flex min-w-0 items-start gap-2 md:pr-44">
+            <div className="min-w-0 flex-1">
+              {isRenaming ? (
+                <input
+                  type="text"
+                  value={renameDraft}
+                  onChange={(event) => setRenameDraft(event.target.value)}
+                  onBlur={saveRename}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void saveRename();
+                    if (event.key === 'Escape') {
+                      setRenameDraft(file.name);
+                      setIsRenaming(false);
+                    }
+                  }}
+                  className="w-full rounded border border-accent/50 bg-background/80 px-2 py-1 text-base font-semibold text-foreground outline-none"
+                  autoFocus
+                />
+              ) : (
+                <div className="inline-flex max-w-full min-w-0 items-baseline gap-2 rounded bg-[#0b0f14]/25 px-2 py-0.5 shadow-[0_0_9px_rgba(11,15,20,0.22)] backdrop-blur-[1px]">
+                  <h2 className="min-w-0 truncate text-xl font-semibold leading-8 text-foreground md:text-2xl">
+                    {file.name}
+                  </h2>
+                  {file.originalName && file.originalName !== file.name && (
+                    <span className="hidden min-w-0 truncate text-sm font-light text-muted-foreground/70 sm:block">
+                      ({file.originalName})
+                    </span>
+                  )}
+                  {currentUser.isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
                         setRenameDraft(file.name);
-                        setIsRenaming(false);
-                      }
-                    }}
-                    className="w-full rounded border border-accent/50 bg-background/80 px-2 py-1 text-lg font-semibold text-foreground outline-none sm:text-xl"
-                    autoFocus
-                  />
-                ) : (
-                  <div className="flex min-w-0 items-start gap-2">
-                    <div className="min-w-0">
-                      <h2 className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-lg font-semibold text-foreground sm:text-xl">
-                        <span className="break-words">{file.name}</span>
-                        {file.originalName && file.originalName !== file.name && (
-                          <span className="break-all text-[11px] font-light text-muted-foreground opacity-65 sm:text-xs">
-                            ({file.originalName})
-                          </span>
-                        )}
-                      </h2>
-                    </div>
-                    {currentUser.isAdmin && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRenameDraft(file.name);
-                          setIsRenaming(true);
-                        }}
-                        className="mt-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-border/60 text-muted-foreground opacity-70 transition hover:border-border hover:text-foreground hover:opacity-100"
-                        title="Rename file"
-                        aria-label={`Rename ${file.name}`}
-                      >
-                        <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m16.9 4.7 2.4 2.4M4 20h4.8L20 8.8a1.7 1.7 0 0 0 0-2.4L17.6 4a1.7 1.7 0 0 0-2.4 0L4 15.2V20z" />
-                        </svg>
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
+                        setIsRenaming(true);
+                      }}
+                      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-border/60 text-muted-foreground opacity-60 transition hover:border-border hover:text-foreground hover:opacity-100"
+                      title="Rename file"
+                      aria-label={`Rename ${file.name}`}
+                    >
+                      <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m16.9 4.7 2.4 2.4M4 20h4.8L20 8.8a1.7 1.7 0 0 0 0-2.4L17.6 4a1.7 1.7 0 0 0-2.4 0L4 15.2V20z" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
-          <div className="mb-3 space-y-2">
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                {instruments.length === 0 && (
-                  <span className="text-xs font-light text-muted-foreground opacity-70">Instruments</span>
-                )}
-                {instruments.map(tag => (
+          <div className="hidden absolute right-52 top-0 z-30 overflow-hidden rounded border border-border/70 bg-[#0f171c]/80 opacity-70 shadow-sm backdrop-blur transition hover:opacity-90">
+            <button
+              type="button"
+              onClick={handleVolumeBoostClick}
+              className={`min-h-8 px-3 py-1 text-xs font-medium leading-none transition ${
+                isVolumeBoosted
+                  ? 'bg-accent/15 text-accent'
+                  : volumeBoostConfirming
+                    ? 'bg-accent/10 text-accent'
+                    : 'text-muted-foreground hover:text-foreground'
+              }`}
+              title={`Boost this song by ${VOL_BOOST_DB} dB`}
+            >
+              {isVolumeBoosted ? `+${VOL_BOOST_DB} dB` : volumeBoostConfirming ? 'Confirm' : 'Vol Boost'}
+            </button>
+          </div>
+          <div className="absolute right-52 top-0 z-30 hidden overflow-hidden rounded border border-border/70 bg-[#0f171c]/80 opacity-70 shadow-sm backdrop-blur transition hover:opacity-90 md:inline-flex">
+            <button
+              type="button"
+              onClick={refreshWaveform}
+              disabled={waveformRefreshing}
+              className="inline-flex h-8 w-9 items-center justify-center text-muted-foreground transition hover:text-foreground disabled:opacity-35"
+              title="Refresh waveform"
+              aria-label={`Refresh waveform for ${file.name}`}
+            >
+              <svg className={`h-3.5 w-3.5 ${waveformRefreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 11a8.1 8.1 0 0 0-15.5-2M4 5v4h4m-4 4a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" />
+              </svg>
+            </button>
+          </div>
+
+          <div className="relative mt-1 min-h-40 min-w-0 sm:min-h-36 md:-ml-[3.25rem] md:-mt-5 md:w-[calc(100%+3.25rem)] md:min-h-[118px]">
+            <div className="hidden absolute right-0 top-0 z-10 overflow-hidden rounded border border-border/70 bg-[#0f171c]/80 opacity-70 shadow-sm backdrop-blur transition hover:opacity-90">
+              <button
+                type="button"
+                onClick={handleVolumeBoostClick}
+                className={`min-h-8 px-3 py-1 text-xs font-medium leading-none transition ${
+                  isVolumeBoosted
+                    ? 'bg-accent/15 text-accent'
+                    : volumeBoostConfirming
+                      ? 'bg-accent/10 text-accent'
+                      : 'text-muted-foreground hover:text-foreground'
+                }`}
+                title={`Boost this song by ${VOL_BOOST_DB} dB`}
+              >
+                {isVolumeBoosted ? `+${VOL_BOOST_DB} dB` : volumeBoostConfirming ? 'Confirm' : 'Vol Boost'}
+              </button>
+            </div>
+            <div className="absolute right-0 top-0 z-10 inline-flex overflow-hidden rounded border border-border/70 bg-[#0f171c]/80 opacity-70 shadow-sm backdrop-blur transition hover:opacity-90 md:hidden">
+              <button
+                type="button"
+                onClick={refreshWaveform}
+                disabled={waveformRefreshing}
+                className="inline-flex h-8 w-9 items-center justify-center text-muted-foreground transition hover:text-foreground disabled:opacity-35"
+                title="Refresh waveform"
+                aria-label={`Refresh waveform for ${file.name}`}
+              >
+                <svg className={`h-3.5 w-3.5 ${waveformRefreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 11a8.1 8.1 0 0 0-15.5-2M4 5v4h4m-4 4a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" />
+                </svg>
+              </button>
+            </div>
+            <div 
+              ref={waveformRef} 
+              className="min-h-40 w-full cursor-pointer pt-8 sm:min-h-36 md:min-h-[118px] md:pt-2" 
+              onClick={handleWaveformClick}
+            >
+              {!shouldRenderWaveform && (
+                <div className="flex h-32 w-full items-center justify-center text-xs text-muted-foreground/75 md:h-24">
+                  Waveform loads on scroll
+                </div>
+              )}
+            </div>
+            {durationLabel && (
+              <span className="pointer-events-none absolute bottom-10 right-0 z-30 rounded bg-[#0b0f14]/80 px-1.5 py-0.5 text-sm font-light text-muted-foreground/90 shadow-sm backdrop-blur md:bottom-8">
+                {timeLabel}
+              </span>
+            )}
+            {markerDuration > 0 && comments.some(comment => typeof comment.timestamp === 'number') && (
+              <div className="pointer-events-none absolute inset-x-0 top-8 z-20 h-[calc(100%-2.25rem)] md:top-2 md:h-[calc(100%-0.75rem)]">
+                {comments.filter(comment => typeof comment.timestamp === 'number').map(comment => (
                   <button
-                    key={tag}
+                    key={comment.id}
                     type="button"
-                    className="rounded border border-border/65 bg-[#252824] px-2 py-1.5 text-xs text-muted-foreground shadow-inner shadow-black/10"
+                    onPointerDown={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                    }}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setShowComments(true);
+                      if (typeof comment.timestamp === 'number') {
+                        seekAndPlayComment(comment.timestamp);
+                      }
+                    }}
+                    className="group pointer-events-auto absolute bottom-2 flex h-[88%] w-7 -translate-x-1/2 items-end justify-center rounded-sm transition hover:bg-accent/10 sm:w-5"
+                    style={{ left: `${Math.min(100, Math.max(0, ((comment.timestamp || 0) / markerDuration) * 100))}%` }}
+                    title={`${comment.userName}: ${comment.text}`}
+                    aria-label={`Open comment from ${comment.userName}`}
                   >
-                    {displayTag(tag)}
+                    <span className="absolute bottom-0 top-2 w-px rounded-full bg-accent/45" />
+                    <span className="relative h-3.5 w-3.5 rounded-full border border-background/80 bg-accent/80 shadow-sm transition group-hover:bg-accent" />
                   </button>
                 ))}
-                {currentUser.isAdmin && (
+              </div>
+            )}
+          </div>
+
+          <div className="relative z-20 mt-2 grid gap-3 md:-ml-[3.25rem] md:-mt-5 md:w-[calc(100%+3.25rem)] md:block">
+            <div className="min-w-0 space-y-1.5 md:pb-1 md:pr-[20rem]">
+              <div className="flex items-center gap-1.5">
+                {currentUser.isAdmin ? (
                   <button
                     type="button"
                     onClick={() => setOpenTagPicker(prev => prev === 'instruments' ? null : 'instruments')}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded border border-border/70 bg-[#252824] text-sm text-muted-foreground transition hover:border-accent/50 hover:text-foreground sm:h-6 sm:w-6"
+                    className="group inline-flex h-6 w-8 shrink-0 items-center justify-center rounded text-muted-foreground/75 transition hover:bg-muted/35 hover:text-foreground"
                     aria-label={`Add instrument tag to ${file.name}`}
+                    title="Add instrument tag"
                   >
-                    {openTagPicker === 'instruments' ? '-' : '+'}
+                    <svg className="h-4 w-4 overflow-visible transition group-hover:hidden" viewBox="-18 -18 548 548" fill="currentColor" aria-hidden="true">
+                      <path d="M502.7 39.02L473 9.37c-12.5-12.5-32.74-12.49-45.24 .0106l-46.24 46.37c-3.875 3.875-6.848 8.506-8.598 13.76l-12.19 36.51L284.5 182.3C272.4 173.5 259 166.5 244.4 163.1C211 155.4 177.4 162.3 154.5 185.1C145.3 194.5 138.3 206 134.3 218.6C128.3 237.1 111.1 251.3 92.14 253C68.52 255.4 46.39 264.5 29.52 281.5c-45.62 45.5-37.38 127.5 18.12 183c55.37 55.38 137.4 63.51 182.9 18c16.1-16.88 26.25-38.85 28.5-62.72c1.75-18.75 15.84-36.16 34.47-42.16c12.5-3.875 24.03-10.87 33.4-20.25c22.87-22.88 29.75-56.38 21.1-89.76c-3.375-14.63-10.39-27.99-19.14-40.11l76.25-76.26l36.53-12.17c5.125-1.75 9.894-4.715 13.77-8.59l46.36-46.29C515.2 71.72 515.2 51.52 502.7 39.02zM208 352c-26.5 0-48-21.5-48-48c0-26.5 21.5-48 48-48s47.1 21.5 47.1 48C256 330.5 234.5 352 208 352z" />
+                    </svg>
+                    <span className="hidden text-base leading-none group-hover:inline">{openTagPicker === 'instruments' ? '-' : '+'}</span>
                   </button>
+                ) : (
+                  <span className="inline-flex h-6 w-8 shrink-0 items-center justify-center text-muted-foreground/75" title="Instruments" aria-label="Instruments">
+                    <svg className="h-4 w-4 overflow-visible" viewBox="-18 -18 548 548" fill="currentColor" aria-hidden="true">
+                      <path d="M502.7 39.02L473 9.37c-12.5-12.5-32.74-12.49-45.24 .0106l-46.24 46.37c-3.875 3.875-6.848 8.506-8.598 13.76l-12.19 36.51L284.5 182.3C272.4 173.5 259 166.5 244.4 163.1C211 155.4 177.4 162.3 154.5 185.1C145.3 194.5 138.3 206 134.3 218.6C128.3 237.1 111.1 251.3 92.14 253C68.52 255.4 46.39 264.5 29.52 281.5c-45.62 45.5-37.38 127.5 18.12 183c55.37 55.38 137.4 63.51 182.9 18c16.1-16.88 26.25-38.85 28.5-62.72c1.75-18.75 15.84-36.16 34.47-42.16c12.5-3.875 24.03-10.87 33.4-20.25c22.87-22.88 29.75-56.38 21.1-89.76c-3.375-14.63-10.39-27.99-19.14-40.11l76.25-76.26l36.53-12.17c5.125-1.75 9.894-4.715 13.77-8.59l46.36-46.29C515.2 71.72 515.2 51.52 502.7 39.02zM208 352c-26.5 0-48-21.5-48-48c0-26.5 21.5-48 48-48s47.1 21.5 47.1 48C256 330.5 234.5 352 208 352z" />
+                    </svg>
+                  </span>
                 )}
-              </div>
-              {currentUser.isAdmin && openTagPicker === 'instruments' && (
-                <div className="mt-2 flex flex-wrap gap-2 rounded border border-border/70 bg-[#181a18] p-2">
-                  {instrumentChoices.length > 0 ? instrumentChoices.map(tag => {
-                    const selected = instruments.includes(tag);
-                    return (
+                <div
+                  className="flex min-w-0 flex-1 cursor-grab touch-pan-x select-none items-center gap-1.5 overflow-x-auto active:cursor-grabbing [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  onWheel={handleTagRowWheel}
+                  onPointerDown={handleTagRowPointerDown}
+                >
+                  {instruments.length === 0 ? (
+                    <span className="shrink-0 text-xs font-light text-muted-foreground/65">None</span>
+                  ) : instruments.map(tag => (
                     <button
-                      key={tag}
+                      key={`instrument-${tag}`}
                       type="button"
-                      onClick={() => toggleTag('instruments', tag)}
-                      className={`rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
-                        selected
-                          ? 'border-accent/50 bg-accent/15 text-accent'
-                          : 'border-border bg-background text-muted-foreground hover:text-foreground'
-                      }`}
+                      className="pointer-events-none shrink-0 rounded border border-border/70 bg-muted/35 px-2 py-0.5 text-xs text-[#7fa6c9] shadow-inner shadow-black/10"
                     >
                       {displayTag(tag)}
                     </button>
-                    );
-                  }) : (
-                    <span className="text-xs text-muted-foreground">No more instrument tags</span>
-                  )}
+                  ))}
                 </div>
-              )}
-            </div>
-            <div className="border-t border-border/40 pt-2 sm:w-fit sm:min-w-48 sm:max-w-full sm:pr-8">
-              <div className="flex flex-wrap items-center gap-2">
-                {vibes.length === 0 && (
-                  <span className="text-xs font-light text-muted-foreground opacity-70">Vibes</span>
-                )}
-                {vibes.map(tag => (
-                  <button
-                    key={tag}
-                    type="button"
-                    className="rounded border border-border/65 bg-[#252824] px-2 py-1.5 text-xs text-muted-foreground shadow-inner shadow-black/10"
-                  >
-                    {displayTag(tag)}
-                  </button>
-                ))}
-                {currentUser.isAdmin && (
+              </div>
+              <div className="flex items-center gap-1.5">
+                {currentUser.isAdmin ? (
                   <button
                     type="button"
                     onClick={() => setOpenTagPicker(prev => prev === 'vibes' ? null : 'vibes')}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded border border-border/70 bg-[#252824] text-sm text-muted-foreground transition hover:border-accent/50 hover:text-foreground sm:h-6 sm:w-6"
+                    className="group inline-flex h-6 w-8 shrink-0 items-center justify-center rounded text-muted-foreground/75 transition hover:bg-muted/35 hover:text-foreground"
                     aria-label={`Add vibe tag to ${file.name}`}
+                    title="Add vibe tag"
                   >
-                    {openTagPicker === 'vibes' ? '-' : '+'}
+                    <svg className="h-4 w-4 transition group-hover:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M3 8c3.2-3 5.8 3 9 0s5.8 3 9 0" />
+                      <path d="M3 14c3.2-3 5.8 3 9 0s5.8 3 9 0" />
+                      <path d="M3 20c3.2-3 5.8 3 9 0s5.8 3 9 0" />
+                    </svg>
+                    <span className="hidden text-base leading-none group-hover:inline">{openTagPicker === 'vibes' ? '-' : '+'}</span>
                   </button>
+                ) : (
+                  <span className="inline-flex h-6 w-8 shrink-0 items-center justify-center text-muted-foreground/75" title="Vibe" aria-label="Vibe">
+                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M3 8c3.2-3 5.8 3 9 0s5.8 3 9 0" />
+                      <path d="M3 14c3.2-3 5.8 3 9 0s5.8 3 9 0" />
+                      <path d="M3 20c3.2-3 5.8 3 9 0s5.8 3 9 0" />
+                    </svg>
+                  </span>
                 )}
-              </div>
-              {currentUser.isAdmin && openTagPicker === 'vibes' && (
-                <div className="mt-2 flex flex-wrap gap-2 rounded border border-border/70 bg-[#181a18] p-2">
-                  {vibeChoices.length > 0 ? vibeChoices.map(tag => {
-                    const selected = vibes.includes(tag);
-                    return (
+                <div
+                  className="flex min-w-0 flex-1 cursor-grab touch-pan-x select-none items-center gap-1.5 overflow-x-auto active:cursor-grabbing [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  onWheel={handleTagRowWheel}
+                  onPointerDown={handleTagRowPointerDown}
+                >
+                  {vibes.length === 0 ? (
+                    <span className="shrink-0 text-xs font-light text-muted-foreground/65">None</span>
+                  ) : vibes.map(tag => (
                     <button
-                      key={tag}
+                      key={`vibe-${tag}`}
                       type="button"
-                      onClick={() => toggleTag('vibes', tag)}
-                      className={`rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
-                        selected
-                          ? 'border-accent/50 bg-accent/15 text-accent'
-                          : 'border-border bg-background text-muted-foreground hover:text-foreground'
-                      }`}
+                      className="pointer-events-none shrink-0 rounded border border-border/70 bg-muted/35 px-2 py-0.5 text-xs text-[#7fa6c9] shadow-inner shadow-black/10"
                     >
                       {displayTag(tag)}
                     </button>
-                    );
-                  }) : (
-                    <span className="text-xs text-muted-foreground">No more vibe tags</span>
-                  )}
+                  ))}
                 </div>
+              </div>
+            </div>
+
+            <div className="pointer-events-none absolute bottom-0 right-[18rem] z-10 hidden h-14 w-20 bg-gradient-to-r from-transparent via-[#10181e]/85 to-[#10181e] md:block" />
+            <div className="pointer-events-none absolute bottom-0 right-0 z-10 hidden h-14 w-[18rem] bg-[#10181e] md:block" />
+            <div className="flex w-full max-w-full flex-wrap gap-3 md:absolute md:bottom-0 md:right-0 md:z-20 md:w-auto md:justify-end">
+              <div className="inline-flex max-w-full overflow-hidden rounded border border-border/70 bg-[#0f171c] shadow-[0_0_16px_rgba(16,24,30,0.85)]">
+                <button
+                  type="button"
+                  onClick={toggleLike}
+                  className={`inline-flex items-center justify-center border-r border-border/70 px-3 py-1.5 text-sm transition ${
+                    file.liked
+                      ? 'bg-red-400/10 text-red-300 hover:bg-red-400/15'
+                      : 'text-muted-foreground hover:text-red-300'
+                  }`}
+                  aria-label={file.liked ? `Unlike ${file.name}` : `Like ${file.name}`}
+                  title={file.liked ? 'Liked' : 'Like'}
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M12 20.25c-.32-.26-.78-.61-1.34-1.05C5.95 15.48 3.5 12.72 3.5 9.35 3.5 6.68 5.42 4.75 8 4.75c1.55 0 3.03.77 4 2.05.97-1.28 2.45-2.05 4-2.05 2.58 0 4.5 1.93 4.5 4.6 0 3.37-2.45 6.13-7.16 9.85-.56.44-1.02.79-1.34 1.05Z"
+                      fill={file.liked ? 'currentColor' : 'none'}
+                      stroke="currentColor"
+                      strokeWidth="1.75"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+                {(currentUser.isAdmin || hasNotes) && (
+                  <button
+                    type="button"
+                    onClick={() => setShowNotes(prev => !prev)}
+                    className={`inline-flex items-center gap-2 border-r border-border/70 px-4 py-1.5 text-sm transition ${
+                      hasNotes
+                        ? 'bg-accent/10 text-accent hover:bg-accent/15'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M8 6h8M8 10h8M8 14h5M5 3h14v18H5z" />
+                    </svg>
+                    Notes
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowComments(prev => !prev)}
+                  className={`inline-flex items-center gap-2 border-r border-border/70 px-4 py-1.5 text-sm transition ${
+                    hasComments
+                      ? 'bg-accent/10 text-accent hover:bg-accent/15'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v6A2.5 2.5 0 0 1 17.5 15H10l-4.5 4v-4A2.5 2.5 0 0 1 4 12.5z" />
+                  </svg>
+                  Comments {comments.length}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCollections(prev => !prev)}
+                  className={`inline-flex items-center gap-2 px-4 py-1.5 text-sm transition ${
+                    hasCollections
+                      ? 'bg-accent/10 text-accent hover:bg-accent/15'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M3.5 7.5h6l2 2h9v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" />
+                  </svg>
+                  Collections
+                </button>
+              </div>
+              {file.stems && (
+                <a
+                  href={`/api/files/${encodeURIComponent(file.id)}/stems`}
+                  download={file.stems.name}
+                  className="inline-flex items-center gap-2 rounded border border-border/70 bg-background/35 px-4 py-1.5 text-sm text-muted-foreground transition hover:text-foreground"
+                  title={file.stems.name}
+                >
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M12 3v11m0 0 4-4m-4 4-4-4M5 19h14" />
+                  </svg>
+                  Stems
+                </a>
               )}
             </div>
           </div>
-          <div className="mt-3 grid grid-cols-[4.75rem_auto] items-center gap-x-3 gap-y-1 rounded border border-border/35 bg-[#181a18]/70 p-2 sm:grid-cols-[4.75rem_auto]">
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Adam&apos;s</span>
+
+          {currentUser.isAdmin && openTagPicker === 'instruments' && (
+            <div className="mt-2 flex flex-wrap gap-2 rounded border border-border/70 bg-background/60 p-2">
+              {instrumentChoices.length > 0 ? instrumentChoices.map(tag => {
+                const selected = instruments.includes(tag);
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => toggleTag('instruments', tag)}
+                    className={`rounded border px-2 py-1 text-xs transition ${
+                      selected
+                        ? 'border-accent/40 bg-accent/10 text-[#7fa6c9]'
+                        : 'border-border bg-background text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {displayTag(tag)}
+                  </button>
+                );
+              }) : (
+                <span className="text-xs text-muted-foreground">No more instrument tags</span>
+              )}
+            </div>
+          )}
+          {currentUser.isAdmin && openTagPicker === 'vibes' && (
+            <div className="mt-2 flex flex-wrap gap-2 rounded border border-border/70 bg-background/60 p-2">
+              {vibeChoices.length > 0 ? vibeChoices.map(tag => {
+                const selected = vibes.includes(tag);
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => toggleTag('vibes', tag)}
+                    className={`rounded border px-2 py-1 text-xs transition ${
+                      selected
+                        ? 'border-accent/40 bg-accent/10 text-[#7fa6c9]'
+                        : 'border-border bg-background text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {displayTag(tag)}
+                  </button>
+                );
+              }) : (
+                <span className="text-xs text-muted-foreground">No more vibe tags</span>
+              )}
+            </div>
+          )}
+
+          <div className="mt-3 grid grid-cols-[4.75rem_auto] items-center gap-x-3 gap-y-1 rounded border border-border/35 bg-background/45 p-2 md:hidden">
+            <span className="text-xs font-light text-muted-foreground">Adam&apos;s</span>
             <div className="flex items-center">
+              {[1, 2, 3, 4, 5].map((star) => (
+                currentUser.isAdmin ? (
+                  <button
+                    key={star}
+                    type="button"
+                    onClick={() => handleUserRatingChange(star, 'adam')}
+                    onMouseEnter={() => setHoveredAdamRating(star)}
+                    onMouseLeave={() => setHoveredAdamRating(0)}
+                    className={`inline-flex h-8 w-7 items-center justify-center ${star <= displayedAdamRating ? adamRatingColorClass : emptyRatingColorClass}`}
+                    aria-label={`Set Adam's rating to ${star} stars`}
+                    title={`Set Adam's rating to ${star}`}
+                  >
+                    <StarIcon filled={star <= displayedAdamRating} />
+                  </button>
+                ) : (
+                  <span
+                    key={star}
+                    className={`inline-flex h-8 w-7 items-center justify-center ${star <= adamRating ? adamRatingColorClass : emptyRatingColorClass}`}
+                  >
+                    <StarIcon filled={star <= adamRating} />
+                  </span>
+                )
+              ))}
+            </div>
+            {currentUser.isAdmin ? (
+              otherUserRatings.map(({ user, rating }) => (
+                <Fragment key={user.id}>
+                  <span className="truncate text-xs font-light text-muted-foreground" title={user.name}>{user.name}</span>
+                  <div className="flex items-center">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <span
+                        key={star}
+                        className={`inline-flex h-8 w-7 items-center justify-center ${star <= rating ? userRatingColorClass : emptyRatingColorClass}`}
+                      >
+                        <StarIcon filled={star <= rating} />
+                      </span>
+                    ))}
+                  </div>
+                </Fragment>
+              ))
+            ) : (
+              <>
+                <span className="text-xs font-light text-muted-foreground">Your&apos;s</span>
+                <div className="flex items-center">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      type="button"
+                      onClick={() => handleUserRatingChange(star)}
+                      onMouseEnter={() => setHoveredUserRating(star)}
+                      onMouseLeave={() => setHoveredUserRating(0)}
+                      className={`inline-flex h-8 w-7 items-center justify-center ${star <= displayedUserRating ? userRatingColorClass : emptyRatingColorClass}`}
+                    >
+                      <StarIcon filled={star <= displayedUserRating} />
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="pointer-events-auto absolute right-4 top-3 z-40 hidden max-w-[11.5rem] rounded bg-[#0b0f14]/30 px-2 py-1.5 shadow-[0_0_12px_rgba(11,15,20,0.28)] backdrop-blur-[1px] md:grid md:grid-cols-[3.7rem_auto] md:items-center md:gap-x-2 md:gap-y-1">
+          <span className="text-xs font-light text-muted-foreground">Adam&apos;s</span>
+          <div className="flex items-center">
             {[1, 2, 3, 4, 5].map((star) => (
               currentUser.isAdmin ? (
                 <button
@@ -996,7 +1488,7 @@ const AudioCard = ({
                   onClick={() => handleUserRatingChange(star, 'adam')}
                   onMouseEnter={() => setHoveredAdamRating(star)}
                   onMouseLeave={() => setHoveredAdamRating(0)}
-                  className={`inline-flex h-9 w-8 items-center justify-center sm:h-6 sm:w-5 ${star <= displayedAdamRating ? getRatingColor(displayedAdamRating) : 'text-muted-foreground'}`}
+                  className={`inline-flex h-6 w-5 items-center justify-center ${star <= displayedAdamRating ? adamRatingColorClass : emptyRatingColorClass}`}
                   aria-label={`Set Adam's rating to ${star} stars`}
                   title={`Set Adam's rating to ${star}`}
                 >
@@ -1005,173 +1497,121 @@ const AudioCard = ({
               ) : (
                 <span
                   key={star}
-                  className={`inline-flex h-9 w-8 items-center justify-center sm:h-6 sm:w-5 ${star <= adamRating ? getRatingColor(adamRating) : 'text-muted-foreground'}`}
+                  className={`inline-flex h-6 w-5 items-center justify-center ${star <= adamRating ? adamRatingColorClass : emptyRatingColorClass}`}
                 >
                   <StarIcon filled={star <= adamRating} />
                 </span>
               )
             ))}
-            </div>
-            {currentUser.id !== 'adam' && (
-              <>
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Your&apos;s</span>
-            <div className="flex items-center">
-              {[1, 2, 3, 4, 5].map((star) => (
-                <button
-                  key={star}
-                  type="button"
-                  onClick={() => handleUserRatingChange(star)}
-                  onMouseEnter={() => setHoveredUserRating(star)}
-                  onMouseLeave={() => setHoveredUserRating(0)}
-                  className={`inline-flex h-9 w-8 items-center justify-center sm:h-6 sm:w-5 ${star <= displayedUserRating ? getRatingColor(displayedUserRating) : 'text-muted-foreground'}`}
-                >
-                  <StarIcon filled={star <= displayedUserRating} />
-                </button>
-              ))}
-            </div>
-              </>
-            )}
-            {currentUser.isAdmin && friendRatings.map(user => {
-              const rating = file.ratings?.[user.id] || 0;
-              return (
-                <div key={user.id} className="contents">
-                  <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{user.name}</span>
-                  <div className="flex items-center">
-                    {[1, 2, 3, 4, 5].map(star => (
-                      <span
-                        key={star}
-                        className={`inline-flex h-9 w-8 items-center justify-center sm:h-6 sm:w-5 ${star <= rating ? getRatingColor(rating) : 'text-muted-foreground'}`}
-                      >
-                        <StarIcon filled={star <= rating} />
-                      </span>
-                    ))}
-                  </div>
+          </div>
+          {currentUser.isAdmin ? (
+            otherUserRatings.map(({ user, rating }) => (
+              <Fragment key={user.id}>
+                <span className="truncate text-xs font-light text-muted-foreground" title={user.name}>{user.name}</span>
+                <div className="flex items-center">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <span
+                      key={star}
+                      className={`inline-flex h-6 w-5 items-center justify-center ${star <= rating ? userRatingColorClass : emptyRatingColorClass}`}
+                    >
+                      <StarIcon filled={star <= rating} />
+                    </span>
+                  ))}
                 </div>
-              );
-            })}
-          </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2 sm:gap-3">
-            {finish && (
-              <>
-                <span className="text-xs font-light text-muted-foreground opacity-70">{displayTag(finish)}</span>
-                <span className="text-xs font-light text-muted-foreground opacity-70">-</span>
-              </>
-            )}
-            <span className="text-xs font-light text-muted-foreground opacity-70" title={`Recorded ${formatCreatedDate(file)}`}>
-              {file.year || 'N/A'}
-            </span>
-            {(currentUser.isAdmin || hasNotes) && <button
-              type="button"
-              onClick={() => setShowNotes(prev => !prev)}
-              className={`rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-0.5 ${
-                hasNotes
-                  ? 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/15'
-                  : 'border-border/60 text-muted-foreground hover:border-border hover:text-foreground'
-              }`}
-            >
-              Notes
-            </button>}
-            <button
-              type="button"
-              onClick={() => setShowComments(prev => !prev)}
-              className={`rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-0.5 ${
-                hasComments
-                  ? 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/15'
-                  : 'border-border/60 text-muted-foreground hover:border-border hover:text-foreground'
-              }`}
-            >
-              Comments
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowCollections(prev => !prev)}
-              className={`rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-0.5 ${
-                hasCollections
-                  ? 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/15'
-                  : 'border-border/60 text-muted-foreground hover:border-border hover:text-foreground'
-              }`}
-            >
-              Collections
-            </button>
-            {file.stems && (
-              <a
-                href={`/api/files/${encodeURIComponent(file.id)}/stems`}
-                download={file.stems.name}
-                className="rounded border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent transition hover:bg-accent/15 sm:px-2 sm:py-0.5"
-                title={file.stems.name}
-              >
-                Stems
-              </a>
-            )}
-          </div>
-          <div className="mt-3 space-y-3 md:hidden">
-            {showNotes && (
+              </Fragment>
+            ))
+          ) : (
+            <>
+              <span className="text-xs font-light text-muted-foreground">Your&apos;s</span>
+              <div className="flex items-center">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    type="button"
+                    onClick={() => handleUserRatingChange(star)}
+                    onMouseEnter={() => setHoveredUserRating(star)}
+                    onMouseLeave={() => setHoveredUserRating(0)}
+                    className={`inline-flex h-6 w-5 items-center justify-center ${star <= displayedUserRating ? userRatingColorClass : emptyRatingColorClass}`}
+                  >
+                    <StarIcon filled={star <= displayedUserRating} />
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {(showNotes || showComments || showCollections) && (
+        <div className="mt-3 space-y-3">
+          {showNotes && (
+            <div>
+              {currentUser.isAdmin ? (
+                <textarea
+                  value={noteText}
+                  onChange={(event) => setNoteText(event.target.value)}
+                  onBlur={saveNotes}
+                  placeholder="Add notes..."
+                  className="min-h-24 w-full resize-y rounded-md border border-border/65 bg-background/65 p-3 text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus:border-accent"
+                />
+              ) : (
+                <div className="min-h-16 w-full whitespace-pre-wrap rounded-md border border-border/65 bg-background/55 p-3 text-sm text-muted-foreground">
+                  {noteText}
+                </div>
+              )}
+            </div>
+          )}
+          {showComments && (
+            <div className="overflow-hidden rounded-md bg-background/40">
               <div>
-                {currentUser.isAdmin ? (
-                  <textarea
-                    value={noteText}
-                    onChange={(event) => setNoteText(event.target.value)}
-                    onBlur={saveNotes}
-                    placeholder="Add notes..."
-                    className="min-h-24 w-full resize-y rounded border border-border bg-background/70 p-3 text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus:border-accent"
-                  />
-                ) : (
-                  <div className="min-h-16 w-full whitespace-pre-wrap rounded border border-border bg-background/50 p-3 text-sm text-muted-foreground">
-                    {noteText}
+                {comments.length > 0 ? comments.map(comment => (
+                  <div
+                    key={comment.id}
+                    className={`border-b border-border/45 p-3 text-sm transition last:border-b-0 ${
+                      highlightedCommentId === comment.id
+                        ? 'bg-accent/10'
+                        : 'bg-transparent'
+                    }`}
+                  >
+                    <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground" title={formatCommentDate(comment.createdAt)}>{comment.userName}</span>
+                      {typeof comment.timestamp === 'number' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (typeof comment.timestamp === 'number') {
+                              seekAndPlayComment(comment.timestamp);
+                            }
+                          }}
+                          className="text-accent hover:underline"
+                        >
+                          @{formatDuration(comment.timestamp)}
+                        </button>
+                      )}
+                      {comment.userId === currentUser.id && (
+                        <button
+                          type="button"
+                          onClick={() => deleteComment(comment.id)}
+                          className="ml-auto text-muted-foreground hover:text-red-400"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                    <p className="whitespace-pre-wrap text-muted-foreground">{comment.text}</p>
                   </div>
+                )) : (
+                  <p className="p-3 text-sm text-muted-foreground">No comments yet</p>
                 )}
               </div>
-            )}
-            {showComments && (
-              <div className="rounded border border-border bg-muted/40 p-3">
-                <div className="mb-3 space-y-2">
-                  {comments.length > 0 ? comments.map(comment => (
-                    <div
-                      key={comment.id}
-                      className={`rounded border p-2 text-sm transition ${
-                        highlightedCommentId === comment.id
-                          ? 'border-accent/60 bg-accent/10'
-                          : 'border-border/60 bg-background/60'
-                      }`}
-                    >
-                      <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                        <span className="font-medium text-foreground" title={formatCommentDate(comment.createdAt)}>{comment.userName}</span>
-                        {typeof comment.timestamp === 'number' && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (typeof comment.timestamp === 'number') {
-                                seekAndPlayComment(comment.timestamp);
-                              }
-                            }}
-                            className="text-accent hover:underline"
-                          >
-                            @{formatDuration(comment.timestamp)}
-                          </button>
-                        )}
-                        {comment.userId === currentUser.id && (
-                          <button
-                            type="button"
-                            onClick={() => deleteComment(comment.id)}
-                            className="ml-auto text-muted-foreground hover:text-red-400"
-                          >
-                            Delete
-                          </button>
-                        )}
-                      </div>
-                      <p className="whitespace-pre-wrap text-muted-foreground">{comment.text}</p>
-                    </div>
-                  )) : (
-                    <p className="text-sm text-muted-foreground">No comments yet</p>
-                  )}
-                </div>
+              <div className="border-t border-border/45 bg-background/55 p-3">
                 <textarea
                   value={newComment}
                   onChange={(event) => setNewComment(event.target.value)}
                   placeholder="Add a comment..."
-                  className="mb-2 min-h-20 w-full resize-y rounded border border-border bg-background/70 p-3 text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus:border-accent"
+                  className="min-h-20 w-full resize-y border-0 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
                 />
-                <div className="flex flex-wrap items-center gap-3">
+                <div className="mt-2 flex flex-wrap items-center gap-3">
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                     <input
                       type="checkbox"
@@ -1187,321 +1627,82 @@ const AudioCard = ({
                       value={commentTimecode}
                       onChange={(event) => setCommentTimecode(event.target.value)}
                       placeholder="1:23"
-                      className="min-h-9 w-28 rounded border border-border bg-background/70 px-2 py-1 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent sm:w-24 sm:text-xs"
+                      className="min-h-8 w-28 rounded border border-border/65 bg-background/65 px-2 py-1 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent sm:w-24 sm:text-xs"
                     />
                   )}
                   <button
                     type="button"
                     onClick={addComment}
                     disabled={!newComment.trim()}
-                    className="rounded bg-accent px-3 py-2 text-xs text-accent-foreground transition hover:bg-accent/90 disabled:opacity-50"
+                    className="ml-auto rounded bg-accent px-3 py-2 text-xs text-accent-foreground transition hover:bg-accent/90 disabled:opacity-50"
                   >
                     Add Comment
                   </button>
                 </div>
               </div>
-            )}
-            {showCollections && (
-              <div className="rounded border border-border bg-muted/40 p-3">
-                <div className="mb-3 flex flex-wrap gap-2">
-                  {collectionChoices.length > 0 ? collectionChoices.map(collection => {
-                    const selected = collections.includes(collection);
-                    return (
-                      <button
-                        key={collection}
-                        type="button"
-                        onClick={() => toggleCollection(collection)}
-                        className={`rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
-                          selected
-                            ? 'border-accent/50 bg-accent/15 text-accent'
-                            : 'border-border bg-background text-muted-foreground hover:text-foreground'
-                        }`}
-                      >
-                        {displayTag(collection)}
-                      </button>
-                    );
-                  }) : (
-                    <span className="text-xs text-muted-foreground">No collections yet</span>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setShowNewCollectionForm(prev => !prev)}
-                    className={`rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
-                      showNewCollectionForm
-                        ? 'border-accent/50 bg-accent/15 text-accent'
-                        : 'border-border bg-background text-muted-foreground hover:text-foreground'
-                    }`}
-                    aria-label={showNewCollectionForm ? 'Hide new collection form' : 'Add new collection'}
-                  >
-                    {showNewCollectionForm ? '-' : '+'}
-                  </button>
-                </div>
-                {showNewCollectionForm && (
-                  <div className="flex max-w-md">
-                    <input
-                      type="text"
-                      value={newCollection}
-                      onChange={(event) => setNewCollection(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') addCollection();
-                      }}
-                      placeholder="New collection"
-                      className="min-w-0 flex-1 rounded-l border border-border bg-background/70 p-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent sm:p-2"
-                    />
+            </div>
+          )}
+          {showCollections && (
+            <div className="rounded-md border border-border/65 bg-background/35 p-3">
+              <div className="mb-3 flex flex-wrap gap-2">
+                {collectionChoices.length > 0 ? collectionChoices.map(collection => {
+                  const selected = collections.includes(collection);
+                  return (
                     <button
+                      key={collection}
                       type="button"
-                      onClick={addCollection}
-                      className="rounded-r bg-accent px-3 py-2 text-sm text-accent-foreground transition hover:bg-accent/90"
+                      onClick={() => toggleCollection(collection)}
+                      className={`rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
+                        selected
+                          ? 'border-accent/40 bg-accent/10 text-[#7fa6c9]'
+                          : 'border-border bg-background text-muted-foreground hover:text-foreground'
+                      }`}
                     >
-                      Add
+                      {displayTag(collection)}
                     </button>
-                  </div>
+                  );
+                }) : (
+                  <span className="text-xs text-muted-foreground">No collections yet</span>
                 )}
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="order-1 relative flex min-h-56 min-w-0 items-center justify-center rounded border border-border/35 bg-[#171917] px-2 shadow-inner shadow-black/20 sm:min-h-48 md:order-2">
-          <div className="absolute right-0 top-0 z-10 flex items-start gap-1">
-            <button
-              type="button"
-              onClick={refreshWaveform}
-              disabled={waveformRefreshing}
-              className="inline-flex h-8 w-8 items-center justify-center rounded border border-border/60 bg-background/80 text-muted-foreground opacity-55 shadow-sm backdrop-blur transition hover:border-accent/50 hover:text-foreground hover:opacity-85 disabled:opacity-35"
-              title="Refresh waveform"
-              aria-label={`Refresh waveform for ${file.name}`}
-            >
-              <svg className={`h-3.5 w-3.5 ${waveformRefreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 11a8.1 8.1 0 0 0-15.5-2M4 5v4h4m-4 4a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              onClick={handleVolumeBoostClick}
-              className={`min-h-8 rounded border px-2 py-1 text-[10px] font-medium leading-none opacity-50 transition hover:opacity-80 ${
-                isVolumeBoosted
-                  ? 'border-accent/50 bg-accent/15 text-accent'
-                  : volumeBoostConfirming
-                    ? 'border-accent/40 bg-accent/10 text-accent'
-                    : 'border-border/60 bg-background/80 text-muted-foreground hover:border-accent/50 hover:text-foreground'
-              }`}
-              title={`Boost this song by ${VOL_BOOST_DB} dB`}
-            >
-              {isVolumeBoosted ? `+${VOL_BOOST_DB} dB` : volumeBoostConfirming ? 'Confirm' : 'Vol Boost'}
-            </button>
-          </div>
-          <div 
-            ref={waveformRef} 
-            className="mx-auto mb-2 min-h-56 w-full max-w-[820px] cursor-pointer sm:min-h-44" 
-            onClick={handleWaveformClick}
-          >
-            {!shouldRenderWaveform && (
-              <div className="flex h-56 w-full items-center justify-center rounded border border-border/40 bg-muted/20 text-xs text-muted-foreground sm:h-44">
-                Waveform loads on scroll
-              </div>
-            )}
-          </div>
-          {durationLabel && (
-            <span className="absolute bottom-2 right-1 rounded bg-background/70 px-2 py-1 text-sm font-light text-muted-foreground opacity-80 sm:py-0.5 sm:text-xs">
-              {playheadLabel}/{durationLabel}
-            </span>
-          )}
-          {markerDuration > 0 && comments.some(comment => typeof comment.timestamp === 'number') && (
-            <div className="pointer-events-none absolute inset-x-0 top-1/2 z-20 mx-auto h-56 max-w-[760px] -translate-y-1/2 sm:h-44">
-              {comments.filter(comment => typeof comment.timestamp === 'number').map(comment => (
                 <button
-                  key={comment.id}
                   type="button"
-                  onPointerDown={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                  }}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    setShowComments(true);
-                    if (typeof comment.timestamp === 'number') {
-                      seekAndPlayComment(comment.timestamp);
-                    }
-                  }}
-                  className="group pointer-events-auto absolute bottom-2 flex h-[88%] w-7 -translate-x-1/2 items-end justify-center rounded-sm transition hover:bg-accent/10 sm:w-5"
-                  style={{ left: `${Math.min(100, Math.max(0, ((comment.timestamp || 0) / markerDuration) * 100))}%` }}
-                  title={`${comment.userName}: ${comment.text}`}
-                  aria-label={`Open comment from ${comment.userName}`}
-                >
-                  <span className="absolute bottom-0 top-2 w-px rounded-full bg-accent/45" />
-                  <span className="relative h-3.5 w-3.5 rounded-full border border-background/80 bg-accent/80 shadow-sm transition group-hover:bg-accent" />
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        {showNotes && (
-          <div className="hidden md:order-3 md:col-span-2 md:block">
-            {currentUser.isAdmin ? (
-              <textarea
-                value={noteText}
-                onChange={(event) => setNoteText(event.target.value)}
-                onBlur={saveNotes}
-                placeholder="Add notes..."
-                className="min-h-24 w-full resize-y rounded border border-border bg-background/70 p-3 text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus:border-accent"
-              />
-            ) : (
-              <div className="min-h-16 w-full whitespace-pre-wrap rounded border border-border bg-background/50 p-3 text-sm text-muted-foreground">
-                {noteText}
-              </div>
-            )}
-          </div>
-        )}
-        {showComments && (
-          <div className="hidden rounded border border-border bg-muted/40 p-3 md:order-3 md:col-span-2 md:block">
-            <div className="mb-3 space-y-2">
-              {comments.length > 0 ? comments.map(comment => (
-                <div
-                  key={comment.id}
-                  className={`rounded border p-2 text-sm transition ${
-                    highlightedCommentId === comment.id
-                      ? 'border-accent/60 bg-accent/10'
-                      : 'border-border/60 bg-background/60'
-                  }`}
-                >
-                  <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <span className="font-medium text-foreground" title={formatCommentDate(comment.createdAt)}>{comment.userName}</span>
-                    {typeof comment.timestamp === 'number' && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (typeof comment.timestamp === 'number') {
-                            seekAndPlayComment(comment.timestamp);
-                          }
-                        }}
-                        className="text-accent hover:underline"
-                      >
-                        @{formatDuration(comment.timestamp)}
-                      </button>
-                    )}
-                    {comment.userId === currentUser.id && (
-                      <button
-                        type="button"
-                        onClick={() => deleteComment(comment.id)}
-                        className="ml-auto text-muted-foreground hover:text-red-400"
-                      >
-                        Delete
-                      </button>
-                    )}
-                  </div>
-                  <p className="whitespace-pre-wrap text-muted-foreground">{comment.text}</p>
-                </div>
-              )) : (
-                <p className="text-sm text-muted-foreground">No comments yet</p>
-              )}
-            </div>
-            <textarea
-              value={newComment}
-              onChange={(event) => setNewComment(event.target.value)}
-              placeholder="Add a comment..."
-              className="mb-2 min-h-20 w-full resize-y rounded border border-border bg-background/70 p-3 text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus:border-accent"
-            />
-            <div className="flex flex-wrap items-center gap-3">
-              <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={usePlayheadTime}
-                  onChange={(event) => setUsePlayheadTime(event.target.checked)}
-                  className="h-3.5 w-3.5 accent-accent"
-                />
-                At playhead ({playheadLabel})
-              </label>
-              {!usePlayheadTime && (
-                <input
-                  type="text"
-                  value={commentTimecode}
-                  onChange={(event) => setCommentTimecode(event.target.value)}
-                  placeholder="1:23"
-                  className="min-h-9 w-28 rounded border border-border bg-background/70 px-2 py-1 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent sm:w-24 sm:text-xs"
-                />
-              )}
-              <button
-                type="button"
-                onClick={addComment}
-                disabled={!newComment.trim()}
-                className="rounded bg-accent px-3 py-2 text-xs text-accent-foreground transition hover:bg-accent/90 disabled:opacity-50"
-              >
-                Add Comment
-              </button>
-            </div>
-          </div>
-        )}
-        {showCollections && (
-          <div className="hidden rounded border border-border bg-muted/40 p-3 md:order-3 md:col-span-2 md:block">
-            <div className="mb-3 flex flex-wrap gap-2">
-              {collectionChoices.length > 0 ? collectionChoices.map(collection => {
-                const selected = collections.includes(collection);
-                return (
-                  <button
-                    key={collection}
-                    type="button"
-                    onClick={() => toggleCollection(collection)}
-                    className={`rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
-                      selected
-                        ? 'border-accent/50 bg-accent/15 text-accent'
-                        : 'border-border bg-background text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    {displayTag(collection)}
-                  </button>
-                );
-              }) : (
-                <span className="text-xs text-muted-foreground">No collections yet</span>
-              )}
-              <button
-                type="button"
-                onClick={() => setShowNewCollectionForm(prev => !prev)}
-                className={`rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
-                  showNewCollectionForm
-                    ? 'border-accent/50 bg-accent/15 text-accent'
+                  onClick={() => setShowNewCollectionForm(prev => !prev)}
+                  className={`rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
+                    showNewCollectionForm
+                    ? 'border-accent/40 bg-accent/10 text-[#7fa6c9]'
                     : 'border-border bg-background text-muted-foreground hover:text-foreground'
-                }`}
-                aria-label={showNewCollectionForm ? 'Hide new collection form' : 'Add new collection'}
-              >
-                {showNewCollectionForm ? '-' : '+'}
-              </button>
-            </div>
-            {showNewCollectionForm && (
-              <div className="flex max-w-md">
-                <input
-                  type="text"
-                  value={newCollection}
-                  onChange={(event) => setNewCollection(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') addCollection();
-                  }}
-                  placeholder="New collection"
-                  className="min-w-0 flex-1 rounded-l border border-border bg-background/70 p-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent sm:p-2"
-                />
-                <button
-                  type="button"
-                  onClick={addCollection}
-                  className="rounded-r bg-accent px-3 py-2 text-sm text-accent-foreground transition hover:bg-accent/90"
+                  }`}
+                  aria-label={showNewCollectionForm ? 'Hide new collection form' : 'Add new collection'}
                 >
-                  Add
+                  {showNewCollectionForm ? '-' : '+'}
                 </button>
               </div>
-            )}
-          </div>
-        )}
-      </div>
-      {colorTags.length > 0 && (
-        <div className="absolute bottom-3 right-3 z-10 flex flex-row-reverse" title={`Finder tags: ${colorTags.join(', ')}`}>
-          {colorTags.map(color => (
-            <span
-              key={color}
-              className="-ml-1 h-3.5 w-3.5 rounded-full border border-background/80 shadow-sm"
-              style={{ backgroundColor: FINDER_COLOR_HEX[color] }}
-            />
-          ))}
+              {showNewCollectionForm && (
+                <div className="flex max-w-md">
+                  <input
+                    type="text"
+                    value={newCollection}
+                    onChange={(event) => setNewCollection(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') addCollection();
+                    }}
+                    placeholder="New collection"
+                    className="min-w-0 flex-1 rounded-l border border-border bg-background/70 p-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent sm:p-2"
+                  />
+                  <button
+                    type="button"
+                    onClick={addCollection}
+                    className="rounded-r bg-accent px-3 py-2 text-sm text-accent-foreground transition hover:bg-accent/90"
+                  >
+                    Add
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
+
     </div>
   );
 };
@@ -2247,12 +2448,12 @@ export default function Home() {
     selectedInstruments.length + selectedVibes.length + selectedCollections.length + selectedFinishes.length + selectedYears.length + selectedAdamRatings.length +
     excludedInstruments.length + excludedVibes.length + excludedCollections.length + excludedFinishes.length + excludedYears.length + excludedAdamRatings.length +
     (likedOnly ? 1 : 0) + (untaggedOnly ? 1 : 0) + (searchQuery.trim() ? 1 : 0);
-  const collapsedSummaryClass = "mb-2 w-full rounded border border-border/50 bg-[#20231f] px-3 py-2 text-left text-xs font-light text-muted-foreground opacity-85 transition hover:border-accent/35 hover:text-foreground";
+  const collapsedSummaryClass = "mt-0.5 block max-w-full truncate text-[11px] font-normal text-muted-foreground/70";
   const filterOptionClass = (mode: FilterMode) => {
     const modeClass = {
       include: 'border border-accent/55 bg-accent/85 text-accent-foreground shadow-sm shadow-accent/10',
       exclude: 'border border-red-400/40 bg-red-500/10 text-red-300 hover:bg-red-500/15',
-      none: 'border border-border/40 bg-[#20231f] text-muted-foreground hover:border-accent/35 hover:text-foreground',
+      none: 'border border-border/40 bg-[#0b0f14] text-muted-foreground hover:border-accent/35 hover:text-foreground',
     }[mode];
     return `flex cursor-pointer items-center justify-between gap-3 rounded p-3 text-sm transition-colors md:p-2 ${modeClass}`;
   };
@@ -2279,40 +2480,42 @@ export default function Home() {
 
   return (
     <div className="archive-shell min-h-screen text-foreground">
-      <header className="container mx-auto grid gap-4 p-3 pb-1 sm:p-4 sm:pb-2 md:grid-cols-[16rem_minmax(0,1fr)]">
-        <div className="hidden md:block" />
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <Image
-            src="/adams_archive_waveform_logo_transparent.png"
-            alt="Adam's Archive"
-            width={2048}
-            height={683}
-            priority
-            className="h-16 w-auto max-w-full object-contain sm:h-20"
-          />
+      <header className="mx-auto grid h-auto max-w-[1800px] grid-cols-1 items-center gap-3 border-b border-border/40 px-3 py-3 sm:grid-cols-[1fr_auto_1fr] sm:px-4">
+        <div className="hidden sm:block" />
+        <div className="flex items-center justify-center gap-3">
+          <svg className="h-8 w-16 text-accent drop-shadow-[0_0_10px_rgba(54,128,233,0.55)]" viewBox="0 0 120 44" aria-hidden="true">
+            <path d="M4 22h11l5-9 6 18 7-28 8 38 8-26 6 11 5-16 5 30 8-36 7 27 6-14 5 5h24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" />
+            <path d="M4 22h112" fill="none" stroke="rgba(255,255,255,0.8)" strokeLinecap="round" strokeWidth="2" />
+          </svg>
+          <div className="text-2xl font-light tracking-normal">
+            <span className="text-foreground">the </span>
+            <span className="text-accent">archive</span>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-end">
           <div className="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
             {currentUser && (
-              <span className="col-span-2 rounded border border-border/60 bg-muted/25 px-3 py-2 text-center text-sm text-muted-foreground sm:col-span-1">
-                {currentUser.name}
+              <span className="col-span-2 inline-flex h-10 items-center justify-center rounded-full border border-border/65 bg-muted/35 px-3 text-center text-sm text-foreground sm:col-span-1">
+                {currentUser.name.slice(0, 2).toUpperCase()}
               </span>
             )}
             {currentUser?.isAdmin && (
               <>
               <Link
                 href="/manage"
-                className="rounded border border-border/50 bg-muted/35 px-4 py-3 text-center text-sm text-muted-foreground transition hover:border-accent/40 hover:text-foreground sm:py-2"
+                className="rounded border border-border/50 bg-muted/35 px-3 py-2 text-center text-sm text-muted-foreground transition hover:border-accent/40 hover:text-foreground"
               >
                 Manage
               </Link>
               <Link
                 href="/users"
-                className="rounded border border-border/50 bg-muted/35 px-4 py-3 text-center text-sm text-muted-foreground transition hover:border-accent/40 hover:text-foreground sm:py-2"
+                className="rounded border border-border/50 bg-muted/35 px-3 py-2 text-center text-sm text-muted-foreground transition hover:border-accent/40 hover:text-foreground"
               >
                 Users
               </Link>
               <Link
                 href="/upload"
-                  className="rounded border border-accent/55 bg-accent/85 px-4 py-3 text-center text-sm text-accent-foreground shadow-sm shadow-accent/10 transition hover:bg-accent sm:py-2"
+                  className="rounded border border-accent/55 bg-accent/85 px-3 py-2 text-center text-sm text-accent-foreground shadow-sm shadow-accent/10 transition hover:bg-accent"
                 >
                   Upload
                 </Link>
@@ -2321,14 +2524,14 @@ export default function Home() {
             <button
               type="button"
               onClick={logout}
-              className="rounded border border-border/50 bg-muted/35 px-4 py-3 text-sm text-muted-foreground transition hover:border-accent/40 hover:text-foreground sm:py-2"
+              className="rounded border border-border/50 bg-muted/35 px-3 py-2 text-sm text-muted-foreground transition hover:border-accent/40 hover:text-foreground"
             >
               Logout
             </button>
           </div>
         </div>
       </header>
-      <div className="container mx-auto flex flex-col gap-4 p-3 pb-56 sm:p-4 sm:pb-36 md:flex-row">
+      <div className="mx-auto flex max-w-[1800px] flex-col gap-4 p-3 pb-56 sm:p-4 sm:pb-36 md:flex-row">
         <div className="md:hidden">
           <button
             type="button"
@@ -2340,45 +2543,23 @@ export default function Home() {
             <span className="text-muted-foreground">{showMobileFilters ? '-' : '+'}</span>
           </button>
         </div>
-        <div className={`${showMobileFilters ? 'block' : 'hidden'} w-full rounded border border-border/60 bg-[#191b19]/95 p-3 pb-6 shadow-2xl shadow-black/20 md:sticky md:top-4 md:block md:max-h-[calc(100vh-2rem)] md:w-64 md:shrink-0 md:overflow-y-auto md:rounded-none md:border-0 md:border-r md:border-border/60 md:bg-transparent md:p-0 md:pr-4 md:pb-44 md:shadow-none`}>
-          <h2 className="mb-4 hidden text-lg font-semibold md:block">Filters</h2>
-          <div className="mb-6 rounded border border-border/50 bg-muted/30 p-3">
-            <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={likedOnly}
-                onChange={(event) => setLikedOnly(event.target.checked)}
-                className="h-4 w-4 accent-accent"
-              />
-              Liked songs
-            </label>
-            {currentUser?.id === 'adam' && (
-              <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={untaggedOnly}
-                  onChange={(event) => setUntaggedOnly(event.target.checked)}
-                  className="h-4 w-4 accent-accent"
-                />
-                Untagged songs
-              </label>
-            )}
-          </div>
-          <div className="mb-6">
+        <div className={`${showMobileFilters ? 'block' : 'hidden'} w-full rounded border border-border/60 bg-[#10181e]/95 p-3 pb-6 shadow-2xl shadow-black/20 md:sticky md:top-4 md:block md:max-h-[calc(100vh-2rem)] md:w-72 md:shrink-0 md:overflow-y-auto md:rounded-none md:border-0 md:bg-transparent md:p-0 md:pr-3 md:pb-44 md:shadow-none`}>
+          <div className="rounded-t-xl border border-b-0 border-border/55 bg-[#131a1f]/86 p-0 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
             <button
               type="button"
               onClick={() => toggleFilterCollapsed('instruments')}
-              className="mb-2 flex w-full items-center justify-between pr-4 text-left text-md font-medium"
+              className="flex min-h-16 w-full items-center gap-4 px-5 text-left text-sm font-medium text-foreground"
             >
-              <span>Instruments</span>
-              <span className="text-muted-foreground">{collapsedFilters.instruments ? '+' : '-'}</span>
+              <SidebarIcon name="instruments" />
+              <span className="min-w-0 flex-1">
+                <span className="block">Instruments</span>
+                {collapsedFilters.instruments && (selectedInstruments.length > 0 || excludedInstruments.length > 0) && (
+                  <span className={collapsedSummaryClass}>{filterSummary(selectedInstruments, excludedInstruments)}</span>
+                )}
+              </span>
+              <SidebarChevron open={!collapsedFilters.instruments} />
             </button>
-            {collapsedFilters.instruments && (
-              <button type="button" onClick={() => toggleFilterCollapsed('instruments')} className={collapsedSummaryClass}>
-                {filterSummary(selectedInstruments, excludedInstruments)}
-              </button>
-            )}
-            {!collapsedFilters.instruments && <div className="space-y-1">
+            {!collapsedFilters.instruments && <div className="space-y-1 px-3 pb-3">
               {instrumentOptions.map(inst => {
                 const mode = getFilterMode(inst, selectedInstruments, excludedInstruments);
                 return (
@@ -2412,21 +2593,22 @@ export default function Home() {
               })}
             </div>}
           </div>
-          <div className="mb-6">
+          <div className="border border-b-0 border-border/55 bg-[#131a1f]/86 p-0 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
             <button
               type="button"
               onClick={() => toggleFilterCollapsed('vibes')}
-              className="mb-2 flex w-full items-center justify-between pr-4 text-left text-md font-medium"
+              className="flex min-h-16 w-full items-center gap-4 px-5 text-left text-sm font-medium text-foreground"
             >
-              <span>Vibe</span>
-              <span className="text-muted-foreground">{collapsedFilters.vibes ? '+' : '-'}</span>
+              <SidebarIcon name="vibes" />
+              <span className="min-w-0 flex-1">
+                <span className="block">Vibe</span>
+                {collapsedFilters.vibes && (selectedVibes.length > 0 || excludedVibes.length > 0) && (
+                  <span className={collapsedSummaryClass}>{filterSummary(selectedVibes, excludedVibes)}</span>
+                )}
+              </span>
+              <SidebarChevron open={!collapsedFilters.vibes} />
             </button>
-            {collapsedFilters.vibes && (
-              <button type="button" onClick={() => toggleFilterCollapsed('vibes')} className={collapsedSummaryClass}>
-                {filterSummary(selectedVibes, excludedVibes)}
-              </button>
-            )}
-            {!collapsedFilters.vibes && <div className="space-y-1">
+            {!collapsedFilters.vibes && <div className="space-y-1 px-3 pb-3">
               {vibeOptions.map(v => {
                 const mode = getFilterMode(v, selectedVibes, excludedVibes);
                 return (
@@ -2460,167 +2642,22 @@ export default function Home() {
               })}
             </div>}
           </div>
-          <div className="mb-6">
-            <button
-              type="button"
-              onClick={() => toggleFilterCollapsed('collections')}
-              className="mb-2 flex w-full items-center justify-between pr-4 text-left text-md font-medium"
-            >
-              <span>Collections</span>
-              <span className="text-muted-foreground">{collapsedFilters.collections ? '+' : '-'}</span>
-            </button>
-            {collapsedFilters.collections && (
-              <button type="button" onClick={() => toggleFilterCollapsed('collections')} className={collapsedSummaryClass}>
-                {filterSummary(selectedCollections, excludedCollections)}
-              </button>
-            )}
-            {!collapsedFilters.collections && <div className="space-y-1">
-              {collectionOptions.length > 0 ? collectionOptions.map(collection => {
-                const mode = getFilterMode(collection, selectedCollections, excludedCollections);
-                return (
-                <div
-                  key={collection}
-                  onClick={() => toggleFilterValue(collection, selectedCollections, setSelectedCollections, excludedCollections, setExcludedCollections)}
-                  className={filterOptionClass(mode)}
-                >
-                  <span>{displayTag(collection)}</span>
-                  <span className="flex items-center gap-2">
-                    {mode === 'include' && (
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          excludeFilterValue(collection, setSelectedCollections, setExcludedCollections);
-                        }}
-                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-accent-foreground/40 text-xs text-accent-foreground/80 hover:bg-accent-foreground/10"
-                        aria-label={`Exclude ${displayTag(collection)}`}
-                      >
-                        -
-                      </button>
-                    )}
-                    {mode === 'exclude' && (
-                      <span className="text-[10px] font-medium uppercase tracking-wide text-red-200/70">Excluded</span>
-                    )}
-                    <span className={filterCountClass(mode)}>{filterCounts.collections.get(collection) || 0}</span>
-                  </span>
-                </div>
-                );
-              }) : (
-                <p className="rounded border border-border/50 bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">No collections yet</p>
-              )}
-            </div>}
-          </div>
-          <div className="mb-6">
-            <button
-              type="button"
-              onClick={() => toggleFilterCollapsed('finish')}
-              className="mb-2 flex w-full items-center justify-between pr-4 text-left text-md font-medium"
-            >
-              <span>Finish</span>
-              <span className="text-muted-foreground">{collapsedFilters.finish ? '+' : '-'}</span>
-            </button>
-            {collapsedFilters.finish && (
-              <button type="button" onClick={() => toggleFilterCollapsed('finish')} className={collapsedSummaryClass}>
-                {filterSummary(selectedFinishes, excludedFinishes)}
-              </button>
-            )}
-            {!collapsedFilters.finish && <div className="space-y-1">
-              {finishOptions.map(finish => {
-                const mode = getFilterMode(finish, selectedFinishes, excludedFinishes);
-                return (
-                <div
-                  key={finish}
-                  onClick={() => toggleFilterValue(finish, selectedFinishes, setSelectedFinishes, excludedFinishes, setExcludedFinishes)}
-                  className={filterOptionClass(mode)}
-                >
-                  <span>{displayTag(finish)}</span>
-                  <span className="flex items-center gap-2">
-                    {mode === 'include' && (
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          excludeFilterValue(finish, setSelectedFinishes, setExcludedFinishes);
-                        }}
-                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-accent-foreground/40 text-xs text-accent-foreground/80 hover:bg-accent-foreground/10"
-                        aria-label={`Exclude ${displayTag(finish)}`}
-                      >
-                        -
-                      </button>
-                    )}
-                    {mode === 'exclude' && (
-                      <span className="text-[10px] font-medium uppercase tracking-wide text-red-200/70">Excluded</span>
-                    )}
-                    <span className={filterCountClass(mode)}>{filterCounts.finish.get(finish) || 0}</span>
-                  </span>
-                </div>
-                );
-              })}
-            </div>}
-          </div>
-          <div className="mb-6">
-            <button
-              type="button"
-              onClick={() => toggleFilterCollapsed('years')}
-              className="mb-2 flex w-full items-center justify-between pr-4 text-left text-md font-medium"
-            >
-              <span>Year</span>
-              <span className="text-muted-foreground">{collapsedFilters.years ? '+' : '-'}</span>
-            </button>
-            {collapsedFilters.years && (
-              <button type="button" onClick={() => toggleFilterCollapsed('years')} className={collapsedSummaryClass}>
-                {filterSummary(selectedYears, excludedYears)}
-              </button>
-            )}
-            {!collapsedFilters.years && <div className="space-y-1">
-              {yearOptions.map(year => {
-                const mode = getFilterMode(year, selectedYears, excludedYears);
-                return (
-                <div
-                  key={year}
-                  onClick={() => toggleFilterValue(year, selectedYears, setSelectedYears, excludedYears, setExcludedYears)}
-                  className={filterOptionClass(mode)}
-                >
-                  <span>{year}</span>
-                  <span className="flex items-center gap-2">
-                    {mode === 'include' && (
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          excludeFilterValue(year, setSelectedYears, setExcludedYears);
-                        }}
-                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-accent-foreground/40 text-xs text-accent-foreground/80 hover:bg-accent-foreground/10"
-                        aria-label={`Exclude ${year}`}
-                      >
-                        -
-                      </button>
-                    )}
-                    {mode === 'exclude' && (
-                      <span className="text-[10px] font-medium uppercase tracking-wide text-red-200/70">Excluded</span>
-                    )}
-                    <span className={filterCountClass(mode)}>{filterCounts.years.get(year) || 0}</span>
-                  </span>
-                </div>
-                );
-              })}
-            </div>}
-          </div>
-          <div className="mb-6">
+          <div className="border border-b-0 border-border/55 bg-[#131a1f]/86 p-0 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
             <button
               type="button"
               onClick={() => toggleFilterCollapsed('adamsRatings')}
-              className="mb-2 flex w-full items-center justify-between pr-4 text-left text-md font-medium"
+              className="flex min-h-16 w-full items-center gap-4 px-5 text-left text-sm font-medium text-foreground"
             >
-              <span>Adam&apos;s Rating</span>
-              <span className="text-muted-foreground">{collapsedFilters.adamsRatings ? '+' : '-'}</span>
+              <SidebarIcon name="rating" />
+              <span className="min-w-0 flex-1">
+                <span className="block">Adam&apos;s Rating</span>
+                {collapsedFilters.adamsRatings && (selectedAdamRatings.length > 0 || excludedAdamRatings.length > 0) && (
+                  <span className={collapsedSummaryClass}>{ratingFilterSummary(selectedAdamRatings, excludedAdamRatings)}</span>
+                )}
+              </span>
+              <SidebarChevron open={!collapsedFilters.adamsRatings} />
             </button>
-            {collapsedFilters.adamsRatings && (
-              <button type="button" onClick={() => toggleFilterCollapsed('adamsRatings')} className={collapsedSummaryClass}>
-                {ratingFilterSummary(selectedAdamRatings, excludedAdamRatings)}
-              </button>
-            )}
-            {!collapsedFilters.adamsRatings && <div className="space-y-1">
+            {!collapsedFilters.adamsRatings && <div className="space-y-1 px-3 pb-3">
               {adamRatingOptions.map(rating => {
                 const mode = getFilterMode(rating, selectedAdamRatings, excludedAdamRatings);
                 return (
@@ -2656,56 +2693,238 @@ export default function Home() {
               })}
             </div>}
           </div>
-          <div className="mb-6 rounded border border-border/50 bg-muted/30 p-3">
+          <div className="border border-b-0 border-border/55 bg-[#131a1f]/86 p-0 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
+            <button
+              type="button"
+              onClick={() => toggleFilterCollapsed('collections')}
+              className="flex min-h-16 w-full items-center gap-4 px-5 text-left text-sm font-medium text-foreground"
+            >
+              <SidebarIcon name="collections" />
+              <span className="min-w-0 flex-1">
+                <span className="block">Collections</span>
+                {collapsedFilters.collections && (selectedCollections.length > 0 || excludedCollections.length > 0) && (
+                  <span className={collapsedSummaryClass}>{filterSummary(selectedCollections, excludedCollections)}</span>
+                )}
+              </span>
+              <SidebarChevron open={!collapsedFilters.collections} />
+            </button>
+            {!collapsedFilters.collections && <div className="space-y-1 px-3 pb-3">
+              {collectionOptions.length > 0 ? collectionOptions.map(collection => {
+                const mode = getFilterMode(collection, selectedCollections, excludedCollections);
+                return (
+                <div
+                  key={collection}
+                  onClick={() => toggleFilterValue(collection, selectedCollections, setSelectedCollections, excludedCollections, setExcludedCollections)}
+                  className={filterOptionClass(mode)}
+                >
+                  <span>{displayTag(collection)}</span>
+                  <span className="flex items-center gap-2">
+                    {mode === 'include' && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          excludeFilterValue(collection, setSelectedCollections, setExcludedCollections);
+                        }}
+                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-accent-foreground/40 text-xs text-accent-foreground/80 hover:bg-accent-foreground/10"
+                        aria-label={`Exclude ${displayTag(collection)}`}
+                      >
+                        -
+                      </button>
+                    )}
+                    {mode === 'exclude' && (
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-red-200/70">Excluded</span>
+                    )}
+                    <span className={filterCountClass(mode)}>{filterCounts.collections.get(collection) || 0}</span>
+                  </span>
+                </div>
+                );
+              }) : (
+                <p className="rounded border border-border/50 bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">No collections yet</p>
+              )}
+            </div>}
+          </div>
+          <div className="border border-b-0 border-border/55 bg-[#131a1f]/86 p-0 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
+            <button
+              type="button"
+              onClick={() => toggleFilterCollapsed('finish')}
+              className="flex min-h-16 w-full items-center gap-4 px-5 text-left text-sm font-medium text-foreground"
+            >
+              <SidebarIcon name="finish" />
+              <span className="min-w-0 flex-1">
+                <span className="block">Finish</span>
+                {collapsedFilters.finish && (selectedFinishes.length > 0 || excludedFinishes.length > 0) && (
+                  <span className={collapsedSummaryClass}>{filterSummary(selectedFinishes, excludedFinishes)}</span>
+                )}
+              </span>
+              <SidebarChevron open={!collapsedFilters.finish} />
+            </button>
+            {!collapsedFilters.finish && <div className="space-y-1 px-3 pb-3">
+              {finishOptions.map(finish => {
+                const mode = getFilterMode(finish, selectedFinishes, excludedFinishes);
+                return (
+                <div
+                  key={finish}
+                  onClick={() => toggleFilterValue(finish, selectedFinishes, setSelectedFinishes, excludedFinishes, setExcludedFinishes)}
+                  className={filterOptionClass(mode)}
+                >
+                  <span>{displayTag(finish)}</span>
+                  <span className="flex items-center gap-2">
+                    {mode === 'include' && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          excludeFilterValue(finish, setSelectedFinishes, setExcludedFinishes);
+                        }}
+                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-accent-foreground/40 text-xs text-accent-foreground/80 hover:bg-accent-foreground/10"
+                        aria-label={`Exclude ${displayTag(finish)}`}
+                      >
+                        -
+                      </button>
+                    )}
+                    {mode === 'exclude' && (
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-red-200/70">Excluded</span>
+                    )}
+                    <span className={filterCountClass(mode)}>{filterCounts.finish.get(finish) || 0}</span>
+                  </span>
+                </div>
+                );
+              })}
+            </div>}
+          </div>
+          <div className="mb-5 rounded-b-xl border border-border/55 bg-[#131a1f]/86 p-0 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
+            <button
+              type="button"
+              onClick={() => toggleFilterCollapsed('years')}
+              className="flex min-h-16 w-full items-center gap-4 px-5 text-left text-sm font-medium text-foreground"
+            >
+              <SidebarIcon name="years" />
+              <span className="min-w-0 flex-1">
+                <span className="block">Year</span>
+                {collapsedFilters.years && (selectedYears.length > 0 || excludedYears.length > 0) && (
+                  <span className={collapsedSummaryClass}>{filterSummary(selectedYears, excludedYears)}</span>
+                )}
+              </span>
+              <SidebarChevron open={!collapsedFilters.years} />
+            </button>
+            {!collapsedFilters.years && <div className="space-y-1 px-3 pb-3">
+              {yearOptions.map(year => {
+                const mode = getFilterMode(year, selectedYears, excludedYears);
+                return (
+                <div
+                  key={year}
+                  onClick={() => toggleFilterValue(year, selectedYears, setSelectedYears, excludedYears, setExcludedYears)}
+                  className={filterOptionClass(mode)}
+                >
+                  <span>{year}</span>
+                  <span className="flex items-center gap-2">
+                    {mode === 'include' && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          excludeFilterValue(year, setSelectedYears, setExcludedYears);
+                        }}
+                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-accent-foreground/40 text-xs text-accent-foreground/80 hover:bg-accent-foreground/10"
+                        aria-label={`Exclude ${year}`}
+                      >
+                        -
+                      </button>
+                    )}
+                    {mode === 'exclude' && (
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-red-200/70">Excluded</span>
+                    )}
+                    <span className={filterCountClass(mode)}>{filterCounts.years.get(year) || 0}</span>
+                  </span>
+                </div>
+                );
+              })}
+            </div>}
+          </div>
+          <div className="mb-5 overflow-hidden rounded-xl border border-border/55 bg-[#131a1f]/86 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
+            <label className="flex min-h-16 cursor-pointer items-center gap-4 border-b border-border/55 px-5 text-sm font-medium text-foreground transition hover:bg-muted/20">
+              <SidebarIcon name="liked" />
+              <span className="min-w-0 flex-1">Liked songs</span>
+              <input
+                type="checkbox"
+                checked={likedOnly}
+                onChange={(event) => setLikedOnly(event.target.checked)}
+                className="h-4 w-4 accent-accent"
+              />
+            </label>
+            {currentUser?.id === 'adam' && (
+              <label className="flex min-h-16 cursor-pointer items-center gap-4 px-5 text-sm font-medium text-foreground transition hover:bg-muted/20">
+                <SidebarIcon name="untagged" />
+                <span className="min-w-0 flex-1">Untagged songs</span>
+                <input
+                  type="checkbox"
+                  checked={untaggedOnly}
+                  onChange={(event) => setUntaggedOnly(event.target.checked)}
+                  className="h-4 w-4 accent-accent"
+                />
+              </label>
+            )}
+          </div>
+          <div className="relative mb-4">
+            <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2">
+              <SidebarIcon name="search" />
+            </span>
             <input
               type="text"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search filenames"
-              className="mb-3 w-full rounded border border-border bg-background p-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent md:p-2"
+              placeholder="Search filters..."
+              className="h-12 w-full rounded-xl border border-border/55 bg-[#131a1f]/86 pl-12 pr-28 text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground/70 shadow-[inset_0_1px_rgba(255,255,255,0.03)] focus:border-accent/55"
             />
-            <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+            <label className="absolute right-3 top-1/2 flex -translate-y-1/2 cursor-pointer items-center gap-1.5 text-[11px] font-medium text-muted-foreground/70 transition hover:text-muted-foreground" title="Include notes in search">
               <input
                 type="checkbox"
                 checked={searchNotes}
                 onChange={(event) => setSearchNotes(event.target.checked)}
-                className="h-3.5 w-3.5 accent-accent"
+                className="h-3.5 w-3.5 rounded accent-accent"
               />
               Include Notes
             </label>
           </div>
-          <div className="space-y-2">
-            <div className="flex">
+          <div className="space-y-3">
+            <div className="relative flex min-h-14 items-center gap-3 rounded-xl border border-border/55 bg-[#131a1f]/86 px-4 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
+              <SidebarIcon name="plus" />
               <input
                 type="text"
                 value={newInstrument}
                 onChange={(e) => setNewInstrument(e.target.value)}
                 placeholder="Add instrument"
-                className="min-w-0 flex-1 rounded-l border border-border bg-background p-3 text-sm text-foreground md:p-2"
+                className="min-w-0 flex-1 bg-transparent py-3 text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground"
                 onKeyDown={(e) => e.key === 'Enter' && addInstrument()}
               />
               <button
+                type="button"
                 onClick={addInstrument}
-                className="rounded-r bg-accent px-4 py-3 text-accent-foreground hover:bg-accent/80 md:py-2"
+                className="rounded border border-border/45 px-2 py-1 text-xs text-muted-foreground transition hover:border-accent/45 hover:text-foreground"
               >
-                +
+                Add
               </button>
+              <SidebarIcon name="instruments" />
             </div>
-            <div className="flex">
+            <div className="relative flex min-h-14 items-center gap-3 rounded-xl border border-border/55 bg-[#131a1f]/86 px-4 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
+              <SidebarIcon name="plus" />
               <input
                 type="text"
                 value={newVibe}
                 onChange={(e) => setNewVibe(e.target.value)}
                 placeholder="Add vibe"
-                className="min-w-0 flex-1 rounded-l border border-border bg-background p-3 text-sm text-foreground md:p-2"
+                className="min-w-0 flex-1 bg-transparent py-3 text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground"
                 onKeyDown={(e) => e.key === 'Enter' && addVibe()}
               />
               <button
+                type="button"
                 onClick={addVibe}
-                className="rounded-r bg-accent px-4 py-3 text-accent-foreground hover:bg-accent/80 md:py-2"
+                className="rounded border border-border/45 px-2 py-1 text-xs text-muted-foreground transition hover:border-accent/45 hover:text-foreground"
               >
-                +
+                Add
               </button>
+              <SidebarIcon name="vibes" />
             </div>
           </div>
         </div>
@@ -2767,21 +2986,23 @@ export default function Home() {
               )}
             </div>
           )}
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border/50 bg-[#1b1d1b]/80 p-2 shadow-sm shadow-black/10">
-            <div className="flex flex-wrap items-center gap-2 rounded border border-border/45 bg-[#151716] p-1.5">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-t-md border border-b-0 border-border/65 bg-[#13191e]/95 px-3 py-2 shadow-sm shadow-black/10">
+            <div className="inline-flex flex-wrap overflow-hidden rounded border border-border/65 bg-background/40">
               <button
                 type="button"
                 onClick={pickRandomTracks}
-                disabled={randomCandidates.length === 0}
-                className={`min-h-9 rounded px-3 py-1.5 text-sm transition disabled:opacity-50 ${
+                className={`inline-flex min-h-9 items-center gap-2 border-r border-border/65 px-4 py-1.5 text-sm transition ${
                   randomTrackIds
                     ? 'bg-accent text-accent-foreground hover:bg-accent/90'
-                    : 'bg-[#20231f] text-muted-foreground hover:text-foreground'
+                    : 'text-foreground hover:bg-muted/40'
                 }`}
               >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M16 3h5v5M4 20l7-7m3-3 7-7M21 16v5h-5M15 15l6 6M4 4l5 5" />
+                </svg>
                 Random
               </button>
-              <label className="flex cursor-pointer items-center gap-2 px-2 text-xs text-muted-foreground">
+              <label className="flex min-h-9 cursor-pointer items-center gap-2 border-r border-border/65 px-3 text-xs text-muted-foreground">
                 <input
                   type="checkbox"
                   checked={randomIncludeVoiceMemos}
@@ -2794,23 +3015,23 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => setRandomTrackIds(null)}
-                  className="min-h-9 rounded px-3 py-1.5 text-xs text-muted-foreground transition hover:bg-[#20231f] hover:text-foreground"
+                  className="min-h-9 px-3 py-1.5 text-xs text-muted-foreground transition hover:bg-muted/40 hover:text-foreground"
                 >
                   All
                 </button>
               )}
             </div>
-            <div className="flex flex-1 flex-wrap items-center justify-end gap-3 sm:flex-none">
-              <label className="text-foreground">Sort by:</label>
+            <div className="flex flex-1 flex-wrap items-center justify-end gap-2 sm:flex-none">
+              <label className="text-sm text-muted-foreground">Sort by:</label>
               <select
                 value={sortBy === 'adamsRatingRandom' ? 'adamsRating' : sortBy}
                 onChange={(e) => setSortBy(e.target.value as SortBy)}
-                className="min-h-11 flex-1 rounded border border-border/60 bg-[#151716] p-2 text-foreground outline-none transition focus:border-accent/60 sm:flex-none"
+                className="min-h-9 flex-1 rounded border border-border/65 bg-background/40 px-3 py-1.5 text-sm text-foreground outline-none transition focus:border-accent/60 sm:flex-none"
               >
                 <option value="random">Random</option>
                 <option value="name">Name</option>
                 <option value="date">Date</option>
-                <option value="uploadDate">Upload Date</option>
+                <option value="uploadDate">Date Added</option>
                 <option value="adamsRating">Adam&apos;s Rating</option>
                 <option value="userRating">User Rating</option>
               </select>
@@ -2821,13 +3042,13 @@ export default function Home() {
                   }
                   setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
                 }}
-                className="min-h-11 rounded border border-accent/50 bg-accent/85 px-4 py-2 text-accent-foreground transition hover:bg-accent"
+                className="min-h-9 rounded border border-border/65 bg-background/40 px-3 py-1.5 text-sm text-muted-foreground transition hover:border-accent/40 hover:text-foreground"
               >
                 {sortDirection === 'asc' ? '↑' : '↓'}
               </button>
             </div>
           </div>
-          <div className="space-y-4">
+          <div className="overflow-hidden rounded-b-md border border-border/65 bg-[#0b0f14]/92 shadow-2xl shadow-black/20">
             {displayedFiles.map(file => {
               const hiddenActiveTrack = activeTrack?.id === file.id && !visibleFileIds.has(file.id);
               if (!currentUser) return null;
@@ -2885,7 +3106,7 @@ export default function Home() {
         </div>
       </div>
       {activeTrack && (
-        <div className="fixed bottom-3 left-3 right-3 z-50 rounded-md border border-border/70 bg-[#1b1d1b]/95 p-2 shadow-2xl shadow-black/45 backdrop-blur sm:bottom-4 sm:left-4 sm:right-4 sm:p-3 md:right-auto md:w-[min(360px,calc(100vw-2rem))]">
+        <div className="fixed bottom-3 left-3 right-3 z-50 rounded-md border border-border/70 bg-[#10181e]/95 p-2 shadow-2xl shadow-black/45 backdrop-blur sm:bottom-4 sm:left-4 sm:right-4 sm:p-3 md:right-auto md:w-[min(360px,calc(100vw-2rem))]">
           <div className="flex flex-col gap-2 sm:gap-3 md:flex-row md:items-center">
             <div className="min-w-0 flex-1">
               <div className="flex items-start gap-2">
@@ -2939,7 +3160,7 @@ export default function Home() {
                 {[...getTags(activeTrack, 'instruments', 'instrument'), ...getTags(activeTrack, 'vibes', 'vibe'), activeTrack.finish || ''].filter(Boolean).map(displayTag).join(' · ') || 'No tags'}
               </p>
               <div
-                className="mt-2 h-3 w-full cursor-pointer overflow-hidden rounded-full border border-border/30 bg-[#101211]"
+                className="mt-2 h-3 w-full cursor-pointer overflow-hidden rounded-full border border-border/30 bg-[#0b0f14]"
                 onPointerDown={seekMiniPlayer}
                 role="slider"
                 aria-label={`Seek ${activeTrack.name}`}
