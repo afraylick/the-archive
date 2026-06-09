@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, use } from 'react';
 import WaveSurfer from 'wavesurfer.js';
+import { isValidWaveformCache } from '@/lib/waveform';
 
 declare global {
   var waveSurfers: WaveSurfer[];
@@ -72,6 +73,9 @@ interface AudioFile {
   instruments?: string[];
   vibes?: string[];
   finish?: string;
+  waveformPeaks?: number[][];
+  waveformDuration?: number;
+  waveformCacheVersion?: number;
   year?: number;
   ratings?: Record<string, number>;
   myRating: number;
@@ -166,12 +170,16 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
 
   useEffect(() => {
     if (file && waveformRef.current) {
+      const cachedWaveform = isValidWaveformCache(file.waveformPeaks, file.waveformDuration, file.waveformCacheVersion);
       wavesurferRef.current = WaveSurfer.create({
         container: waveformRef.current,
         waveColor: '#a3a3a3',
         progressColor: '#5e9ec5',
         interact: false, // Disable default interact to handle click manually
+        backend: cachedWaveform ? 'MediaElement' : 'WebAudio',
         url: `/api/files/${encodeURIComponent(file.id)}/audio`,
+        peaks: cachedWaveform ? file.waveformPeaks : undefined,
+        duration: cachedWaveform ? file.waveformDuration : undefined,
       });
 
       // Add to global list

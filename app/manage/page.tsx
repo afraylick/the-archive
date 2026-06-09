@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
 import WaveSurfer from 'wavesurfer.js';
+import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
 
 interface AudioFile {
   id: string;
@@ -43,15 +44,18 @@ interface StemAttachment {
   uploadedAt: string;
 }
 
+interface WaveformGenerationResponse {
+  waveformPeaks: number[][];
+  waveformDuration: number;
+  waveformCacheVersion: number;
+}
+
 interface ArchiveUser {
   id: string;
   name: string;
   isAdmin: boolean;
 }
 
-const WAVEFORM_PEAK_LENGTH = 4000;
-const WAVEFORM_PEAK_PRECISION = 10000;
-const WAVEFORM_CACHE_VERSION = 3;
 const FINISH_OPTIONS = ['Tracked', 'Recorder', 'Voice Memo'];
 const FINDER_COLOR_HEX: Record<string, string> = {
   gray: '#8e8e93',
@@ -112,30 +116,7 @@ const getCreatedAtWithYear = (createdAt: string | undefined, year: number) => {
   )).toISOString();
 };
 
-const hasLegacyLowPrecisionWaveform = (peaks: number[]) => {
-  const sampleStep = Math.max(1, Math.floor(peaks.length / 200));
-  const sampledPeaks = peaks
-    .filter((_, index) => index % sampleStep === 0)
-    .filter(peak => Math.abs(peak) > 0.001);
-
-  if (sampledPeaks.length < 20) return false;
-
-  const quarterStepPeaks = sampledPeaks.filter(peak => Math.abs(peak * 4 - Math.round(peak * 4)) < 0.00001);
-  return quarterStepPeaks.length / sampledPeaks.length > 0.95;
-};
-
-const hasCachedWaveform = (file: AudioFile) => {
-  const peaks = file.waveformPeaks?.[0];
-  return Array.isArray(file.waveformPeaks) &&
-    file.waveformPeaks.length > 0 &&
-    Array.isArray(peaks) &&
-    peaks.length >= 512 &&
-    peaks.every(peak => Number.isFinite(peak) && Math.abs(peak) <= 1) &&
-    !hasLegacyLowPrecisionWaveform(peaks) &&
-    typeof file.waveformDuration === 'number' &&
-    file.waveformDuration > 0 &&
-    file.waveformCacheVersion === WAVEFORM_CACHE_VERSION;
-};
+const hasCachedWaveform = (file: AudioFile) => isValidWaveformCache(file.waveformPeaks, file.waveformDuration, file.waveformCacheVersion);
 
 const createWaveformPeaks = (audioBuffer: AudioBuffer) => {
   const peaks: number[] = [];
@@ -155,7 +136,7 @@ const createWaveformPeaks = (audioBuffer: AudioBuffer) => {
       }
     }
 
-    peaks.push(Math.round(peak * WAVEFORM_PEAK_PRECISION) / WAVEFORM_PEAK_PRECISION);
+    peaks.push(roundWaveformPeak(peak));
   }
 
   return [peaks];
@@ -249,6 +230,7 @@ const ManageWaveform = ({
     if (!containerRef.current) return;
 
     setStatus('Loading full song...');
+    const cachedWaveform = hasCachedWaveform(latestFileRef.current);
     const wavesurfer = WaveSurfer.create({
       container: containerRef.current,
       waveColor: '#a3a3a3',
@@ -256,7 +238,10 @@ const ManageWaveform = ({
       height: 116,
       interact: true,
       dragToSeek: true,
+      backend: cachedWaveform ? 'MediaElement' : 'WebAudio',
       url: `/api/files/${encodeURIComponent(file.id)}/audio`,
+      peaks: cachedWaveform ? latestFileRef.current.waveformPeaks : undefined,
+      duration: cachedWaveform ? latestFileRef.current.waveformDuration : undefined,
     });
 
     wavesurferRef.current = wavesurfer;
@@ -451,6 +436,24 @@ export default function ManagePage() {
   const regenerateWaveform = async (file: AudioFile, showError = true) => {
     setWaveformProcessingId(file.id);
     try {
+      const serverRes = await fetch(`/api/files/${encodeURIComponent(file.id)}/waveform`, {
+        method: 'POST',
+      });
+
+      if (serverRes.ok) {
+        const waveformData = await serverRes.json() as WaveformGenerationResponse;
+        await saveFile(
+          {
+            ...file,
+            waveformPeaks: waveformData.waveformPeaks,
+            waveformDuration: waveformData.waveformDuration,
+            waveformCacheVersion: waveformData.waveformCacheVersion,
+          },
+          'Failed to save waveform'
+        );
+        return;
+      }
+
       const res = await fetch(`/api/files/${encodeURIComponent(file.id)}/audio`);
       if (!res.ok) throw new Error('Failed to load audio file');
 
@@ -480,12 +483,13 @@ export default function ManagePage() {
   const cullAllWaveforms = async () => {
     if (!confirm('Cull all cached waveforms? Audio files will not be deleted.')) return;
     try {
+      setWaveformBulkStatus(`Culled 0/${files.length}`);
       for (let i = 0; i < files.length; i++) {
-        setWaveformBulkStatus(`Culling ${i + 1}/${files.length}`);
         await saveFile(
           { ...files[i], waveformPeaks: undefined, waveformDuration: undefined, waveformCacheVersion: undefined },
           'Failed to cull waveform'
         );
+        setWaveformBulkStatus(`Culled ${i + 1}/${files.length}`);
       }
     } catch {
       alert('Failed to cull all waveforms');
@@ -495,11 +499,15 @@ export default function ManagePage() {
   };
 
   const regenerateAllWaveforms = async () => {
-    for (let i = 0; i < files.length; i++) {
-      setWaveformBulkStatus(`Regenerating ${i + 1}/${files.length}`);
-      await regenerateWaveform(files[i], false);
+    try {
+      setWaveformBulkStatus(`Generated 0/${files.length}`);
+      for (let i = 0; i < files.length; i++) {
+        await regenerateWaveform(files[i], false);
+        setWaveformBulkStatus(`Generated ${i + 1}/${files.length}`);
+      }
+    } finally {
+      setWaveformBulkStatus('');
     }
-    setWaveformBulkStatus('');
   };
 
   const updateRating = async (id: string, userId: string, rating: number) => {
@@ -744,6 +752,10 @@ export default function ManagePage() {
       String(file.year || '').includes(normalizedSearch)
     );
   });
+  const waveformBulkProgress = waveformBulkStatus.match(/(\d+)\/(\d+)/);
+  const waveformBulkDone = waveformBulkProgress ? Number(waveformBulkProgress[1]) : 0;
+  const waveformBulkTotal = waveformBulkProgress ? Number(waveformBulkProgress[2]) : 0;
+  const waveformBulkPercent = waveformBulkTotal > 0 ? Math.min(100, Math.max(0, (waveformBulkDone / waveformBulkTotal) * 100)) : 0;
 
   if (loading) return <div className="bg-background text-foreground min-h-screen flex items-center justify-center">Loading...</div>;
 
@@ -806,7 +818,15 @@ export default function ManagePage() {
             />
           </label>
           {waveformBulkStatus && (
-            <span className="text-sm text-muted-foreground">{waveformBulkStatus}</span>
+            <div className="flex min-w-44 items-center gap-2 text-sm text-muted-foreground">
+              <span>{waveformBulkStatus}</span>
+              <div className="h-1.5 min-w-20 flex-1 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-accent transition-[width] duration-200"
+                  style={{ width: `${waveformBulkPercent}%` }}
+                />
+              </div>
+            </div>
           )}
           {finderTagImportStatus && (
             <span className="text-sm text-muted-foreground">{finderTagImportStatus}</span>

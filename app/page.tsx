@@ -3,6 +3,7 @@
 import { Fragment, type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import WaveSurfer from 'wavesurfer.js';
+import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
 
 interface AudioFile {
   id: string;
@@ -45,6 +46,12 @@ interface StemAttachment {
   id: string;
   name: string;
   uploadedAt: string;
+}
+
+interface WaveformGenerationResponse {
+  waveformPeaks: number[][];
+  waveformDuration: number;
+  waveformCacheVersion: number;
 }
 
 interface ArchiveUser {
@@ -96,9 +103,6 @@ const DEFAULT_VIBES = ['ambient', 'rock', 'indie', 'acoustic', 'hard', 'soft', '
 const FINISH_OPTIONS = ['Tracked', 'Recorder', 'Voice Memo'];
 const INITIAL_RENDER_LIMIT = 30;
 const RENDER_BATCH_SIZE = 30;
-const WAVEFORM_PEAK_LENGTH = 4000;
-const WAVEFORM_PEAK_PRECISION = 10000;
-const WAVEFORM_CACHE_VERSION = 3;
 const USE_CACHED_WAVEFORM_RENDERING = true;
 const VOL_BOOST_DB = 12;
 const VOL_BOOST_GAIN = Math.pow(10, VOL_BOOST_DB / 20);
@@ -158,30 +162,7 @@ const parseTimecode = (value: string) => {
   return undefined;
 };
 
-const hasLegacyLowPrecisionWaveform = (peaks: number[]) => {
-  const sampleStep = Math.max(1, Math.floor(peaks.length / 200));
-  const sampledPeaks = peaks
-    .filter((_, index) => index % sampleStep === 0)
-    .filter(peak => Math.abs(peak) > 0.001);
-
-  if (sampledPeaks.length < 20) return false;
-
-  const quarterStepPeaks = sampledPeaks.filter(peak => Math.abs(peak * 4 - Math.round(peak * 4)) < 0.00001);
-  return quarterStepPeaks.length / sampledPeaks.length > 0.95;
-};
-
-const hasCachedWaveform = (file: AudioFile) => {
-  const peaks = file.waveformPeaks?.[0];
-  return Array.isArray(file.waveformPeaks) &&
-    file.waveformPeaks.length > 0 &&
-    Array.isArray(peaks) &&
-    peaks.length >= 512 &&
-    peaks.every(peak => Number.isFinite(peak) && Math.abs(peak) <= 1) &&
-    !hasLegacyLowPrecisionWaveform(peaks) &&
-    typeof file.waveformDuration === 'number' &&
-    file.waveformDuration > 0 &&
-    file.waveformCacheVersion === WAVEFORM_CACHE_VERSION;
-};
+const hasCachedWaveform = (file: AudioFile) => isValidWaveformCache(file.waveformPeaks, file.waveformDuration, file.waveformCacheVersion);
 
 const createWaveformPeaks = (audioBuffer: AudioBuffer) => {
   const peaks: number[] = [];
@@ -201,7 +182,7 @@ const createWaveformPeaks = (audioBuffer: AudioBuffer) => {
       }
     }
 
-    peaks.push(Math.round(peak * WAVEFORM_PEAK_PRECISION) / WAVEFORM_PEAK_PRECISION);
+    peaks.push(roundWaveformPeak(peak));
   }
 
   return [peaks];
@@ -427,10 +408,6 @@ const AudioCard = ({
   const durationRef = useRef(file.waveformDuration || 0);
   const waveformHeightRef = useRef(getResponsiveWaveformHeight());
   const canRenderCachedWaveform = USE_CACHED_WAVEFORM_RENDERING && hasCachedWaveform(file);
-  const initialWaveformCacheRef = useRef({
-    peaks: canRenderCachedWaveform ? file.waveformPeaks : undefined,
-    duration: canRenderCachedWaveform ? file.waveformDuration : undefined,
-  });
   const latestFileRef = useRef(file);
   const playWhenReadyRef = useRef(false);
   const audioPlayableRef = useRef(false);
@@ -526,6 +503,8 @@ const AudioCard = ({
 
     audioPlayableRef.current = false;
     pendingPlaybackRef.current = null;
+    const cachedPeaks = canRenderCachedWaveform ? latestFileRef.current.waveformPeaks : undefined;
+    const cachedDuration = canRenderCachedWaveform ? latestFileRef.current.waveformDuration : undefined;
 
     const wavesurfer = WaveSurfer.create({
       container: waveformRef.current,
@@ -535,10 +514,10 @@ const AudioCard = ({
       cursorColor: '#3680e9',
       height: waveformHeightRef.current,
       interact: false,
-      backend: 'WebAudio',
+      backend: canRenderCachedWaveform ? 'MediaElement' : 'WebAudio',
       url: `/api/files/${encodeURIComponent(latestFileRef.current.id)}/audio`,
-      peaks: initialWaveformCacheRef.current.peaks,
-      duration: initialWaveformCacheRef.current.duration,
+      peaks: cachedPeaks,
+      duration: cachedDuration,
     });
 
     wavesurferRef.current = wavesurfer;
@@ -639,7 +618,7 @@ const AudioCard = ({
       pendingPlaybackRef.current = null;
       setIsCardPlaying(false);
     };
-  }, [onDestroy, onPause, onPlay, onReady, onStop, playFromProgress, setFiles, shouldRenderWaveform, waveformRefreshKey]);
+  }, [canRenderCachedWaveform, onDestroy, onPause, onPlay, onReady, onStop, playFromProgress, setFiles, shouldRenderWaveform, waveformRefreshKey]);
 
   useEffect(() => {
     if (!volumeBoostConfirming) return;
@@ -939,6 +918,27 @@ const AudioCard = ({
     setWaveformRefreshing(true);
     try {
       const latestFile = latestFileRef.current;
+      const serverRes = await fetch(`/api/files/${encodeURIComponent(latestFile.id)}/waveform`, {
+        method: 'POST',
+      });
+
+      if (serverRes.ok) {
+        const waveformData = await serverRes.json() as WaveformGenerationResponse;
+        const updatedFile = {
+          ...latestFile,
+          waveformPeaks: waveformData.waveformPeaks,
+          waveformDuration: waveformData.waveformDuration,
+          waveformCacheVersion: waveformData.waveformCacheVersion,
+        };
+
+        setDuration(waveformData.waveformDuration);
+        setCurrentTime(0);
+        setFiles(prev => prev.map(f => f.id === latestFile.id ? updatedFile : f));
+        setShouldMountWaveform(true);
+        setWaveformRefreshKey(prev => prev + 1);
+        return;
+      }
+
       const res = await fetch(`/api/files/${encodeURIComponent(latestFile.id)}/audio`);
       if (!res.ok) throw new Error('Failed to load audio file');
 
@@ -963,10 +963,6 @@ const AudioCard = ({
       });
       if (!saveRes.ok) throw new Error('Failed to save waveform');
 
-      initialWaveformCacheRef.current = {
-        peaks: USE_CACHED_WAVEFORM_RENDERING ? waveformPeaks : undefined,
-        duration: USE_CACHED_WAVEFORM_RENDERING ? audioBuffer.duration : undefined,
-      };
       setDuration(audioBuffer.duration);
       setCurrentTime(0);
       setFiles(prev => prev.map(f => f.id === latestFile.id ? updatedFile : f));

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser, type UserId } from '@/lib/auth';
 import fs from 'fs';
 import { getDataFilePath, getStemPath, getUploadPath, isSafeStorageId } from '@/lib/storage';
+import { isValidWaveformCache } from '@/lib/waveform';
 
 interface AudioFileRecord {
   id: string;
@@ -31,20 +32,6 @@ interface AudioFileRecord {
     uploadedAt: string;
   };
 }
-
-const WAVEFORM_CACHE_VERSION = 3;
-
-const isValidWaveformCache = (waveformPeaks: unknown, waveformDuration: unknown, waveformCacheVersion: unknown) => {
-  if (!Array.isArray(waveformPeaks) || waveformPeaks.length === 0) return false;
-  const peaks = waveformPeaks[0];
-  return Array.isArray(peaks) &&
-    peaks.length >= 512 &&
-    peaks.every(peak => typeof peak === 'number' && Number.isFinite(peak) && Math.abs(peak) <= 1) &&
-    typeof waveformDuration === 'number' &&
-    Number.isFinite(waveformDuration) &&
-    waveformDuration > 0 &&
-    waveformCacheVersion === WAVEFORM_CACHE_VERSION;
-};
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
