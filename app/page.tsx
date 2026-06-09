@@ -249,11 +249,6 @@ const seekWaveSurferToProgress = (wavesurfer: WaveSurfer, progress: number, fall
   return { duration, progress: safeProgress, time };
 };
 
-const getWaveSurferInteractionRect = (wavesurfer: WaveSurfer, fallbackElement: HTMLElement) => {
-  const wrapperRect = wavesurfer.getWrapper().getBoundingClientRect();
-  return wrapperRect.width > 0 ? wrapperRect : fallbackElement.getBoundingClientRect();
-};
-
 const formatCommentDate = (createdAt: string) => {
   const date = new Date(createdAt);
   if (Number.isNaN(date.getTime())) return 'Unknown comment date';
@@ -536,7 +531,8 @@ const AudioCard = ({
       cursorWidth: tracksStartedFromWaveformClick.has(latestFileRef.current.id) ? 1 : 0,
       cursorColor: '#3680e9',
       height: waveformHeightRef.current,
-      interact: false,
+      interact: true,
+      dragToSeek: true,
       backend: canRenderCachedWaveform ? 'MediaElement' : 'WebAudio',
       url: `/api/files/${encodeURIComponent(latestFileRef.current.id)}/audio`,
       peaks: cachedPeaks,
@@ -588,6 +584,20 @@ const AudioCard = ({
       }
     };
     const handleTimeUpdate = (time: number) => setCurrentTime(time);
+    const handleInteraction = () => {
+      const alreadyStarted = tracksStartedFromWaveformClick.has(latestFileRef.current.id);
+      tracksStartedFromWaveformClick.add(latestFileRef.current.id);
+      setHasStartedPlayback(true);
+
+      if (!alreadyStarted) {
+        wavesurfer.setTime(0);
+        setCurrentTime(0);
+      } else {
+        setCurrentTime(wavesurfer.getCurrentTime());
+      }
+
+      void wavesurfer.play();
+    };
     const handleDecode = async (duration: number) => {
       const latestFile = latestFileRef.current;
       setDuration(duration);
@@ -628,6 +638,7 @@ const AudioCard = ({
     wavesurfer.on('ready', handleReady);
     wavesurfer.on('timeupdate', handleTimeUpdate);
     wavesurfer.on('seeking', handleTimeUpdate);
+    wavesurfer.on('interaction', handleInteraction);
     wavesurfer.on('decode', handleDecode);
     mediaElement.addEventListener('canplay', handleCanPlay);
     mediaElement.addEventListener('loadedmetadata', handleCanPlay);
@@ -827,20 +838,6 @@ const AudioCard = ({
     if (!wavesurferRef.current || !markerDuration) return;
 
     playFromProgress(timestamp / markerDuration);
-  };
-
-  const handleWaveformClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    const wavesurfer = wavesurferRef.current;
-    const waveformElement = waveformRef.current;
-    if (!wavesurfer || !waveformElement) return;
-
-    const hasStartedFromClick = tracksStartedFromWaveformClick.has(file.id);
-    const rect = getWaveSurferInteractionRect(wavesurfer, waveformElement);
-    const progress = hasStartedFromClick
-      ? Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
-      : 0;
-
-    playFromProgress(progress);
   };
 
   const handleCardPlayButton = () => {
@@ -1120,6 +1117,14 @@ const AudioCard = ({
                   <h2 className="min-w-0 truncate text-xl font-semibold leading-8 text-foreground md:text-2xl">
                     {file.name}
                   </h2>
+                  {file.year && (
+                    <span
+                      className="shrink-0 text-xs font-light text-muted-foreground/65"
+                      title={`Recorded ${formatCreatedDate(file)}`}
+                    >
+                      {file.year}
+                    </span>
+                  )}
                   {file.originalName && file.originalName !== file.name && (
                     <span className="hidden min-w-0 truncate text-sm font-light text-muted-foreground/70 sm:block">
                       ({file.originalName})
@@ -1209,8 +1214,7 @@ const AudioCard = ({
             </div>
             <div 
               ref={waveformRef} 
-              className="min-h-40 w-full cursor-pointer pt-8 sm:min-h-36 md:min-h-[118px] md:pt-2" 
-              onClick={handleWaveformClick}
+              className="min-h-40 w-full cursor-pointer pt-8 sm:min-h-36 md:min-h-[118px] md:pt-2"
             >
               {!shouldRenderWaveform && (
                 <div className="flex h-32 w-full items-center justify-center text-xs text-muted-foreground/75 md:h-24">
