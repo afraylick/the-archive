@@ -98,8 +98,7 @@ const INITIAL_RENDER_LIMIT = 30;
 const RENDER_BATCH_SIZE = 30;
 const WAVEFORM_PEAK_LENGTH = 4000;
 const WAVEFORM_PEAK_PRECISION = 10000;
-const WAVEFORM_EXPORT_PRECISION = WAVEFORM_PEAK_PRECISION;
-const WAVEFORM_CACHE_VERSION = 2;
+const WAVEFORM_CACHE_VERSION = 3;
 const USE_CACHED_WAVEFORM_RENDERING = true;
 const VOL_BOOST_DB = 12;
 const VOL_BOOST_GAIN = Math.pow(10, VOL_BOOST_DB / 20);
@@ -425,6 +424,7 @@ const AudioCard = ({
   const [isCardPlaying, setIsCardPlaying] = useState(false);
   const [duration, setDuration] = useState(file.waveformDuration || 0);
   const [currentTime, setCurrentTime] = useState(0);
+  const durationRef = useRef(file.waveformDuration || 0);
   const waveformHeightRef = useRef(getResponsiveWaveformHeight());
   const canRenderCachedWaveform = USE_CACHED_WAVEFORM_RENDERING && hasCachedWaveform(file);
   const initialWaveformCacheRef = useRef({
@@ -433,10 +433,16 @@ const AudioCard = ({
   });
   const latestFileRef = useRef(file);
   const playWhenReadyRef = useRef(false);
+  const audioPlayableRef = useRef(false);
+  const pendingPlaybackRef = useRef<{ progress: number; currentTime: number } | null>(null);
 
   useEffect(() => {
     latestFileRef.current = file;
   }, [file]);
+
+  useEffect(() => {
+    durationRef.current = duration;
+  }, [duration]);
 
   useEffect(() => {
     const cardElement = cardRef.current;
@@ -457,6 +463,29 @@ const AudioCard = ({
   }, [shouldMountWaveform]);
 
   const shouldRenderWaveform = shouldMountWaveform || isActive;
+
+  const playFromProgress = useCallback((progress: number) => {
+    const wavesurfer = wavesurferRef.current;
+    if (!wavesurfer) return;
+
+    const safeProgress = Math.min(1, Math.max(0, progress));
+    const currentDuration = wavesurfer.getDuration() || durationRef.current || latestFileRef.current.waveformDuration || 0;
+    const nextTime = currentDuration * safeProgress;
+
+    tracksStartedFromWaveformClick.add(latestFileRef.current.id);
+    setHasStartedPlayback(true);
+    wavesurfer.seekTo(safeProgress);
+    setDuration(currentDuration);
+    setCurrentTime(nextTime);
+
+    if (!audioPlayableRef.current) {
+      pendingPlaybackRef.current = { progress: safeProgress, currentTime: nextTime };
+      return;
+    }
+
+    pendingPlaybackRef.current = null;
+    void wavesurfer.play();
+  }, []);
 
   const handleTagRowWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     const element = event.currentTarget;
@@ -495,6 +524,9 @@ const AudioCard = ({
     if (!shouldRenderWaveform) return;
     if (!waveformRef.current || !cardRef.current) return;
 
+    audioPlayableRef.current = false;
+    pendingPlaybackRef.current = null;
+
     const wavesurfer = WaveSurfer.create({
       container: waveformRef.current,
       waveColor: '#727479',
@@ -511,6 +543,18 @@ const AudioCard = ({
 
     wavesurferRef.current = wavesurfer;
     onReady(latestFileRef.current, cardRef.current, wavesurfer);
+    const mediaElement = wavesurfer.getMediaElement();
+
+    const handleCanPlay = () => {
+      audioPlayableRef.current = true;
+      const pendingPlayback = pendingPlaybackRef.current;
+      if (!pendingPlayback) return;
+
+      pendingPlaybackRef.current = null;
+      wavesurfer.seekTo(pendingPlayback.progress);
+      setCurrentTime(pendingPlayback.currentTime);
+      void wavesurfer.play();
+    };
 
     const handlePlay = () => {
       if (cardRef.current) {
@@ -533,11 +577,7 @@ const AudioCard = ({
       setCurrentTime(wavesurfer.getCurrentTime());
       if (playWhenReadyRef.current) {
         playWhenReadyRef.current = false;
-        wavesurfer.seekTo(0);
-        setCurrentTime(0);
-        tracksStartedFromWaveformClick.add(latestFileRef.current.id);
-        setHasStartedPlayback(true);
-        void wavesurfer.play();
+        playFromProgress(0);
       }
     };
     const handleTimeUpdate = (time: number) => setCurrentTime(time);
@@ -546,11 +586,10 @@ const AudioCard = ({
       setDuration(duration);
       if (hasCachedWaveform(latestFile) || duration <= 0) return;
 
-      const waveformPeaks = wavesurfer.exportPeaks({
-        channels: 1,
-        maxLength: WAVEFORM_PEAK_LENGTH,
-        precision: WAVEFORM_EXPORT_PRECISION,
-      });
+      const decodedData = wavesurfer.getDecodedData();
+      if (!decodedData) return;
+
+      const waveformPeaks = createWaveformPeaks(decodedData);
       if (!waveformPeaks[0]?.length) return;
 
       const updatedFile = {
@@ -583,8 +622,12 @@ const AudioCard = ({
     wavesurfer.on('timeupdate', handleTimeUpdate);
     wavesurfer.on('seeking', handleTimeUpdate);
     wavesurfer.on('decode', handleDecode);
+    mediaElement.addEventListener('canplay', handleCanPlay);
+    mediaElement.addEventListener('loadedmetadata', handleCanPlay);
 
     return () => {
+      mediaElement.removeEventListener('canplay', handleCanPlay);
+      mediaElement.removeEventListener('loadedmetadata', handleCanPlay);
       onDestroy(latestFileRef.current, wavesurfer);
       gainNodeRef.current?.disconnect();
       gainNodeRef.current = null;
@@ -592,9 +635,11 @@ const AudioCard = ({
       mediaSourceRef.current = null;
       wavesurfer.destroy();
       wavesurferRef.current = null;
+      audioPlayableRef.current = false;
+      pendingPlaybackRef.current = null;
       setIsCardPlaying(false);
     };
-  }, [onDestroy, onPause, onPlay, onReady, onStop, setFiles, shouldRenderWaveform, waveformRefreshKey]);
+  }, [onDestroy, onPause, onPlay, onReady, onStop, playFromProgress, setFiles, shouldRenderWaveform, waveformRefreshKey]);
 
   useEffect(() => {
     if (!volumeBoostConfirming) return;
@@ -774,11 +819,7 @@ const AudioCard = ({
   const seekAndPlayComment = (timestamp: number) => {
     if (!wavesurferRef.current || !markerDuration) return;
 
-    setHasStartedPlayback(true);
-    tracksStartedFromWaveformClick.add(file.id);
-    wavesurferRef.current.seekTo(Math.min(1, Math.max(0, timestamp / markerDuration)));
-    setCurrentTime(timestamp);
-    wavesurferRef.current.play();
+    playFromProgress(timestamp / markerDuration);
   };
 
   const handleWaveformClick = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -792,13 +833,7 @@ const AudioCard = ({
       ? Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
       : 0;
 
-    tracksStartedFromWaveformClick.add(file.id);
-    setHasStartedPlayback(true);
-    wavesurfer.seekTo(progress);
-    const currentDuration = wavesurfer.getDuration() || duration || file.waveformDuration || 0;
-    setDuration(currentDuration);
-    setCurrentTime(currentDuration * progress);
-    wavesurfer.play();
+    playFromProgress(progress);
   };
 
   const handleCardPlayButton = () => {
@@ -817,12 +852,10 @@ const AudioCard = ({
     }
 
     if (!tracksStartedFromWaveformClick.has(file.id)) {
-      tracksStartedFromWaveformClick.add(file.id);
-      setHasStartedPlayback(true);
-      wavesurfer.seekTo(0);
-      setCurrentTime(0);
+      playFromProgress(0);
+      return;
     }
-    void wavesurfer.play();
+    playFromProgress((wavesurfer.getCurrentTime() || 0) / (wavesurfer.getDuration() || durationRef.current || file.waveformDuration || 1));
   };
 
   const addComment = async () => {

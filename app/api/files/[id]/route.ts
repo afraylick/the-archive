@@ -32,7 +32,7 @@ interface AudioFileRecord {
   };
 }
 
-const WAVEFORM_CACHE_VERSION = 2;
+const WAVEFORM_CACHE_VERSION = 3;
 
 const isValidWaveformCache = (waveformPeaks: unknown, waveformDuration: unknown, waveformCacheVersion: unknown) => {
   if (!Array.isArray(waveformPeaks) || waveformPeaks.length === 0) return false;

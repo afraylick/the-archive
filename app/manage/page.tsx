@@ -51,8 +51,7 @@ interface ArchiveUser {
 
 const WAVEFORM_PEAK_LENGTH = 4000;
 const WAVEFORM_PEAK_PRECISION = 10000;
-const WAVEFORM_EXPORT_PRECISION = WAVEFORM_PEAK_PRECISION;
-const WAVEFORM_CACHE_VERSION = 2;
+const WAVEFORM_CACHE_VERSION = 3;
 const FINISH_OPTIONS = ['Tracked', 'Recorder', 'Voice Memo'];
 const FINDER_COLOR_HEX: Record<string, string> = {
   gray: '#8e8e93',
@@ -290,11 +289,10 @@ const ManageWaveform = ({
     wavesurfer.on('decode', async (duration: number) => {
       try {
         setStatus('Refreshing waveform...');
-        const waveformPeaks = wavesurfer.exportPeaks({
-          channels: 1,
-          maxLength: WAVEFORM_PEAK_LENGTH,
-          precision: WAVEFORM_EXPORT_PRECISION,
-        });
+        const decodedData = wavesurfer.getDecodedData();
+        if (!decodedData) return;
+
+        const waveformPeaks = createWaveformPeaks(decodedData);
         if (!waveformPeaks[0]?.length || duration <= 0) return;
 
         await onWaveformRegenerated(latestFileRef.current, waveformPeaks, duration);
