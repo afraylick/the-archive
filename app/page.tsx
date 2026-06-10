@@ -1851,6 +1851,7 @@ export default function Home() {
   const activeCardElementRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const endModeRef = useRef<EndMode>('stop');
+  const miniVolumeRef = useRef(1);
   const playerRegistryRef = useRef<Map<string, PlayerRegistryEntry>>(new Map());
   const renderedFilesRef = useRef<AudioFile[]>([]);
 
@@ -2282,6 +2283,10 @@ export default function Home() {
   }, [endMode]);
 
   useEffect(() => {
+    miniVolumeRef.current = miniVolume;
+  }, [miniVolume]);
+
+  useEffect(() => {
     renderedFilesRef.current = displayedFiles;
   }, [displayedFiles]);
 
@@ -2293,13 +2298,13 @@ export default function Home() {
     if (activeWaveSurferRef.current && activeWaveSurferRef.current !== wavesurfer) {
       activeWaveSurferRef.current.pause();
     }
-    wavesurfer.setVolume(miniVolume);
+    wavesurfer.setVolume(miniVolumeRef.current);
     activeWaveSurferRef.current = wavesurfer;
     activeTrackIdRef.current = file.id;
     activeCardElementRef.current = _cardElement;
     setActiveTrack(file);
     setIsPlaying(true);
-  }, [miniVolume]);
+  }, []);
 
   const handleCardPause = useCallback((file: AudioFile, wavesurfer: WaveSurfer) => {
     if (activeTrackIdRef.current === file.id && activeWaveSurferRef.current === wavesurfer) {
@@ -2378,8 +2383,13 @@ export default function Home() {
 
   const updateMiniVolume = useCallback((value: number) => {
     const nextVolume = Math.min(1, Math.max(0, value));
+    miniVolumeRef.current = nextVolume;
     setMiniVolume(nextVolume);
-    activeWaveSurferRef.current?.setVolume(nextVolume);
+    try {
+      activeWaveSurferRef.current?.setVolume(nextVolume);
+    } catch (error) {
+      console.error('Failed to update mini-player volume', error);
+    }
   }, []);
 
   const scrollToActiveCard = useCallback(() => {
@@ -3281,6 +3291,8 @@ export default function Home() {
                   max="1"
                   step="0.01"
                   value={miniVolume}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => event.stopPropagation()}
                   onChange={(event) => updateMiniVolume(Number(event.currentTarget.value))}
                   className="h-1.5 min-w-0 flex-1 accent-accent"
                   aria-label={`Volume for ${activeTrack.name}`}
