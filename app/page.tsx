@@ -3293,6 +3293,7 @@ export default function Home() {
                   value={miniVolume}
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => event.stopPropagation()}
+                  onInput={(event) => updateMiniVolume(Number(event.currentTarget.value))}
                   onChange={(event) => updateMiniVolume(Number(event.currentTarget.value))}
                   className="h-1.5 min-w-0 flex-1 accent-accent"
                   aria-label={`Volume for ${activeTrack.name}`}
