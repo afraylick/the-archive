@@ -260,6 +260,17 @@ const renderWaveSurferTimelineProgress = (wavesurfer: WaveSurfer, currentTime: n
   );
 };
 
+const setMediaSessionAction = (
+  action: MediaSessionAction,
+  handler: MediaSessionActionHandler | null
+) => {
+  try {
+    navigator.mediaSession.setActionHandler(action, handler);
+  } catch {
+    // Browsers expose different subsets of Media Session actions.
+  }
+};
+
 const formatCommentDate = (createdAt: string) => {
   const date = new Date(createdAt);
   if (Number.isNaN(date.getTime())) return 'Unknown comment date';
@@ -2449,26 +2460,26 @@ export default function Home() {
     }
 
     navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
-    navigator.mediaSession.setActionHandler('play', () => {
+    setMediaSessionAction('play', () => {
       void activeWaveSurferRef.current?.play();
     });
-    navigator.mediaSession.setActionHandler('pause', () => {
+    setMediaSessionAction('pause', () => {
       activeWaveSurferRef.current?.pause();
     });
-    navigator.mediaSession.setActionHandler('previoustrack', () => playRelativeTrack(-1));
-    navigator.mediaSession.setActionHandler('nexttrack', () => playRelativeTrack(1));
-    navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+    setMediaSessionAction('nexttrack', () => playRelativeTrack(1));
+    setMediaSessionAction('previoustrack', () => playRelativeTrack(-1));
+    setMediaSessionAction('seekbackward', (details) => {
       const wavesurfer = activeWaveSurferRef.current;
       if (!wavesurfer) return;
       wavesurfer.setTime(Math.max(0, wavesurfer.getCurrentTime() - (details.seekOffset || 10)));
     });
-    navigator.mediaSession.setActionHandler('seekforward', (details) => {
+    setMediaSessionAction('seekforward', (details) => {
       const wavesurfer = activeWaveSurferRef.current;
       if (!wavesurfer) return;
       const duration = activeTrack.waveformDuration || wavesurfer.getDuration();
       wavesurfer.setTime(Math.min(duration || Number.POSITIVE_INFINITY, wavesurfer.getCurrentTime() + (details.seekOffset || 10)));
     });
-    navigator.mediaSession.setActionHandler('seekto', (details) => {
+    setMediaSessionAction('seekto', (details) => {
       const wavesurfer = activeWaveSurferRef.current;
       if (!wavesurfer || details.seekTime === undefined) return;
       wavesurfer.setTime(details.seekTime);

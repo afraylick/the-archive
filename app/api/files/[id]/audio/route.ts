@@ -9,6 +9,8 @@ interface AudioFileRecord {
   bobs?: boolean;
 }
 
+const AUDIO_CACHE_CONTROL = 'private, max-age=86400, stale-while-revalidate=604800';
+
 const readRange = (rangeHeader: string | null, fileSize: number) => {
   if (!rangeHeader) return null;
 
@@ -60,10 +62,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         status: 206,
         headers: {
           'Accept-Ranges': 'bytes',
-          'Cache-Control': 'private, no-store',
+          'Cache-Control': AUDIO_CACHE_CONTROL,
           'Content-Length': String(range.end - range.start + 1),
           'Content-Range': `bytes ${range.start}-${range.end}/${stat.size}`,
           'Content-Type': contentType,
+          'Vary': 'Cookie',
         },
       });
     }
@@ -72,9 +75,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     return new Response(stream as ReadableStream, {
       headers: {
         'Accept-Ranges': 'bytes',
-        'Cache-Control': 'private, no-store',
+        'Cache-Control': AUDIO_CACHE_CONTROL,
         'Content-Length': String(stat.size),
         'Content-Type': contentType,
+        'Vary': 'Cookie',
       },
     });
   } catch {
