@@ -435,6 +435,7 @@ const AudioCard = ({
   const [currentTime, setCurrentTime] = useState(0);
   const durationRef = useRef(file.waveformDuration || 0);
   const waveformHeightRef = useRef(getResponsiveWaveformHeight());
+  const lastPlaybackUiSyncRef = useRef(0);
   const canRenderCachedWaveform = USE_CACHED_WAVEFORM_RENDERING && hasCachedWaveform(file);
   const latestFileRef = useRef(file);
   const playWhenReadyRef = useRef(false);
@@ -546,7 +547,7 @@ const AudioCard = ({
       cursorColor: '#3680e9',
       height: waveformHeightRef.current,
       interact: false,
-      backend: canRenderCachedWaveform ? 'MediaElement' : 'WebAudio',
+      backend: 'MediaElement',
       url: `/api/files/${encodeURIComponent(latestFileRef.current.id)}/audio`,
       peaks: cachedPeaks,
       duration: cachedDuration,
@@ -555,6 +556,7 @@ const AudioCard = ({
     wavesurferRef.current = wavesurfer;
     onReady(latestFileRef.current, cardRef.current, wavesurfer);
     const mediaElement = wavesurfer.getMediaElement();
+    mediaElement.preload = 'auto';
 
     const handleCanPlay = () => {
       audioPlayableRef.current = true;
@@ -602,7 +604,13 @@ const AudioCard = ({
         playFromProgress(0);
       }
     };
-    const handleTimeUpdate = (time: number) => {
+    const syncPlaybackUi = (time: number, force = false) => {
+      if (document.hidden && !force) return;
+
+      const now = performance.now();
+      if (!force && now - lastPlaybackUiSyncRef.current < 250) return;
+
+      lastPlaybackUiSyncRef.current = now;
       setCurrentTime(time);
       renderWaveSurferTimelineProgress(
         wavesurfer,
@@ -610,6 +618,8 @@ const AudioCard = ({
         hasCachedWaveform(latestFileRef.current) ? latestFileRef.current.waveformDuration || 0 : durationRef.current || 0
       );
     };
+    const handleTimeUpdate = (time: number) => syncPlaybackUi(time);
+    const handleSeeking = (time: number) => syncPlaybackUi(time, true);
     const handleWaveformWrapperClick = (event: MouseEvent) => {
       const wrapper = wavesurfer.getWrapper();
       const rect = wrapper.getBoundingClientRect();
@@ -659,7 +669,7 @@ const AudioCard = ({
     wavesurfer.on('error', handleError);
     wavesurfer.on('ready', handleReady);
     wavesurfer.on('timeupdate', handleTimeUpdate);
-    wavesurfer.on('seeking', handleTimeUpdate);
+    wavesurfer.on('seeking', handleSeeking);
     wavesurfer.on('decode', handleDecode);
     wavesurfer.getWrapper().addEventListener('click', handleWaveformWrapperClick);
     mediaElement.addEventListener('canplay', handleCanPlay);
@@ -1852,6 +1862,7 @@ export default function Home() {
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const endModeRef = useRef<EndMode>('stop');
   const miniVolumeRef = useRef(1);
+  const lastMediaSessionPositionSyncRef = useRef(0);
   const playerRegistryRef = useRef<Map<string, PlayerRegistryEntry>>(new Map());
   const renderedFilesRef = useRef<AudioFile[]>([]);
 
@@ -2271,8 +2282,30 @@ export default function Home() {
 
       const duration = hasCachedWaveform(activeTrack) ? activeTrack.waveformDuration || ws.getDuration() : ws.getDuration();
       const currentTime = ws.getCurrentTime();
-      setProgress(duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0);
-      setIsPlaying(ws.isPlaying());
+      const hidden = document.hidden;
+      if (!hidden) {
+        setProgress(duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0);
+        setIsPlaying(ws.isPlaying());
+      }
+
+      const now = performance.now();
+      if (
+        'mediaSession' in navigator &&
+        duration > 0 &&
+        Number.isFinite(duration) &&
+        (!hidden || now - lastMediaSessionPositionSyncRef.current > 2000)
+      ) {
+        try {
+          lastMediaSessionPositionSyncRef.current = now;
+          navigator.mediaSession.setPositionState({
+            duration,
+            playbackRate: 1,
+            position: Math.min(duration, Math.max(0, currentTime)),
+          });
+        } catch {
+          // Android media controls can reject position state while metadata is changing.
+        }
+      }
     }, 200);
 
     return () => clearInterval(interval);
@@ -2380,6 +2413,67 @@ export default function Home() {
     );
     setProgress(progress * 100);
   }, [activeTrack]);
+
+  const playRelativeTrack = useCallback((direction: 1 | -1) => {
+    const currentTrackId = activeTrackIdRef.current;
+    const currentList = renderedFilesRef.current;
+    const currentIndex = currentTrackId ? currentList.findIndex(track => track.id === currentTrackId) : -1;
+    const nextTrack = currentIndex >= 0 ? currentList[currentIndex + direction] : undefined;
+    const nextPlayer = nextTrack ? playerRegistryRef.current.get(nextTrack.id) : undefined;
+
+    if (!nextPlayer) return;
+
+    nextPlayer.wavesurfer.setVolume(miniVolumeRef.current);
+    void nextPlayer.wavesurfer.play();
+    nextPlayer.cardElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+
+    if (!activeTrack) {
+      navigator.mediaSession.playbackState = 'none';
+      return;
+    }
+
+    if (typeof MediaMetadata !== 'undefined') {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: activeTrack.name,
+        artist: 'the archive',
+        album: [
+          ...getTags(activeTrack, 'instruments', 'instrument'),
+          ...getTags(activeTrack, 'vibes', 'vibe'),
+          activeTrack.finish || '',
+        ].filter(Boolean).map(displayTag).join(' · ') || undefined,
+      });
+    }
+
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+    navigator.mediaSession.setActionHandler('play', () => {
+      void activeWaveSurferRef.current?.play();
+    });
+    navigator.mediaSession.setActionHandler('pause', () => {
+      activeWaveSurferRef.current?.pause();
+    });
+    navigator.mediaSession.setActionHandler('previoustrack', () => playRelativeTrack(-1));
+    navigator.mediaSession.setActionHandler('nexttrack', () => playRelativeTrack(1));
+    navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+      const wavesurfer = activeWaveSurferRef.current;
+      if (!wavesurfer) return;
+      wavesurfer.setTime(Math.max(0, wavesurfer.getCurrentTime() - (details.seekOffset || 10)));
+    });
+    navigator.mediaSession.setActionHandler('seekforward', (details) => {
+      const wavesurfer = activeWaveSurferRef.current;
+      if (!wavesurfer) return;
+      const duration = activeTrack.waveformDuration || wavesurfer.getDuration();
+      wavesurfer.setTime(Math.min(duration || Number.POSITIVE_INFINITY, wavesurfer.getCurrentTime() + (details.seekOffset || 10)));
+    });
+    navigator.mediaSession.setActionHandler('seekto', (details) => {
+      const wavesurfer = activeWaveSurferRef.current;
+      if (!wavesurfer || details.seekTime === undefined) return;
+      wavesurfer.setTime(details.seekTime);
+    });
+  }, [activeTrack, isPlaying, playRelativeTrack]);
 
   const updateMiniVolume = useCallback((value: number) => {
     const nextVolume = Math.min(1, Math.max(0, value));
