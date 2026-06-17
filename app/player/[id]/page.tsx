@@ -11,6 +11,8 @@ declare global {
 
 const DEFAULT_INSTRUMENTS = ['E. Guitar', 'Keys', 'Vocal', 'Synth', 'Acoustic', 'Bass', 'Drums', 'Drum Machine', 'Uku'];
 const DEFAULT_VIBES = ['ambient', 'rock', 'indie', 'acoustic', 'hard', 'soft', 'country', 'electronic', 'Chill', 'Gainy', 'Spacey', 'Beats', 'Group Jam'];
+const MOBILE_PLACEHOLDER_WAVEFORM_PEAKS = [[0, 0]];
+const MOBILE_PLACEHOLDER_DURATION = 0.001;
 const TAG_LABELS: Record<string, string> = {
   'electric guitar': 'E. Guitar',
   'e. guitar': 'E. Guitar',
@@ -19,6 +21,14 @@ const TAG_LABELS: Record<string, string> = {
 
 const displayTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag.replace(/\b\w/g, char => char.toUpperCase());
 const normalizeTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag;
+
+const isMobilePlaybackDevice = () => {
+  if (typeof navigator === 'undefined') return false;
+
+  const userAgent = navigator.userAgent || '';
+  return /Android|webOS|iPhone|iPad|iPod|Mobile/i.test(userAgent)
+    || (/Macintosh/i.test(userAgent) && navigator.maxTouchPoints > 1);
+};
 
 const getRatingColor = (rating: number) => {
   const colors = {
@@ -184,16 +194,37 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
   useEffect(() => {
     if (file && waveformRef.current) {
       const cachedWaveform = isValidWaveformCache(file.waveformPeaks, file.waveformDuration, file.waveformCacheVersion);
+      const useMobileStreamingFallback = !cachedWaveform && isMobilePlaybackDevice();
       wavesurferRef.current = WaveSurfer.create({
         container: waveformRef.current,
         waveColor: '#a3a3a3',
         progressColor: '#5e9ec5',
         interact: false, // Disable default interact to handle click manually
-        backend: cachedWaveform ? 'MediaElement' : 'WebAudio',
+        backend: 'MediaElement',
         url: `/api/files/${encodeURIComponent(file.id)}/audio`,
-        peaks: cachedWaveform ? file.waveformPeaks : undefined,
-        duration: cachedWaveform ? file.waveformDuration : undefined,
+        peaks: cachedWaveform ? file.waveformPeaks : useMobileStreamingFallback ? MOBILE_PLACEHOLDER_WAVEFORM_PEAKS : undefined,
+        duration: cachedWaveform ? file.waveformDuration : useMobileStreamingFallback ? MOBILE_PLACEHOLDER_DURATION : undefined,
       });
+      const mediaElement = wavesurferRef.current.getMediaElement();
+      mediaElement.preload = 'auto';
+      mediaElement.setAttribute('playsinline', '');
+
+      if (useMobileStreamingFallback) {
+        const applyMetadataDuration = () => {
+          const mediaDuration = mediaElement.duration;
+          if (!Number.isFinite(mediaDuration) || mediaDuration <= 0) return;
+
+          wavesurferRef.current?.setOptions({
+            peaks: MOBILE_PLACEHOLDER_WAVEFORM_PEAKS,
+            duration: mediaDuration,
+          });
+          mediaElement.removeEventListener('loadedmetadata', applyMetadataDuration);
+          mediaElement.removeEventListener('canplay', applyMetadataDuration);
+        };
+
+        mediaElement.addEventListener('loadedmetadata', applyMetadataDuration);
+        mediaElement.addEventListener('canplay', applyMetadataDuration);
+      }
 
       // Add to global list
       if (!globalThis.waveSurfers) globalThis.waveSurfers = [];

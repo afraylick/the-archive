@@ -69,6 +69,7 @@ interface AudioCardProps {
   instrumentOptions: string[];
   vibeOptions: string[];
   collectionOptions: string[];
+  shouldPreloadPlayback: boolean;
   onReady: (file: AudioFile, cardElement: HTMLDivElement, wavesurfer: WaveSurfer) => void;
   onPlay: (file: AudioFile, cardElement: HTMLDivElement, wavesurfer: WaveSurfer) => void;
   onPause: (file: AudioFile, wavesurfer: WaveSurfer) => void;
@@ -104,6 +105,8 @@ const FINISH_OPTIONS = ['Tracked', 'Recorder', 'Voice Memo'];
 const INITIAL_RENDER_LIMIT = 30;
 const RENDER_BATCH_SIZE = 30;
 const USE_CACHED_WAVEFORM_RENDERING = true;
+const MOBILE_PLACEHOLDER_WAVEFORM_PEAKS = [[0, 0]];
+const MOBILE_PLACEHOLDER_DURATION = 0.001;
 const VOL_BOOST_DB = 12;
 const VOL_BOOST_GAIN = Math.pow(10, VOL_BOOST_DB / 20);
 const TAG_LABELS: Record<string, string> = {
@@ -117,6 +120,14 @@ const tracksStartedFromWaveformClick = new Set<string>();
 const getSharedAudioContext = () => {
   sharedAudioContext ??= new AudioContext();
   return sharedAudioContext;
+};
+
+const isMobilePlaybackDevice = () => {
+  if (typeof navigator === 'undefined') return false;
+
+  const userAgent = navigator.userAgent || '';
+  return /Android|webOS|iPhone|iPad|iPod|Mobile/i.test(userAgent)
+    || (/Macintosh/i.test(userAgent) && navigator.maxTouchPoints > 1);
 };
 
 const normalizeTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag;
@@ -410,6 +421,7 @@ const AudioCard = ({
   instrumentOptions,
   vibeOptions,
   collectionOptions,
+  shouldPreloadPlayback,
   onReady,
   onPlay,
   onPause,
@@ -479,7 +491,7 @@ const AudioCard = ({
     return () => observer.disconnect();
   }, [shouldMountWaveform]);
 
-  const shouldRenderWaveform = shouldMountWaveform || isActive;
+  const shouldRenderWaveform = shouldMountWaveform || isActive || shouldPreloadPlayback;
 
   const playFromProgress = useCallback((progress: number) => {
     const wavesurfer = wavesurferRef.current;
@@ -549,6 +561,9 @@ const AudioCard = ({
     pendingPlaybackRef.current = null;
     const cachedPeaks = canRenderCachedWaveform ? latestFileRef.current.waveformPeaks : undefined;
     const cachedDuration = canRenderCachedWaveform ? latestFileRef.current.waveformDuration : undefined;
+    const useMobileStreamingFallback = !canRenderCachedWaveform && isMobilePlaybackDevice();
+    const fallbackPeaks = useMobileStreamingFallback ? MOBILE_PLACEHOLDER_WAVEFORM_PEAKS : undefined;
+    const fallbackDuration = useMobileStreamingFallback ? MOBILE_PLACEHOLDER_DURATION : undefined;
 
     const wavesurfer = WaveSurfer.create({
       container: waveformRef.current,
@@ -560,16 +575,35 @@ const AudioCard = ({
       interact: false,
       backend: 'MediaElement',
       url: `/api/files/${encodeURIComponent(latestFileRef.current.id)}/audio`,
-      peaks: cachedPeaks,
-      duration: cachedDuration,
+      peaks: cachedPeaks || fallbackPeaks,
+      duration: cachedDuration || fallbackDuration,
     });
 
     wavesurferRef.current = wavesurfer;
     onReady(latestFileRef.current, cardRef.current, wavesurfer);
     const mediaElement = wavesurfer.getMediaElement();
     mediaElement.preload = 'auto';
+    mediaElement.setAttribute('playsinline', '');
+    let appliedMobileMetadataDuration = false;
+
+    const applyMobileMetadataDuration = () => {
+      if (!useMobileStreamingFallback || appliedMobileMetadataDuration) return;
+
+      const mediaDuration = mediaElement.duration;
+      if (!Number.isFinite(mediaDuration) || mediaDuration <= 0) return;
+
+      appliedMobileMetadataDuration = true;
+      durationRef.current = mediaDuration;
+      setDuration(mediaDuration);
+      wavesurfer.setOptions({
+        peaks: MOBILE_PLACEHOLDER_WAVEFORM_PEAKS,
+        duration: mediaDuration,
+      });
+      renderWaveSurferTimelineProgress(wavesurfer, mediaElement.currentTime || 0, mediaDuration);
+    };
 
     const handleCanPlay = () => {
+      applyMobileMetadataDuration();
       audioPlayableRef.current = true;
       const pendingPlayback = pendingPlaybackRef.current;
       if (!pendingPlayback) return;
@@ -1876,6 +1910,7 @@ export default function Home() {
   const lastMediaSessionPositionSyncRef = useRef(0);
   const playerRegistryRef = useRef<Map<string, PlayerRegistryEntry>>(new Map());
   const renderedFilesRef = useRef<AudioFile[]>([]);
+  const pendingPlaybackTrackIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     fetch('/api/session')
@@ -2088,15 +2123,25 @@ export default function Home() {
     ? Math.min(renderedFiles.length, targetTrackIndex + RENDER_BATCH_SIZE)
     : renderLimit;
 
-  const displayedFiles = useMemo(() => {
-    const initialFiles = renderedFiles.slice(0, effectiveRenderLimit);
-    if (!activeTrack || initialFiles.some(file => file.id === activeTrack.id)) {
-      return initialFiles;
+  const activeTrackIndex = activeTrack ? renderedFiles.findIndex(file => file.id === activeTrack.id) : -1;
+
+  const playbackPreloadFileIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (activeTrackIndex < 0) return ids;
+
+    for (const index of [activeTrackIndex - 1, activeTrackIndex, activeTrackIndex + 1]) {
+      const file = renderedFiles[index];
+      if (file) ids.add(file.id);
     }
 
-    const activeFile = renderedFiles.find(file => file.id === activeTrack.id);
-    return activeFile ? [...initialFiles, activeFile] : initialFiles;
-  }, [activeTrack, effectiveRenderLimit, renderedFiles]);
+    return ids;
+  }, [activeTrackIndex, renderedFiles]);
+
+  const displayedFiles = useMemo(() => {
+    const displayIds = new Set(renderedFiles.slice(0, effectiveRenderLimit).map(file => file.id));
+    playbackPreloadFileIds.forEach(id => displayIds.add(id));
+    return renderedFiles.filter(file => displayIds.has(file.id));
+  }, [effectiveRenderLimit, playbackPreloadFileIds, renderedFiles]);
 
   const hasMoreFiles = effectiveRenderLimit < renderedFiles.length;
 
@@ -2331,12 +2376,25 @@ export default function Home() {
   }, [miniVolume]);
 
   useEffect(() => {
-    renderedFilesRef.current = displayedFiles;
-  }, [displayedFiles]);
+    renderedFilesRef.current = renderedFiles;
+  }, [renderedFiles]);
+
+  const playRegisteredPlayer = useCallback((player: PlayerRegistryEntry, shouldScroll = true) => {
+    player.wavesurfer.setVolume(miniVolumeRef.current);
+    void player.wavesurfer.play();
+    if (shouldScroll && !document.hidden) {
+      player.cardElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, []);
 
   const handleCardReady = useCallback((file: AudioFile, cardElement: HTMLDivElement, wavesurfer: WaveSurfer) => {
-    playerRegistryRef.current.set(file.id, { cardElement, wavesurfer });
-  }, []);
+    const player = { cardElement, wavesurfer };
+    playerRegistryRef.current.set(file.id, player);
+    if (pendingPlaybackTrackIdRef.current === file.id) {
+      pendingPlaybackTrackIdRef.current = null;
+      playRegisteredPlayer(player);
+    }
+  }, [playRegisteredPlayer]);
 
   const handleCardPlay = useCallback((file: AudioFile, _cardElement: HTMLDivElement, wavesurfer: WaveSurfer) => {
     if (activeWaveSurferRef.current && activeWaveSurferRef.current !== wavesurfer) {
@@ -2368,8 +2426,13 @@ export default function Home() {
       const nextTrack = currentIndex >= 0 ? currentList[currentIndex + 1] : undefined;
       const nextPlayer = nextTrack ? playerRegistryRef.current.get(nextTrack.id) : undefined;
 
-      if (nextTrack && nextPlayer) {
-        nextPlayer.wavesurfer.play();
+      if (nextPlayer) {
+        playRegisteredPlayer(nextPlayer, false);
+        return;
+      }
+
+      if (nextTrack) {
+        pendingPlaybackTrackIdRef.current = nextTrack.id;
         return;
       }
     }
@@ -2382,7 +2445,7 @@ export default function Home() {
       setIsPlaying(false);
       setProgress(0);
     }
-  }, []);
+  }, [playRegisteredPlayer]);
 
   const clearActivePlayer = useCallback((file: AudioFile, wavesurfer: WaveSurfer) => {
     const registeredPlayer = playerRegistryRef.current.get(file.id);
@@ -2432,12 +2495,20 @@ export default function Home() {
     const nextTrack = currentIndex >= 0 ? currentList[currentIndex + direction] : undefined;
     const nextPlayer = nextTrack ? playerRegistryRef.current.get(nextTrack.id) : undefined;
 
-    if (!nextPlayer) return;
+    if (!nextTrack) return;
 
-    nextPlayer.wavesurfer.setVolume(miniVolumeRef.current);
-    void nextPlayer.wavesurfer.play();
-    nextPlayer.cardElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, []);
+    if (nextPlayer) {
+      playRegisteredPlayer(nextPlayer);
+      return;
+    }
+
+    pendingPlaybackTrackIdRef.current = nextTrack.id;
+    setRenderWindow(prev => {
+      const currentLimit = prev.key === filterKey ? prev.limit : INITIAL_RENDER_LIMIT;
+      const nextLimit = Math.max(currentLimit, Math.min(currentList.length, currentIndex + direction + RENDER_BATCH_SIZE));
+      return nextLimit === currentLimit ? prev : { key: filterKey, limit: nextLimit };
+    });
+  }, [filterKey, playRegisteredPlayer]);
 
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
@@ -3294,6 +3365,7 @@ export default function Home() {
                     instrumentOptions={instrumentOptions}
                     vibeOptions={vibeOptions}
                     collectionOptions={collectionOptions}
+                    shouldPreloadPlayback={playbackPreloadFileIds.has(file.id)}
                     onReady={handleCardReady}
                     onPlay={handleCardPlay}
                     onPause={handleCardPause}
