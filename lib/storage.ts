@@ -6,6 +6,7 @@ export const getStorageRoot = () => process.env.ARCHIVE_STORAGE_DIR || path.join
 export const getDataFilePath = () => path.join(getStorageRoot(), 'data.json');
 export const getUploadsDir = () => path.join(getStorageRoot(), 'uploads');
 export const getStemsDir = () => path.join(getStorageRoot(), 'stems');
+export const getTranscodedDir = () => path.join(getStorageRoot(), 'transcoded');
 
 export const ensureDir = (dir: string) => {
   if (!fs.existsSync(dir)) {
@@ -17,6 +18,7 @@ export const ensureStorageDirs = () => {
   ensureDir(getStorageRoot());
   ensureDir(getUploadsDir());
   ensureDir(getStemsDir());
+  ensureDir(getTranscodedDir());
 };
 
 export const getUploadPath = (id: string) => path.join(getUploadsDir(), id);

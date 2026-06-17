@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { spawn } from 'child_process';
 import { getSessionUser } from '@/lib/auth';
-import { getAudioContentType, getDataFilePath, getUploadPath, isSafeStorageId } from '@/lib/storage';
+import { ensureDir, getAudioContentType, getDataFilePath, getTranscodedDir, getUploadPath, isSafeStorageId } from '@/lib/storage';
 import fs from 'fs';
+import path from 'path';
 import { Readable } from 'stream';
 
 interface AudioFileRecord {
@@ -10,6 +12,8 @@ interface AudioFileRecord {
 }
 
 const AUDIO_CACHE_CONTROL = 'private, max-age=86400, stale-while-revalidate=604800';
+const MOBILE_AUDIO_CACHE_CONTROL = 'private, max-age=604800, stale-while-revalidate=2592000';
+const getCommand = (envName: string, fallback: string) => process.env[envName] || fallback;
 
 const readRange = (rangeHeader: string | null, fileSize: number) => {
   if (!rangeHeader) return null;
@@ -27,6 +31,97 @@ const readRange = (rangeHeader: string | null, fileSize: number) => {
   }
 
   return { start, end: Math.min(end, fileSize - 1) };
+};
+
+const streamAudioFile = (filePath: string, contentType: string, rangeHeader: string | null, cacheControl = AUDIO_CACHE_CONTROL) => {
+  const stat = fs.statSync(filePath);
+  const range = readRange(rangeHeader, stat.size);
+
+  if (range) {
+    const stream = Readable.toWeb(fs.createReadStream(filePath, range));
+    return new Response(stream as ReadableStream, {
+      status: 206,
+      headers: {
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': cacheControl,
+        'Content-Length': String(range.end - range.start + 1),
+        'Content-Range': `bytes ${range.start}-${range.end}/${stat.size}`,
+        'Content-Type': contentType,
+        'Vary': 'Cookie',
+      },
+    });
+  }
+
+  const stream = Readable.toWeb(fs.createReadStream(filePath));
+  return new Response(stream as ReadableStream, {
+    headers: {
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': cacheControl,
+      'Content-Length': String(stat.size),
+      'Content-Type': contentType,
+      'Vary': 'Cookie',
+    },
+  });
+};
+
+const transcodeToMp3 = async (sourcePath: string, outputPath: string) => {
+  ensureDir(path.dirname(outputPath));
+  const tempPath = `${outputPath}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(getCommand('ARCHIVE_FFMPEG_PATH', 'ffmpeg'), [
+        '-hide_banner',
+        '-v',
+        'error',
+        '-y',
+        '-i',
+        /* turbopackIgnore: true */ sourcePath,
+        '-vn',
+        '-map_metadata',
+        '-1',
+        '-codec:a',
+        'libmp3lame',
+        '-b:a',
+        '192k',
+        '-f',
+        'mp3',
+        /* turbopackIgnore: true */ tempPath,
+      ], { stdio: ['ignore', 'ignore', 'pipe'] });
+
+      const stderr: Buffer[] = [];
+      child.stderr.on('data', chunk => stderr.push(Buffer.from(chunk)));
+      child.on('error', reject);
+      child.on('close', code => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+
+        const message = Buffer.concat(stderr).toString('utf8').trim() || `ffmpeg exited with code ${code}`;
+        reject(new Error(message));
+      });
+    });
+
+    fs.renameSync(tempPath, outputPath);
+  } catch (error) {
+    fs.rmSync(tempPath, { force: true });
+    throw error;
+  }
+};
+
+const getMobileAudioPath = async (sourcePath: string, id: string) => {
+  if (path.extname(id).toLowerCase() !== '.wav') return null;
+
+  const sourceStat = fs.statSync(sourcePath);
+  const outputPath = path.join(getTranscodedDir(), `${id}.mp3`);
+  const outputStat = fs.existsSync(outputPath) ? fs.statSync(outputPath) : null;
+
+  if (!outputStat || outputStat.mtimeMs < sourceStat.mtimeMs || outputStat.size === 0) {
+    await transcodeToMp3(sourcePath, outputPath);
+  }
+
+  return outputPath;
 };
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -52,35 +147,21 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       return NextResponse.json({ error: 'Audio file not found' }, { status: 404 });
     }
 
-    const stat = fs.statSync(filePath);
     const contentType = getAudioContentType(id);
-    const range = readRange(req.headers.get('range'), stat.size);
+    const wantsMobileAudio = req.nextUrl.searchParams.get('format') === 'mobile';
 
-    if (range) {
-      const stream = Readable.toWeb(fs.createReadStream(filePath, range));
-      return new Response(stream as ReadableStream, {
-        status: 206,
-        headers: {
-          'Accept-Ranges': 'bytes',
-          'Cache-Control': AUDIO_CACHE_CONTROL,
-          'Content-Length': String(range.end - range.start + 1),
-          'Content-Range': `bytes ${range.start}-${range.end}/${stat.size}`,
-          'Content-Type': contentType,
-          'Vary': 'Cookie',
-        },
-      });
+    if (wantsMobileAudio) {
+      try {
+        const mobileAudioPath = await getMobileAudioPath(filePath, id);
+        if (mobileAudioPath) {
+          return streamAudioFile(mobileAudioPath, 'audio/mpeg', req.headers.get('range'), MOBILE_AUDIO_CACHE_CONTROL);
+        }
+      } catch (error) {
+        console.error('Mobile audio transcode failed for', id, error);
+      }
     }
 
-    const stream = Readable.toWeb(fs.createReadStream(filePath));
-    return new Response(stream as ReadableStream, {
-      headers: {
-        'Accept-Ranges': 'bytes',
-        'Cache-Control': AUDIO_CACHE_CONTROL,
-        'Content-Length': String(stat.size),
-        'Content-Type': contentType,
-        'Vary': 'Cookie',
-      },
-    });
+    return streamAudioFile(filePath, contentType, req.headers.get('range'));
   } catch {
     return NextResponse.json({ error: 'Audio stream failed' }, { status: 500 });
   }

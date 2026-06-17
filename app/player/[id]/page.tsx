@@ -30,6 +30,11 @@ const isMobilePlaybackDevice = () => {
     || (/Macintosh/i.test(userAgent) && navigator.maxTouchPoints > 1);
 };
 
+const getPlaybackAudioUrl = (id: string) => {
+  const baseUrl = `/api/files/${encodeURIComponent(id)}/audio`;
+  return isMobilePlaybackDevice() ? `${baseUrl}?format=mobile` : baseUrl;
+};
+
 const getRatingColor = (rating: number) => {
   const colors = {
     1: 'text-yellow-500',
@@ -201,7 +206,7 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
         progressColor: '#5e9ec5',
         interact: false, // Disable default interact to handle click manually
         backend: 'MediaElement',
-        url: `/api/files/${encodeURIComponent(file.id)}/audio`,
+        url: getPlaybackAudioUrl(file.id),
         peaks: cachedWaveform ? file.waveformPeaks : useMobileStreamingFallback ? MOBILE_PLACEHOLDER_WAVEFORM_PEAKS : undefined,
         duration: cachedWaveform ? file.waveformDuration : useMobileStreamingFallback ? MOBILE_PLACEHOLDER_DURATION : undefined,
       });

@@ -5,6 +5,7 @@ const nextConfig: NextConfig = {
     root: process.cwd(),
   },
   outputFileTracingExcludes: {
+    '/api/files/*/audio': ['./next.config.ts'],
     '/api/files/*/waveform': ['./next.config.ts'],
   },
 };

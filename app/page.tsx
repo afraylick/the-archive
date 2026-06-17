@@ -70,6 +70,8 @@ interface AudioCardProps {
   vibeOptions: string[];
   collectionOptions: string[];
   shouldPreloadPlayback: boolean;
+  playbackMediaElement: HTMLAudioElement | null;
+  onPreparePlayback: (file: AudioFile) => void;
   onReady: (file: AudioFile, cardElement: HTMLDivElement, wavesurfer: WaveSurfer) => void;
   onPlay: (file: AudioFile, cardElement: HTMLDivElement, wavesurfer: WaveSurfer) => void;
   onPause: (file: AudioFile, wavesurfer: WaveSurfer) => void;
@@ -128,6 +130,11 @@ const isMobilePlaybackDevice = () => {
   const userAgent = navigator.userAgent || '';
   return /Android|webOS|iPhone|iPad|iPod|Mobile/i.test(userAgent)
     || (/Macintosh/i.test(userAgent) && navigator.maxTouchPoints > 1);
+};
+
+const getPlaybackAudioUrl = (id: string) => {
+  const baseUrl = `/api/files/${encodeURIComponent(id)}/audio`;
+  return isMobilePlaybackDevice() ? `${baseUrl}?format=mobile` : baseUrl;
 };
 
 const normalizeTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag;
@@ -422,6 +429,8 @@ const AudioCard = ({
   vibeOptions,
   collectionOptions,
   shouldPreloadPlayback,
+  playbackMediaElement,
+  onPreparePlayback,
   onReady,
   onPlay,
   onPause,
@@ -565,6 +574,7 @@ const AudioCard = ({
     const fallbackPeaks = useMobileStreamingFallback ? MOBILE_PLACEHOLDER_WAVEFORM_PEAKS : undefined;
     const fallbackDuration = useMobileStreamingFallback ? MOBILE_PLACEHOLDER_DURATION : undefined;
 
+    const shouldUseSharedMedia = isActive && playbackMediaElement;
     const wavesurfer = WaveSurfer.create({
       container: waveformRef.current,
       waveColor: '#727479',
@@ -574,7 +584,8 @@ const AudioCard = ({
       height: waveformHeightRef.current,
       interact: false,
       backend: 'MediaElement',
-      url: `/api/files/${encodeURIComponent(latestFileRef.current.id)}/audio`,
+      media: shouldUseSharedMedia ? playbackMediaElement : undefined,
+      url: getPlaybackAudioUrl(latestFileRef.current.id),
       peaks: cachedPeaks || fallbackPeaks,
       duration: cachedDuration || fallbackDuration,
     });
@@ -623,6 +634,10 @@ const AudioCard = ({
     };
 
     const handlePlay = () => {
+      if (!isActive) {
+        playWhenReadyRef.current = true;
+        onPreparePlayback(latestFileRef.current);
+      }
       if (cardRef.current) {
         onPlay(latestFileRef.current, cardRef.current, wavesurfer);
       }
@@ -735,7 +750,7 @@ const AudioCard = ({
       pendingPlaybackRef.current = null;
       setIsCardPlaying(false);
     };
-  }, [canRenderCachedWaveform, onDestroy, onPause, onPlay, onReady, onStop, playFromProgress, setFiles, shouldRenderWaveform, waveformRefreshKey]);
+  }, [canRenderCachedWaveform, isActive, onDestroy, onPause, onPlay, onPreparePlayback, onReady, onStop, playbackMediaElement, playFromProgress, setFiles, shouldRenderWaveform, waveformRefreshKey]);
 
   useEffect(() => {
     if (!volumeBoostConfirming) return;
@@ -920,6 +935,10 @@ const AudioCard = ({
 
   const handleCardPlayButton = () => {
     const wavesurfer = wavesurferRef.current;
+    if (!isActive) {
+      playWhenReadyRef.current = true;
+      onPreparePlayback(file);
+    }
     if (!wavesurfer) {
       playWhenReadyRef.current = true;
       tracksStartedFromWaveformClick.add(file.id);
@@ -1902,6 +1921,8 @@ export default function Home() {
   const urlTargetTrackId = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('track');
   const targetTrackId = activityTargetTrackId || urlTargetTrackId;
   const activeWaveSurferRef = useRef<WaveSurfer | null>(null);
+  const playbackAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [playbackMediaElement, setPlaybackMediaElement] = useState<HTMLAudioElement | null>(null);
   const activeTrackIdRef = useRef<string | null>(null);
   const activeCardElementRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
@@ -1911,6 +1932,7 @@ export default function Home() {
   const playerRegistryRef = useRef<Map<string, PlayerRegistryEntry>>(new Map());
   const renderedFilesRef = useRef<AudioFile[]>([]);
   const pendingPlaybackTrackIdRef = useRef<string | null>(null);
+  const sharedPlaybackHandoffTrackIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     fetch('/api/session')
@@ -2376,6 +2398,10 @@ export default function Home() {
   }, [miniVolume]);
 
   useEffect(() => {
+    setPlaybackMediaElement(playbackAudioRef.current);
+  }, []);
+
+  useEffect(() => {
     renderedFilesRef.current = renderedFiles;
   }, [renderedFiles]);
 
@@ -2396,6 +2422,10 @@ export default function Home() {
     }
   }, [playRegisteredPlayer]);
 
+  const prepareSharedPlayback = useCallback((file: AudioFile) => {
+    sharedPlaybackHandoffTrackIdRef.current = file.id;
+  }, []);
+
   const handleCardPlay = useCallback((file: AudioFile, _cardElement: HTMLDivElement, wavesurfer: WaveSurfer) => {
     if (activeWaveSurferRef.current && activeWaveSurferRef.current !== wavesurfer) {
       activeWaveSurferRef.current.pause();
@@ -2404,6 +2434,7 @@ export default function Home() {
     activeWaveSurferRef.current = wavesurfer;
     activeTrackIdRef.current = file.id;
     activeCardElementRef.current = _cardElement;
+    sharedPlaybackHandoffTrackIdRef.current = null;
     setActiveTrack(file);
     setIsPlaying(true);
   }, []);
@@ -2437,7 +2468,11 @@ export default function Home() {
       }
     }
 
-    if (activeTrackIdRef.current === file.id && activeWaveSurferRef.current === wavesurfer) {
+    if (
+      activeTrackIdRef.current === file.id &&
+      activeWaveSurferRef.current === wavesurfer &&
+      sharedPlaybackHandoffTrackIdRef.current !== file.id
+    ) {
       activeWaveSurferRef.current = null;
       activeTrackIdRef.current = null;
       activeCardElementRef.current = null;
@@ -2769,6 +2804,7 @@ export default function Home() {
 
   return (
     <div className="archive-shell min-h-screen text-foreground">
+      <audio ref={playbackAudioRef} preload="auto" playsInline className="hidden" />
       <header className="mx-auto grid h-auto max-w-[1800px] grid-cols-1 items-center gap-3 border-b border-border/40 px-3 py-3 sm:grid-cols-[1fr_auto_1fr] sm:px-4">
         <div className="hidden sm:block" />
         <div className="flex items-center justify-center gap-3">
@@ -3366,6 +3402,8 @@ export default function Home() {
                     vibeOptions={vibeOptions}
                     collectionOptions={collectionOptions}
                     shouldPreloadPlayback={playbackPreloadFileIds.has(file.id)}
+                    playbackMediaElement={playbackMediaElement}
+                    onPreparePlayback={prepareSharedPlayback}
                     onReady={handleCardReady}
                     onPlay={handleCardPlay}
                     onPause={handleCardPause}
