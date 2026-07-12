@@ -49,6 +49,20 @@ textarea {
   textarea {
     font-size: 16px;
   }
+
+  .archive-shell {
+    background: var(--background);
+  }
+
+  .audio-card {
+    content-visibility: auto;
+    contain-intrinsic-block-size: 24rem;
+  }
+
+  .archive-shell [class*="backdrop-blur"] {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
 }
 
 .login-wave-static,

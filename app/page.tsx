@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, memo, type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import WaveSurfer from 'wavesurfer.js';
 import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
@@ -107,6 +107,8 @@ const RENDER_BATCH_SIZE = 30;
 const USE_CACHED_WAVEFORM_RENDERING = true;
 const MOBILE_PLACEHOLDER_WAVEFORM_PEAKS = [[0, 0]];
 const MOBILE_PLACEHOLDER_DURATION = 0.001;
+const MOBILE_WAVEFORM_MOUNT_DELAY = 180;
+const MOBILE_WAVEFORM_IDLE_TIMEOUT = 900;
 const VOL_BOOST_DB = 12;
 const VOL_BOOST_GAIN = Math.pow(10, VOL_BOOST_DB / 20);
 const TAG_LABELS: Record<string, string> = {
@@ -133,6 +135,23 @@ const isMobilePlaybackDevice = () => {
 const getPlaybackAudioUrl = (id: string) => {
   const baseUrl = `/api/files/${encodeURIComponent(id)}/audio`;
   return isMobilePlaybackDevice() ? `${baseUrl}?format=mobile` : baseUrl;
+};
+
+const scheduleMobileWaveformMount = (callback: () => void) => {
+  if (typeof window === 'undefined') return () => undefined;
+
+  const idleWindow = window as Window & typeof globalThis & {
+    requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+    cancelIdleCallback?: (handle: number) => void;
+  };
+
+  if (idleWindow.requestIdleCallback && idleWindow.cancelIdleCallback) {
+    const idleId = idleWindow.requestIdleCallback(callback, { timeout: MOBILE_WAVEFORM_IDLE_TIMEOUT });
+    return () => idleWindow.cancelIdleCallback?.(idleId);
+  }
+
+  const timeoutId = window.setTimeout(callback, MOBILE_WAVEFORM_MOUNT_DELAY);
+  return () => window.clearTimeout(timeoutId);
 };
 
 const normalizeTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag;
@@ -417,7 +436,7 @@ const SidebarChevron = ({ open }: { open: boolean }) => (
   </svg>
 );
 
-const AudioCard = ({
+const AudioCard = memo(function AudioCard({
   file,
   setFiles,
   isActive,
@@ -432,7 +451,7 @@ const AudioCard = ({
   onPause,
   onStop,
   onDestroy,
-}: AudioCardProps) => {
+}: AudioCardProps) {
   const waveformRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
@@ -480,21 +499,34 @@ const AudioCard = ({
 
   useEffect(() => {
     const cardElement = cardRef.current;
-    if (!cardElement || shouldMountWaveform) return;
+    if (!cardElement || shouldMountWaveform || isActive || shouldPreloadPlayback) return;
+
+    let cancelScheduledMount: (() => void) | null = null;
+    const mountWaveform = () => {
+      cancelScheduledMount = null;
+      setShouldMountWaveform(true);
+    };
 
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          setShouldMountWaveform(true);
           observer.disconnect();
+          if (isMobilePlaybackDevice()) {
+            cancelScheduledMount = scheduleMobileWaveformMount(mountWaveform);
+          } else {
+            mountWaveform();
+          }
         }
       },
-      { rootMargin: '260px 0px' }
+      { rootMargin: isMobilePlaybackDevice() ? '120px 0px' : '260px 0px' }
     );
 
     observer.observe(cardElement);
-    return () => observer.disconnect();
-  }, [shouldMountWaveform]);
+    return () => {
+      observer.disconnect();
+      cancelScheduledMount?.();
+    };
+  }, [isActive, shouldMountWaveform, shouldPreloadPlayback]);
 
   const shouldRenderWaveform = shouldMountWaveform || isActive || shouldPreloadPlayback;
 
@@ -502,6 +534,7 @@ const AudioCard = ({
     const wavesurfer = wavesurferRef.current;
     if (!wavesurfer) return;
 
+    wavesurfer.getMediaElement().preload = 'auto';
     const timelineDuration = hasCachedWaveform(latestFileRef.current)
       ? latestFileRef.current.waveformDuration || 0
       : durationRef.current || 0;
@@ -587,7 +620,7 @@ const AudioCard = ({
     wavesurferRef.current = wavesurfer;
     onReady(latestFileRef.current, cardRef.current, wavesurfer);
     const mediaElement = wavesurfer.getMediaElement();
-    mediaElement.preload = 'auto';
+    mediaElement.preload = isMobilePlaybackDevice() ? 'metadata' : 'auto';
     mediaElement.setAttribute('playsinline', '');
     let appliedMobileMetadataDuration = false;
 
@@ -741,6 +774,13 @@ const AudioCard = ({
       setIsCardPlaying(false);
     };
   }, [canRenderCachedWaveform, onDestroy, onPause, onPlay, onReady, onStop, playFromProgress, setFiles, shouldRenderWaveform, waveformRefreshKey]);
+
+  useEffect(() => {
+    const mediaElement = wavesurferRef.current?.getMediaElement();
+    if (!mediaElement) return;
+
+    mediaElement.preload = isMobilePlaybackDevice() && !shouldPreloadPlayback && !isActive ? 'metadata' : 'auto';
+  }, [isActive, shouldPreloadPlayback]);
 
   useEffect(() => {
     if (!volumeBoostConfirming) return;
@@ -1125,7 +1165,7 @@ const AudioCard = ({
   }, [comments, currentTime]);
 
   return (
-    <div ref={cardRef} className="relative border-b border-border/70 bg-[#10181e]/92 px-3 py-3 scroll-mt-24 transition hover:bg-[#11191f] sm:px-4 md:px-6">
+    <div ref={cardRef} className="audio-card relative border-b border-border/70 bg-[#10181e]/92 px-3 py-3 scroll-mt-24 transition hover:bg-[#11191f] sm:px-4 md:px-6">
       <div className="grid gap-3 md:grid-cols-[2.75rem_minmax(0,1fr)] md:items-start md:gap-3">
         <div className="relative z-40 order-1 flex items-center justify-between gap-3 md:hidden">
           <span className="truncate text-[11px] font-light text-muted-foreground opacity-75 md:hidden" title={`Recorded ${formatCreatedDate(file)}`}>
@@ -1853,10 +1893,9 @@ const AudioCard = ({
           )}
         </div>
       )}
-
     </div>
   );
-};
+});
 
 export default function Home() {
   const [files, setFiles] = useState<AudioFile[]>([]);
@@ -2150,10 +2189,16 @@ export default function Home() {
 
   const hasMoreFiles = effectiveRenderLimit < renderedFiles.length;
 
-  const yearOptions = Array.from(new Set(files.map(f => f.year || 0))).sort((a, b) => b - a);
+  const yearOptions = useMemo(() => (
+    Array.from(new Set(files.map(f => f.year || 0))).sort((a, b) => b - a)
+  ), [files]);
   const adamRatingOptions = [5, 4, 3, 2, 1, 0];
-  const finishOptions = Array.from(new Set([...FINISH_OPTIONS, ...files.map(file => file.finish || '').filter(Boolean)]));
-  const collectionOptions = Array.from(new Set(files.flatMap(file => Array.isArray(file.collections) ? file.collections.filter(Boolean) : []))).sort((a, b) => a.localeCompare(b));
+  const finishOptions = useMemo(() => (
+    Array.from(new Set([...FINISH_OPTIONS, ...files.map(file => file.finish || '').filter(Boolean)]))
+  ), [files]);
+  const collectionOptions = useMemo(() => (
+    Array.from(new Set(files.flatMap(file => Array.isArray(file.collections) ? file.collections.filter(Boolean) : []))).sort((a, b) => a.localeCompare(b))
+  ), [files]);
 
   const activityEntries = useMemo<ActivityEntry[]>(() => {
     if (!currentUser?.isAdmin) return [];
