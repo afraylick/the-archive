@@ -1692,12 +1692,11 @@ const AudioCard = memo(function AudioCard({
             <div className="pointer-events-none absolute bottom-0 right-[18rem] z-10 hidden h-14 w-20 bg-gradient-to-r from-transparent via-[#10181e]/85 to-[#10181e] md:block" />
             <div className="pointer-events-none absolute bottom-0 right-0 z-10 hidden h-14 w-[18rem] bg-[#10181e] md:block" />
             <div className="flex w-full max-w-full flex-wrap gap-3 md:absolute md:bottom-0 md:right-0 md:z-20 md:w-auto md:justify-end">
-              <div className="flex w-full max-w-full flex-col overflow-hidden rounded border border-border/70 bg-[#0f171c] shadow-[0_0_16px_rgba(16,24,30,0.85)] sm:inline-flex sm:w-auto sm:flex-row">
-                <div className="flex w-full min-w-0 flex-nowrap sm:w-auto">
+              <div className="grid w-full max-w-full grid-cols-6 overflow-hidden rounded border border-border/70 bg-[#0f171c] shadow-[0_0_16px_rgba(16,24,30,0.85)] sm:inline-flex sm:w-auto">
                 <button
                   type="button"
                   onClick={toggleLike}
-                  className={`inline-flex shrink-0 items-center justify-center border-r border-border/70 px-3 py-1.5 text-xs transition sm:text-sm ${
+                  className={`col-span-1 row-start-2 inline-flex min-h-9 items-center justify-center border-r border-border/70 px-3 py-1.5 text-xs transition sm:min-h-0 sm:text-sm ${
                     file.liked
                       ? 'bg-red-400/10 text-red-300 hover:bg-red-400/15'
                       : 'text-muted-foreground hover:text-red-300'
@@ -1720,7 +1719,7 @@ const AudioCard = memo(function AudioCard({
                   <button
                     type="button"
                     onClick={() => setShowNotes(prev => !prev)}
-                    className={`inline-flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap border-r border-border/70 px-2 py-1.5 text-xs transition sm:flex-none sm:gap-2 sm:px-4 sm:text-sm ${
+                    className={`col-span-2 row-start-1 inline-flex min-h-9 min-w-0 items-center justify-center gap-1 whitespace-nowrap border-b border-r border-border/70 px-2 py-1.5 text-xs transition sm:min-h-0 sm:flex-none sm:gap-2 sm:border-b-0 sm:px-4 sm:text-sm ${
                       hasNotes
                         ? 'bg-accent/10 text-accent hover:bg-accent/15'
                         : 'text-muted-foreground hover:text-foreground'
@@ -1735,7 +1734,9 @@ const AudioCard = memo(function AudioCard({
                 <button
                   type="button"
                   onClick={() => setShowComments(prev => !prev)}
-                  className={`inline-flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap border-r border-border/70 px-2 py-1.5 text-xs transition sm:flex-none sm:gap-2 sm:px-4 sm:text-sm ${
+                  className={`row-start-1 inline-flex min-h-9 min-w-0 items-center justify-center gap-1 whitespace-nowrap border-b border-r border-border/70 px-2 py-1.5 text-xs transition sm:min-h-0 sm:flex-none sm:gap-2 sm:border-b-0 sm:px-4 sm:text-sm ${
+                    currentUser.isAdmin || hasNotes ? 'col-span-2' : 'col-span-3'
+                  } ${
                     hasComments
                       ? 'bg-accent/10 text-accent hover:bg-accent/15'
                       : 'text-muted-foreground hover:text-foreground'
@@ -1749,7 +1750,9 @@ const AudioCard = memo(function AudioCard({
                 <button
                   type="button"
                   onClick={() => setShowCollections(prev => !prev)}
-                  className={`inline-flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap px-2 py-1.5 text-xs transition sm:flex-none sm:gap-2 sm:border-r sm:border-border/70 sm:px-4 sm:text-sm ${
+                  className={`row-start-1 inline-flex min-h-9 min-w-0 items-center justify-center gap-1 whitespace-nowrap border-b border-border/70 px-2 py-1.5 text-xs transition sm:min-h-0 sm:flex-none sm:gap-2 sm:border-b-0 sm:border-r sm:px-4 sm:text-sm ${
+                    currentUser.isAdmin || hasNotes ? 'col-span-2' : 'col-span-3'
+                  } ${
                     hasCollections
                       ? 'bg-accent/10 text-accent hover:bg-accent/15'
                       : 'text-muted-foreground hover:text-foreground'
@@ -1760,14 +1763,13 @@ const AudioCard = memo(function AudioCard({
                   </svg>
                   Collections
                 </button>
-                </div>
                 <button
                   type="button"
                   onClick={() => {
                     setShowUpload(prev => !prev);
                     setUploadError('');
                   }}
-                  className={`inline-flex w-full items-center justify-center gap-2 border-t border-border/70 px-4 py-2 text-sm transition sm:w-auto sm:border-t-0 sm:py-1.5 ${
+                  className={`col-span-5 row-start-2 inline-flex min-h-9 w-full items-center justify-center gap-2 px-4 py-2 text-sm transition sm:min-h-0 sm:w-auto sm:py-1.5 ${
                     showUpload
                       ? 'bg-accent/10 text-accent hover:bg-accent/15'
                       : 'text-muted-foreground hover:text-foreground'
@@ -3122,7 +3124,7 @@ export default function Home() {
     setExcludedInstruments([]);
     setSelectedVibes([]);
     setExcludedVibes([]);
-    setSelectedFinishes([]);
+    setSelectedFinishes([...FINISH_OPTIONS]);
     setExcludedFinishes([]);
     setSelectedYears([]);
     setExcludedYears([]);
