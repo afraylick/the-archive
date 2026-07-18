@@ -8,6 +8,7 @@ import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFO
 interface AudioFile {
   id: string;
   projectId?: string;
+  defaultVersionId?: string;
   uploadedBy?: string;
   uploadedByName?: string;
   uploads?: AudioFile[];
@@ -115,6 +116,7 @@ const MOBILE_WAVEFORM_MOUNT_DELAY = 180;
 const MOBILE_WAVEFORM_IDLE_TIMEOUT = 900;
 const VOL_BOOST_DB = 12;
 const VOL_BOOST_GAIN = Math.pow(10, VOL_BOOST_DB / 20);
+const MAX_VERSION_UPLOAD_BYTES = 30 * 1024 * 1024;
 const TAG_LABELS: Record<string, string> = {
   'electric guitar': 'E. Guitar',
   'e. guitar': 'E. Guitar',
@@ -179,6 +181,11 @@ const isUntaggedFile = (file: AudioFile) => (
 const hasAny = <T,>(values: T[], selected: T[]) => values.some(value => selected.includes(value));
 const getAdamRating = (file: AudioFile) => file.ratings?.adam || file.myRating || 0;
 const getProjectId = (file: AudioFile) => file.projectId || file.id;
+
+const getDefaultVersion = (project: AudioFile) => {
+  if (!project.defaultVersionId || project.defaultVersionId === project.id) return project;
+  return project.uploads?.find(upload => upload.id === project.defaultVersionId) || project;
+};
 
 const getRandomSortValue = (id: string, seed: number) => {
   let hash = Math.floor(seed * 1000000000);
@@ -479,7 +486,7 @@ const AudioCard = memo(function AudioCard({
   onStop,
   onDestroy,
 }: AudioCardProps) {
-  const [selectedFileId, setSelectedFileId] = useState(project.id);
+  const [selectedFileId, setSelectedFileId] = useState(() => getDefaultVersion(project).id);
   const file = selectedFileId === project.id
     ? project
     : project.uploads?.find(upload => upload.id === selectedFileId) || project;
@@ -1079,6 +1086,10 @@ const AudioCard = memo(function AudioCard({
 
   const uploadVersion = async () => {
     if (!uploadFile || isUploading) return;
+    if (uploadFile.size > MAX_VERSION_UPLOAD_BYTES) {
+      setUploadError('Audio uploads are limited to 30 MB');
+      return;
+    }
 
     setIsUploading(true);
     setUploadError('');
@@ -1102,7 +1113,6 @@ const AudioCard = memo(function AudioCard({
         ? { ...song, uploads: [uploadedVersion, ...(song.uploads || [])] }
         : song
       ));
-      selectFileVersion(uploadedVersion);
       setUploadFile(null);
       setUploadNotes('');
       setShowUpload(false);
@@ -1262,7 +1272,7 @@ const AudioCard = memo(function AudioCard({
   }, [comments, currentTime]);
 
   return (
-    <div ref={cardRef} className="audio-card relative border-b border-border/70 bg-[#10181e]/92 px-3 py-3 scroll-mt-24 transition hover:bg-[#11191f] sm:px-4 md:px-6">
+    <div ref={cardRef} className={`audio-card relative overflow-visible border-b border-border/70 bg-[#10181e]/92 px-3 py-3 scroll-mt-24 transition hover:bg-[#11191f] sm:px-4 md:px-6 ${showVersions ? 'z-[100]' : 'z-0'}`}>
       <div className="grid gap-3 md:grid-cols-[2.75rem_minmax(0,1fr)] md:items-start md:gap-3">
         <div className="relative z-40 order-1 flex items-center justify-between gap-3 md:hidden">
           <span className="truncate text-[11px] font-light text-muted-foreground opacity-75 md:hidden" title={file.projectId ? selectedVersionMetadata : `Recorded ${formatCreatedDate(file)}`}>
@@ -1316,7 +1326,7 @@ const AudioCard = memo(function AudioCard({
         </div>
 
         <div className="relative order-3 min-w-0">
-          <div className="relative z-20 flex min-w-0 items-start gap-2 md:pr-44">
+          <div className={`relative flex min-w-0 items-start gap-2 md:pr-44 ${showVersions ? 'z-[120]' : 'z-20'}`}>
             <div className="min-w-0 flex-1">
               {isRenaming ? (
                 <input
@@ -1393,7 +1403,7 @@ const AudioCard = memo(function AudioCard({
                     </button>
                   )}
                   {showVersions && (
-                    <div className="absolute left-0 top-[calc(100%+0.35rem)] z-50 w-[min(28rem,calc(100vw-2rem))] overflow-hidden rounded-md border border-border/75 bg-[#0d1419]/98 py-1 shadow-2xl shadow-black/50 backdrop-blur">
+                    <div className="absolute left-0 top-[calc(100%+0.35rem)] z-[200] w-[min(28rem,calc(100vw-2rem))] overflow-hidden rounded-md border border-border/75 bg-[#0d1419]/98 py-1 shadow-2xl shadow-black/50 backdrop-blur">
                       <button
                         type="button"
                         onClick={() => {
@@ -2095,6 +2105,7 @@ const AudioCard = memo(function AudioCard({
               <div className="mb-3">
                 <p className="text-sm font-medium text-foreground">Upload a new version</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">It will stay attached to {project.name} with its own notes and comments.</p>
+                <p className="mt-1 text-xs font-medium text-accent/85">Please use MP3 files when possible · 30 MB limit</p>
               </div>
               <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_auto] md:items-end">
                 <label className="block min-w-0">
@@ -2104,8 +2115,9 @@ const AudioCard = memo(function AudioCard({
                     type="file"
                     accept="audio/*,.aif,.aiff,.flac,.m4a,.mp3,.ogg,.wav"
                     onChange={(event) => {
-                      setUploadFile(event.target.files?.[0] || null);
-                      setUploadError('');
+                      const nextFile = event.target.files?.[0] || null;
+                      setUploadFile(nextFile);
+                      setUploadError(nextFile && nextFile.size > MAX_VERSION_UPLOAD_BYTES ? 'Audio uploads are limited to 30 MB' : '');
                     }}
                     className="block w-full min-w-0 rounded border border-border/65 bg-background/65 text-sm text-muted-foreground file:mr-3 file:border-0 file:border-r file:border-border/65 file:bg-muted/40 file:px-3 file:py-2.5 file:text-xs file:font-medium file:text-foreground hover:file:bg-muted/60"
                   />
@@ -2123,7 +2135,7 @@ const AudioCard = memo(function AudioCard({
                 <button
                   type="button"
                   onClick={uploadVersion}
-                  disabled={!uploadFile || isUploading}
+                  disabled={!uploadFile || uploadFile.size > MAX_VERSION_UPLOAD_BYTES || isUploading}
                   className="min-h-10 rounded bg-accent px-4 py-2 text-sm font-medium text-accent-foreground transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   {isUploading ? 'Uploading…' : 'Upload Version'}
@@ -3636,7 +3648,7 @@ export default function Home() {
               </button>
             </div>
           </div>
-          <div className="overflow-hidden rounded-b-md border border-border/65 bg-[#0b0f14]/92 shadow-2xl shadow-black/20">
+          <div className="overflow-visible rounded-b-md border border-border/65 bg-[#0b0f14]/92 shadow-2xl shadow-black/20">
             {displayedFiles.map(file => {
               const hiddenActiveTrack = Boolean(activeTrack && getProjectId(activeTrack) === file.id && !visibleFileIds.has(file.id));
               if (!currentUser) return null;

@@ -7,6 +7,7 @@ import { isValidWaveformCache } from '@/lib/waveform';
 interface AudioFileRecord {
   id: string;
   projectId?: string;
+  defaultVersionId?: string;
   uploads?: unknown;
   name?: string;
   originalName?: string;
@@ -99,6 +100,14 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         delete updatedFile.waveformCacheVersion;
       }
     }
+    if (!data[index].projectId) {
+      if (updatedFile.defaultVersionId === undefined && data[index].defaultVersionId) {
+        updatedFile.defaultVersionId = data[index].defaultVersionId;
+      }
+      const requestedDefaultId = updatedFile.defaultVersionId || id;
+      const validDefault = requestedDefaultId === id || data.some(file => file.id === requestedDefaultId && file.projectId === id);
+      updatedFile.defaultVersionId = validDefault ? requestedDefaultId : id;
+    }
     data[index] = {
       ...updatedFile,
       likedBy: data[index].likedBy,
@@ -131,6 +140,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     if (!isSafeStorageId(id)) {
       return NextResponse.json({ error: 'Invalid file id' }, { status: 400 });
     }
+    const recordToDelete = data[index];
     const recordsToDelete = data.filter(file => file.id === id || file.projectId === id);
     for (const record of recordsToDelete) {
       if (isSafeStorageId(record.id)) {
@@ -147,7 +157,13 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
       }
     }
     const deletedIds = new Set(recordsToDelete.map(record => record.id));
-    fs.writeFileSync(dataFile, JSON.stringify(data.filter(record => !deletedIds.has(record.id)), null, 2));
+    const remainingData = data
+      .filter(record => !deletedIds.has(record.id))
+      .map(record => recordToDelete.projectId === record.id && record.defaultVersionId === id
+        ? { ...record, defaultVersionId: record.id }
+        : record
+      );
+    fs.writeFileSync(dataFile, JSON.stringify(remainingData, null, 2));
     return NextResponse.json({ message: 'Deleted successfully' });
   } catch {
     return NextResponse.json({ error: 'Delete failed' }, { status: 500 });

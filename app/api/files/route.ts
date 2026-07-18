@@ -7,6 +7,7 @@ import { getDataFilePath, getUploadPath, isSafeStorageId } from '@/lib/storage';
 interface AudioFileRecord {
   id: string;
   projectId?: string;
+  defaultVersionId?: string;
   uploadedBy?: string;
   uploadedByName?: string;
   name?: string;

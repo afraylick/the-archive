@@ -40,7 +40,7 @@ interface AudioFileRecord {
   comments?: AudioComment[];
 }
 
-const MAX_UPLOAD_FILE_BYTES = 500 * 1024 * 1024;
+const MAX_UPLOAD_FILE_BYTES = 30 * 1024 * 1024;
 const MAX_NOTES_LENGTH = 10000;
 const AUDIO_EXTENSIONS = new Set(['.aac', '.aif', '.aiff', '.flac', '.m4a', '.mp3', '.ogg', '.wav']);
 
@@ -63,7 +63,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'Choose one audio file to upload' }, { status: 400 });
     }
     if (file.size > MAX_UPLOAD_FILE_BYTES) {
-      return NextResponse.json({ error: 'Audio uploads are limited to 500 MB' }, { status: 413 });
+      return NextResponse.json({ error: 'Audio uploads are limited to 30 MB' }, { status: 413 });
     }
 
     const extension = path.extname(file.name).toLowerCase();

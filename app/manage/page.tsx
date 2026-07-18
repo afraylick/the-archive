@@ -7,6 +7,11 @@ import { getCreatedAtWithYear } from '@/lib/recorded-date';
 
 interface AudioFile {
   id: string;
+  projectId?: string;
+  defaultVersionId?: string;
+  uploadedBy?: string;
+  uploadedByName?: string;
+  uploads?: AudioFile[];
   name: string;
   originalName?: string;
   instrument?: string;
@@ -81,6 +86,17 @@ const formatCsvDate = (value: string | undefined) => {
   return Number.isNaN(date.getTime()) ? value : date.toISOString();
 };
 
+const formatShortDate = (value: string | undefined) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    year: '2-digit',
+  }).format(date);
+};
+
 const csvCell = (value: unknown) => {
   const text = value === undefined || value === null ? '' : String(value);
   return `"${text.replace(/"/g, '""')}"`;
@@ -99,6 +115,36 @@ const getTags = (file: AudioFile, pluralKey: 'instruments' | 'vibes', singularKe
   const tag = file[singularKey];
   return tag ? [normalizeTag(tag)] : [];
 };
+
+const getAllManagedFiles = (projects: AudioFile[]) => projects.flatMap(project => [project, ...(project.uploads || [])]);
+
+const findManagedFile = (projects: AudioFile[], id: string) => (
+  getAllManagedFiles(projects).find(file => file.id === id)
+);
+
+const replaceManagedFile = (projects: AudioFile[], updatedFile: AudioFile) => projects.map(project => {
+  if (project.id === updatedFile.id) {
+    return { ...updatedFile, uploads: project.uploads };
+  }
+  if (!project.uploads?.some(upload => upload.id === updatedFile.id)) return project;
+  return {
+    ...project,
+    uploads: project.uploads.map(upload => upload.id === updatedFile.id ? updatedFile : upload),
+  };
+});
+
+const removeManagedFile = (projects: AudioFile[], id: string) => projects
+  .filter(project => project.id !== id)
+  .map(project => ({
+    ...project,
+    defaultVersionId: project.defaultVersionId === id ? project.id : project.defaultVersionId,
+    uploads: project.uploads?.filter(upload => upload.id !== id),
+  }));
+
+const mapManagedFiles = (projects: AudioFile[], mapper: (file: AudioFile) => AudioFile) => projects.map(project => ({
+  ...mapper(project),
+  uploads: project.uploads?.map(mapper),
+}));
 
 const hasCachedWaveform = (file: AudioFile) => isValidWaveformCache(file.waveformPeaks, file.waveformDuration, file.waveformCacheVersion);
 
@@ -344,11 +390,17 @@ export default function ManagePage() {
   }, [fetchFiles]);
 
   const deleteFile = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this file?')) return;
+    const target = findManagedFile(files, id);
+    const isVariation = Boolean(target?.projectId);
+    const label = target?.originalName || target?.name || 'this file';
+    if (!confirm(isVariation
+      ? `Delete the variation "${label}"? The main song will not be deleted.`
+      : `Delete the song project "${label}" and all of its variations?`
+    )) return;
     try {
       const res = await fetch(`/api/files/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (res.ok) {
-        setFiles(files.filter(f => f.id !== id));
+        setFiles(prev => removeManagedFile(prev, id));
       } else {
         alert('Failed to delete');
       }
@@ -359,7 +411,7 @@ export default function ManagePage() {
 
   const resetFriendRatings = async (id: string) => {
     try {
-      const file = files.find(f => f.id === id);
+      const file = findManagedFile(files, id);
       if (!file) return;
       const updatedFile = {
         ...file,
@@ -372,7 +424,7 @@ export default function ManagePage() {
         body: JSON.stringify(updatedFile),
       });
       if (res.ok) {
-        setFiles(files.map(f => f.id === id ? updatedFile : f));
+        setFiles(prev => replaceManagedFile(prev, updatedFile));
       } else {
         alert('Failed to reset ratings');
       }
@@ -382,17 +434,19 @@ export default function ManagePage() {
   };
 
   const saveFile = async (updatedFile: AudioFile, errorMessage: string) => {
+    const persistedFile = { ...updatedFile };
+    delete persistedFile.uploads;
     const res = await fetch(`/api/files/${encodeURIComponent(updatedFile.id)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updatedFile),
+      body: JSON.stringify(persistedFile),
     });
 
     if (!res.ok) {
       throw new Error(errorMessage);
     }
 
-    setFiles(prev => prev.map(f => f.id === updatedFile.id ? updatedFile : f));
+    setFiles(prev => replaceManagedFile(prev, updatedFile));
   };
 
   const refreshWaveformFromPreview = async (file: AudioFile, waveformPeaks: number[][], waveformDuration: number) => {
@@ -470,14 +524,15 @@ export default function ManagePage() {
 
   const cullAllWaveforms = async () => {
     if (!confirm('Cull all cached waveforms? Audio files will not be deleted.')) return;
+    const managedFiles = getAllManagedFiles(files);
     try {
-      setWaveformBulkStatus(`Culled 0/${files.length}`);
-      for (let i = 0; i < files.length; i++) {
+      setWaveformBulkStatus(`Culled 0/${managedFiles.length}`);
+      for (let i = 0; i < managedFiles.length; i++) {
         await saveFile(
-          { ...files[i], waveformPeaks: undefined, waveformDuration: undefined, waveformCacheVersion: undefined },
+          { ...managedFiles[i], waveformPeaks: undefined, waveformDuration: undefined, waveformCacheVersion: undefined },
           'Failed to cull waveform'
         );
-        setWaveformBulkStatus(`Culled ${i + 1}/${files.length}`);
+        setWaveformBulkStatus(`Culled ${i + 1}/${managedFiles.length}`);
       }
     } catch {
       alert('Failed to cull all waveforms');
@@ -487,11 +542,12 @@ export default function ManagePage() {
   };
 
   const regenerateAllWaveforms = async () => {
+    const managedFiles = getAllManagedFiles(files);
     try {
-      setWaveformBulkStatus(`Generated 0/${files.length}`);
-      for (let i = 0; i < files.length; i++) {
-        await regenerateWaveform(files[i], false);
-        setWaveformBulkStatus(`Generated ${i + 1}/${files.length}`);
+      setWaveformBulkStatus(`Generated 0/${managedFiles.length}`);
+      for (let i = 0; i < managedFiles.length; i++) {
+        await regenerateWaveform(managedFiles[i], false);
+        setWaveformBulkStatus(`Generated ${i + 1}/${managedFiles.length}`);
       }
     } finally {
       setWaveformBulkStatus('');
@@ -500,7 +556,7 @@ export default function ManagePage() {
 
   const updateRating = async (id: string, userId: string, rating: number) => {
     try {
-      const file = files.find(f => f.id === id);
+      const file = findManagedFile(files, id);
       if (!file) return;
       const res = await fetch(`/api/files/${encodeURIComponent(id)}/rating`, {
         method: 'PUT',
@@ -510,7 +566,7 @@ export default function ManagePage() {
       if (res.ok) {
         const ratingData = await res.json() as Pick<AudioFile, 'ratings' | 'myRating' | 'userRating'>;
         const updatedFile = { ...file, ...ratingData };
-        setFiles(files.map(f => f.id === id ? updatedFile : f));
+        setFiles(prev => replaceManagedFile(prev, updatedFile));
       } else {
         alert('Failed to update rating');
       }
@@ -579,7 +635,7 @@ export default function ManagePage() {
         throw new Error(errorData?.error || 'Upload failed');
       }
       const data = await res.json() as { stems: StemAttachment };
-      setFiles(prev => prev.map(item => item.id === file.id ? { ...item, stems: data.stems } : item));
+      setFiles(prev => replaceManagedFile(prev, { ...file, stems: data.stems }));
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Failed to upload stems ZIP');
     } finally {
@@ -600,7 +656,7 @@ export default function ManagePage() {
         const errorData = await res.json().catch(() => null) as { error?: string } | null;
         throw new Error(errorData?.error || 'Stem deletion failed');
       }
-      setFiles(prev => prev.map(item => item.id === file.id ? { ...item, stems: undefined } : item));
+      setFiles(prev => replaceManagedFile(prev, { ...file, stems: undefined }));
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Failed to delete stems ZIP');
     } finally {
@@ -638,7 +694,7 @@ export default function ManagePage() {
       const data = await res.json().catch(() => null) as { error?: string; filesUpdated?: number } | null;
       if (!res.ok) throw new Error(data?.error || 'Collection rename failed');
 
-      setFiles(prev => prev.map(file => ({
+      setFiles(prev => mapManagedFiles(prev, file => ({
         ...file,
         collections: Array.from(new Set((file.collections || []).map(collection => collection === selectedCollection ? name : collection))),
       })));
@@ -667,7 +723,7 @@ export default function ManagePage() {
       const data = await res.json().catch(() => null) as { error?: string; filesUpdated?: number } | null;
       if (!res.ok) throw new Error(data?.error || 'Collection deletion failed');
 
-      setFiles(prev => prev.map(file => ({
+      setFiles(prev => mapManagedFiles(prev, file => ({
         ...file,
         collections: (file.collections || []).filter(collection => collection !== selectedCollection),
       })));
@@ -707,7 +763,7 @@ export default function ManagePage() {
       'id',
     ];
 
-    const rows = files.map(file => {
+    const rows = getAllManagedFiles(files).map(file => {
       const comments = (file.comments || []).map(comment => {
         const userName = comment.userName || (comment.userId ? userNamesById.get(comment.userId) : '') || comment.userId || 'Unknown';
         const timecode = typeof comment.timestamp === 'number' ? ` @${comment.timestamp.toFixed(2)}s` : '';
@@ -790,15 +846,17 @@ export default function ManagePage() {
     const normalizedSearch = searchQuery.trim().toLowerCase();
     if (!normalizedSearch) return true;
 
-    return (
-      file.name.toLowerCase().includes(normalizedSearch) ||
-      getTags(file, 'instruments', 'instrument').some(tag => tag.toLowerCase().includes(normalizedSearch)) ||
-      getTags(file, 'vibes', 'vibe').some(tag => tag.toLowerCase().includes(normalizedSearch)) ||
-      (file.finish || '').toLowerCase().includes(normalizedSearch) ||
-      String(file.year || '').includes(normalizedSearch)
-    );
+    return [file, ...(file.uploads || [])].some(candidate => (
+      candidate.name.toLowerCase().includes(normalizedSearch) ||
+      (candidate.originalName || '').toLowerCase().includes(normalizedSearch) ||
+      (candidate.notes || '').toLowerCase().includes(normalizedSearch) ||
+      getTags(candidate, 'instruments', 'instrument').some(tag => tag.toLowerCase().includes(normalizedSearch)) ||
+      getTags(candidate, 'vibes', 'vibe').some(tag => tag.toLowerCase().includes(normalizedSearch)) ||
+      (candidate.finish || '').toLowerCase().includes(normalizedSearch) ||
+      String(candidate.year || '').includes(normalizedSearch)
+    ));
   });
-  const collectionOptions = Array.from(new Set(files.flatMap(file => file.collections || []))).sort((a, b) => a.localeCompare(b));
+  const collectionOptions = Array.from(new Set(getAllManagedFiles(files).flatMap(file => file.collections || []))).sort((a, b) => a.localeCompare(b));
   const waveformBulkProgress = waveformBulkStatus.match(/(\d+)\/(\d+)/);
   const waveformBulkDone = waveformBulkProgress ? Number(waveformBulkProgress[1]) : 0;
   const waveformBulkTotal = waveformBulkProgress ? Number(waveformBulkProgress[2]) : 0;
@@ -946,6 +1004,29 @@ export default function ManagePage() {
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0">
                   <h2 className="break-words text-lg font-semibold sm:text-xl">{file.name}</h2>
+                  {(file.uploads || []).length > 0 && (
+                    <label className="my-2 block max-w-md">
+                      <span className="mb-1 block text-xs font-medium text-muted-foreground">Default version when the page loads</span>
+                      <select
+                        value={file.defaultVersionId || file.id}
+                        onChange={async (event) => {
+                          try {
+                            await saveFile({ ...file, defaultVersionId: event.target.value }, 'Failed to update default version');
+                          } catch {
+                            alert('Failed to update default version');
+                          }
+                        }}
+                        className="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
+                      >
+                        <option value={file.id}>Original recording</option>
+                        {(file.uploads || []).map(variation => (
+                          <option key={variation.id} value={variation.id}>
+                            {variation.originalName || 'Uploaded variation'} · {variation.uploadedByName || variation.uploadedBy || 'Unknown'}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
                   <p className="text-muted-foreground">Instrument: {getTags(file, 'instruments', 'instrument').map(displayTag).join(', ') || 'None'}</p>
                   <p className="text-muted-foreground">Vibe: {getTags(file, 'vibes', 'vibe').map(displayTag).join(', ') || 'None'}</p>
                   <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
@@ -1085,6 +1166,157 @@ export default function ManagePage() {
                   />
                 </div>
               </div>
+              {(file.uploads || []).length > 0 && (
+                <div className="mt-5 border-t border-border/70 pt-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-muted-foreground">Variations</h3>
+                    <span className="rounded-full bg-accent/10 px-2 py-0.5 text-xs text-accent">{file.uploads?.length}</span>
+                  </div>
+                  <div className="space-y-3">
+                    {(file.uploads || []).map(variation => (
+                      <div key={variation.id} className="ml-0 rounded-md border border-border/70 bg-background/45 p-3 sm:ml-5 sm:p-4">
+                        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                          <form
+                            className="min-w-0 flex-1"
+                            onSubmit={async (event) => {
+                              event.preventDefault();
+                              const formData = new FormData(event.currentTarget);
+                              try {
+                                await saveFile({
+                                  ...variation,
+                                  originalName: String(formData.get('originalName') || '').trim() || variation.originalName,
+                                  notes: String(formData.get('notes') || ''),
+                                }, 'Failed to save variation');
+                              } catch {
+                                alert('Failed to save variation');
+                              }
+                            }}
+                          >
+                            <div className="mb-3 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                              <h4 className="break-words font-semibold text-foreground">{variation.originalName || 'Uploaded variation'}</h4>
+                              <span className="text-xs text-muted-foreground">
+                                Uploaded by {variation.uploadedByName || variation.uploadedBy || 'Unknown'}{formatShortDate(variation.uploadedAt) ? ` on ${formatShortDate(variation.uploadedAt)}` : ''}
+                              </span>
+                            </div>
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <label className="block">
+                                <span className="mb-1 block text-xs font-medium text-muted-foreground">Variation file name</span>
+                                <input
+                                  name="originalName"
+                                  type="text"
+                                  defaultValue={variation.originalName || ''}
+                                  maxLength={255}
+                                  className="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
+                                />
+                              </label>
+                              <label className="block sm:row-span-2">
+                                <span className="mb-1 block text-xs font-medium text-muted-foreground">Notes</span>
+                                <textarea
+                                  name="notes"
+                                  defaultValue={variation.notes || ''}
+                                  maxLength={10000}
+                                  placeholder="Variation notes"
+                                  className="min-h-24 w-full resize-y rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent"
+                                />
+                              </label>
+                              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                                <span>Finish:</span>
+                                {FINISH_OPTIONS.map(option => (
+                                  <button
+                                    key={option}
+                                    type="button"
+                                    onClick={() => updateFinish(variation, option)}
+                                    className={`rounded px-2 py-1 text-xs transition ${
+                                      variation.finish === option
+                                        ? 'bg-accent text-accent-foreground'
+                                        : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                                    }`}
+                                  >
+                                    {option}
+                                  </button>
+                                ))}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-4 sm:col-span-2">
+                                <label className="flex max-w-40 items-center gap-2 text-sm text-muted-foreground">
+                                  <span>Year:</span>
+                                  <input
+                                    type="number"
+                                    min="1900"
+                                    max="2100"
+                                    defaultValue={variation.year || ''}
+                                    onBlur={(event) => void updateYear(variation, event.currentTarget.value)}
+                                    onKeyDown={(event) => {
+                                      if (event.key === 'Enter') event.currentTarget.blur();
+                                    }}
+                                    className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
+                                  />
+                                </label>
+                                <button type="submit" className="rounded bg-accent px-3 py-2 text-sm font-semibold text-accent-foreground transition hover:bg-accent/80">
+                                  Save Changes
+                                </button>
+                              </div>
+                            </div>
+                          </form>
+                          <div className="w-full lg:max-w-xl lg:flex-1">
+                            <div className="flex flex-wrap gap-2 lg:justify-end">
+                              <button
+                                type="button"
+                                onClick={() => cullWaveform(variation)}
+                                className="rounded bg-muted px-3 py-2 text-sm text-muted-foreground hover:bg-muted/80 disabled:opacity-50"
+                                disabled={waveformProcessingId === variation.id || !hasCachedWaveform(variation)}
+                              >
+                                Cull Waveform
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => regenerateWaveform(variation)}
+                                className="rounded bg-accent px-3 py-2 text-sm text-accent-foreground hover:bg-accent/80 disabled:opacity-50"
+                                disabled={waveformProcessingId === variation.id}
+                              >
+                                {waveformProcessingId === variation.id ? 'Working...' : 'Regenerate Waveform'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => resetFriendRatings(variation.id)}
+                                className="rounded bg-yellow-500 px-3 py-2 text-sm text-white hover:bg-yellow-600"
+                              >
+                                Reset Friend Ratings
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => deleteFile(variation.id)}
+                                className="rounded bg-red-500 px-3 py-2 text-sm text-white hover:bg-red-600"
+                              >
+                                Delete Variation
+                              </button>
+                            </div>
+                            <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm text-muted-foreground">
+                              <span>Waveform: {hasCachedWaveform(variation) ? 'Cached' : 'Not cached'}</span>
+                              <span className="flex items-center gap-2">
+                                Adam&apos;s Rating:
+                                <RatingInput value={variation.ratings?.adam || variation.myRating} onChange={(rating) => updateRating(variation.id, 'adam', rating)} />
+                              </span>
+                            </div>
+                            <div className="mt-1 grid gap-1 text-sm text-muted-foreground sm:grid-cols-2">
+                              {accountUsers.filter(user => user.id !== 'adam' && (variation.ratings?.[user.id] || 0) > 0).map(user => (
+                                <div key={user.id} className="flex items-center gap-2">
+                                  <span>{user.name}:</span>
+                                  <RatingInput value={variation.ratings?.[user.id] || 0} onChange={(rating) => updateRating(variation.id, user.id, rating)} />
+                                </div>
+                              ))}
+                            </div>
+                            <ManageWaveform
+                              file={variation}
+                              activeWaveSurferRef={activeWaveSurferRef}
+                              onWaveformRegenerated={refreshWaveformFromPreview}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>
