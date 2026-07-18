@@ -198,7 +198,7 @@ export async function GET(req: NextRequest) {
 
       return {
         ...sanitizeFileForUser(project, user.id, user.isAdmin),
-        interactionUserIds: getInteractionUserIds([project, ...uploads]),
+        interactionUserIds: user.isAdmin ? getInteractionUserIds([project, ...uploads]) : undefined,
         uploads: uploads.map(file => sanitizeFileForUser(file, user.id, user.isAdmin)),
       };
     }));

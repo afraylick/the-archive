@@ -1692,11 +1692,12 @@ const AudioCard = memo(function AudioCard({
             <div className="pointer-events-none absolute bottom-0 right-[18rem] z-10 hidden h-14 w-20 bg-gradient-to-r from-transparent via-[#10181e]/85 to-[#10181e] md:block" />
             <div className="pointer-events-none absolute bottom-0 right-0 z-10 hidden h-14 w-[18rem] bg-[#10181e] md:block" />
             <div className="flex w-full max-w-full flex-wrap gap-3 md:absolute md:bottom-0 md:right-0 md:z-20 md:w-auto md:justify-end">
-              <div className="flex w-full max-w-full flex-wrap overflow-hidden rounded border border-border/70 bg-[#0f171c] shadow-[0_0_16px_rgba(16,24,30,0.85)] sm:inline-flex sm:w-auto sm:flex-nowrap">
+              <div className="flex w-full max-w-full flex-col overflow-hidden rounded border border-border/70 bg-[#0f171c] shadow-[0_0_16px_rgba(16,24,30,0.85)] sm:inline-flex sm:w-auto sm:flex-row">
+                <div className="flex w-full min-w-0 flex-nowrap sm:w-auto">
                 <button
                   type="button"
                   onClick={toggleLike}
-                  className={`inline-flex items-center justify-center border-r border-border/70 px-3 py-1.5 text-sm transition ${
+                  className={`inline-flex shrink-0 items-center justify-center border-r border-border/70 px-3 py-1.5 text-xs transition sm:text-sm ${
                     file.liked
                       ? 'bg-red-400/10 text-red-300 hover:bg-red-400/15'
                       : 'text-muted-foreground hover:text-red-300'
@@ -1719,7 +1720,7 @@ const AudioCard = memo(function AudioCard({
                   <button
                     type="button"
                     onClick={() => setShowNotes(prev => !prev)}
-                    className={`inline-flex items-center gap-2 border-r border-border/70 px-4 py-1.5 text-sm transition ${
+                    className={`inline-flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap border-r border-border/70 px-2 py-1.5 text-xs transition sm:flex-none sm:gap-2 sm:px-4 sm:text-sm ${
                       hasNotes
                         ? 'bg-accent/10 text-accent hover:bg-accent/15'
                         : 'text-muted-foreground hover:text-foreground'
@@ -1734,7 +1735,7 @@ const AudioCard = memo(function AudioCard({
                 <button
                   type="button"
                   onClick={() => setShowComments(prev => !prev)}
-                  className={`inline-flex items-center gap-2 border-r border-border/70 px-4 py-1.5 text-sm transition ${
+                  className={`inline-flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap border-r border-border/70 px-2 py-1.5 text-xs transition sm:flex-none sm:gap-2 sm:px-4 sm:text-sm ${
                     hasComments
                       ? 'bg-accent/10 text-accent hover:bg-accent/15'
                       : 'text-muted-foreground hover:text-foreground'
@@ -1748,7 +1749,7 @@ const AudioCard = memo(function AudioCard({
                 <button
                   type="button"
                   onClick={() => setShowCollections(prev => !prev)}
-                  className={`inline-flex items-center gap-2 border-r border-border/70 px-4 py-1.5 text-sm transition ${
+                  className={`inline-flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap px-2 py-1.5 text-xs transition sm:flex-none sm:gap-2 sm:border-r sm:border-border/70 sm:px-4 sm:text-sm ${
                     hasCollections
                       ? 'bg-accent/10 text-accent hover:bg-accent/15'
                       : 'text-muted-foreground hover:text-foreground'
@@ -1759,13 +1760,14 @@ const AudioCard = memo(function AudioCard({
                   </svg>
                   Collections
                 </button>
+                </div>
                 <button
                   type="button"
                   onClick={() => {
                     setShowUpload(prev => !prev);
                     setUploadError('');
                   }}
-                  className={`inline-flex items-center gap-2 px-4 py-1.5 text-sm transition ${
+                  className={`inline-flex w-full items-center justify-center gap-2 border-t border-border/70 px-4 py-2 text-sm transition sm:w-auto sm:border-t-0 sm:py-1.5 ${
                     showUpload
                       ? 'bg-accent/10 text-accent hover:bg-accent/15'
                       : 'text-muted-foreground hover:text-foreground'
@@ -2610,9 +2612,8 @@ export default function Home() {
       if (matchesFiltersExcept(file, 'vibes')) {
         new Set(getTags(file, 'vibes', 'vibe')).forEach(tag => increment(counts.vibes, tag));
       }
-      if (matchesFiltersExcept(file, 'collections')) {
-        new Set(Array.isArray(file.collections) ? file.collections.filter(Boolean) : []).forEach(collection => increment(counts.collections, collection));
-      }
+      new Set(Array.isArray(file.collections) ? file.collections.filter(Boolean) : [])
+        .forEach(collection => increment(counts.collections, collection));
       if (matchesFiltersExcept(file, 'interactions')) {
         getInteractionUserIds(file).forEach(userId => increment(counts.interactions, userId));
       }
@@ -3116,6 +3117,38 @@ export default function Home() {
     setExcluded(prev => prev.includes(value) ? prev : [...prev, value]);
   };
 
+  const resetFiltersForCollection = () => {
+    setSelectedInstruments([]);
+    setExcludedInstruments([]);
+    setSelectedVibes([]);
+    setExcludedVibes([]);
+    setSelectedFinishes([]);
+    setExcludedFinishes([]);
+    setSelectedYears([]);
+    setExcludedYears([]);
+    setSelectedAdamRatings([]);
+    setExcludedAdamRatings([]);
+    setSelectedInteractionUsers([]);
+    setExcludedInteractionUsers([]);
+    setLikedOnly(false);
+    setUntaggedOnly(false);
+    setSearchQuery('');
+    setSearchNotes(false);
+    setRandomTrackIds(null);
+    setShowActivity(false);
+    setActivityTargetTrackId(null);
+  };
+
+  const toggleCollectionFilterValue = (collection: string) => {
+    resetFiltersForCollection();
+    toggleFilterValue(collection, selectedCollections, setSelectedCollections, excludedCollections, setExcludedCollections);
+  };
+
+  const excludeCollectionFilterValue = (collection: string) => {
+    resetFiltersForCollection();
+    excludeFilterValue(collection, setSelectedCollections, setExcludedCollections);
+  };
+
   const activeFilterCount =
     selectedInstruments.length + selectedVibes.length + selectedCollections.length + selectedInteractionUsers.length + selectedFinishes.length + selectedYears.length + selectedAdamRatings.length +
     excludedInstruments.length + excludedVibes.length + excludedCollections.length + excludedInteractionUsers.length + excludedFinishes.length + excludedYears.length + excludedAdamRatings.length +
@@ -3224,7 +3257,7 @@ export default function Home() {
               type="text"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search filters..."
+              placeholder="Search songs"
               className="h-12 w-full rounded-xl border border-border/55 bg-[#131a1f]/86 pl-12 pr-28 text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground/70 shadow-[inset_0_1px_rgba(255,255,255,0.03)] focus:border-accent/55"
             />
             <label className="absolute right-3 top-1/2 flex -translate-y-1/2 cursor-pointer items-center gap-1.5 text-[11px] font-medium text-muted-foreground/70 transition hover:text-muted-foreground" title="Include notes in search">
@@ -3286,6 +3319,7 @@ export default function Home() {
               })}
             </div>}
           </div>
+          {currentUser?.isAdmin && (
           <div className="border border-b-0 border-border/55 bg-[#131a1f]/86 p-0 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
             <button
               type="button"
@@ -3337,6 +3371,7 @@ export default function Home() {
               )}
             </div>}
           </div>
+          )}
           <div className="border border-b-0 border-border/55 bg-[#131a1f]/86 p-0 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
             <button
               type="button"
@@ -3458,7 +3493,7 @@ export default function Home() {
                 return (
                 <div
                   key={collection}
-                  onClick={() => toggleFilterValue(collection, selectedCollections, setSelectedCollections, excludedCollections, setExcludedCollections)}
+                  onClick={() => toggleCollectionFilterValue(collection)}
                   className={filterOptionClass(mode)}
                 >
                   <span>{displayTag(collection)}</span>
@@ -3468,7 +3503,7 @@ export default function Home() {
                         type="button"
                         onClick={(event) => {
                           event.stopPropagation();
-                          excludeFilterValue(collection, setSelectedCollections, setExcludedCollections);
+                          excludeCollectionFilterValue(collection);
                         }}
                         className="inline-flex h-5 w-5 items-center justify-center rounded border border-accent-foreground/40 text-xs text-accent-foreground/80 hover:bg-accent-foreground/10"
                         aria-label={`Exclude ${displayTag(collection)}`}
