@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { getCreatedAtWithYear, getRecordedDateFromFilename } from '@/lib/recorded-date';
 
@@ -26,6 +26,12 @@ const displayTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag.replace
 const normalizeTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag;
 const deriveFinishFromFilename = (filename: string) => filename.toLowerCase().includes('ste-0') ? 'Recorder' : 'Voice Memo';
 const FINDER_COLOR_NAMES = new Set(Object.keys(FINDER_COLOR_HEX));
+const TEMPORARY_WAVEFORM_BARS = 128;
+const TEMPORARY_WAVEFORM_SAMPLES_PER_BAR = 48;
+const MAX_TEMPORARY_WAVEFORM_JOBS = 2;
+let temporaryWaveformAudioContext: AudioContext | null = null;
+let activeTemporaryWaveformJobs = 0;
+const temporaryWaveformQueue: Array<() => void> = [];
 
 const deriveRatingFromColorTags = (colorTags: string[], fallbackRating: number) => {
   const colors = new Set(colorTags);
@@ -63,6 +69,50 @@ const formatBytes = (bytes: number) => {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+};
+
+const formatPreviewTime = (seconds: number) => {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+  const wholeSeconds = Math.floor(seconds);
+  return `${Math.floor(wholeSeconds / 60)}:${String(wholeSeconds % 60).padStart(2, '0')}`;
+};
+
+const scheduleTemporaryWaveformJob = <T,>(job: () => Promise<T>) => new Promise<T>((resolve, reject) => {
+  const run = () => {
+    activeTemporaryWaveformJobs += 1;
+    void job()
+      .then(resolve, reject)
+      .finally(() => {
+        activeTemporaryWaveformJobs -= 1;
+        temporaryWaveformQueue.shift()?.();
+      });
+  };
+
+  if (activeTemporaryWaveformJobs < MAX_TEMPORARY_WAVEFORM_JOBS) run();
+  else temporaryWaveformQueue.push(run);
+});
+
+const createTemporaryWaveformPeaks = (audioBuffer: AudioBuffer) => {
+  const peaks = new Array<number>(TEMPORARY_WAVEFORM_BARS).fill(0);
+  const samplesPerBar = audioBuffer.length / TEMPORARY_WAVEFORM_BARS;
+
+  for (let barIndex = 0; barIndex < TEMPORARY_WAVEFORM_BARS; barIndex++) {
+    const start = Math.floor(barIndex * samplesPerBar);
+    const end = Math.min(audioBuffer.length, Math.max(start + 1, Math.floor((barIndex + 1) * samplesPerBar)));
+    const stride = Math.max(1, Math.floor((end - start) / TEMPORARY_WAVEFORM_SAMPLES_PER_BAR));
+    let peak = 0;
+
+    for (let sampleIndex = start; sampleIndex < end; sampleIndex += stride) {
+      for (let channelIndex = 0; channelIndex < audioBuffer.numberOfChannels; channelIndex++) {
+        peak = Math.max(peak, Math.abs(audioBuffer.getChannelData(channelIndex)[sampleIndex] || 0));
+      }
+    }
+
+    peaks[barIndex] = peak;
+  }
+
+  const maxPeak = Math.max(...peaks, 0.01);
+  return peaks.map(peak => Math.max(0.04, peak / maxPeak));
 };
 
 interface AudioFile {
@@ -158,35 +208,155 @@ const TagPicker = ({
   </div>
 );
 
-const AudioPreview = ({ entry, onPlay }: { entry: FileEntry; onPlay: (audio: HTMLAudioElement) => void }) => {
-  return (
-    <audio
-      controls
-      preload="metadata"
-      src={entry.previewUrl}
-      className="w-full"
-      onClick={(event) => event.stopPropagation()}
-      onMouseDown={(event) => event.stopPropagation()}
-      onPlay={(event) => onPlay(event.currentTarget)}
-    >
-      Your browser does not support the audio element.
-    </audio>
-  );
-};
+const TemporaryWaveformPreview = ({
+  source,
+  src,
+  name,
+  onPlay,
+}: {
+  source: File | string;
+  src: string;
+  name: string;
+  onPlay: (audio: HTMLAudioElement) => void;
+}) => {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [peaks, setPeaks] = useState<number[]>([]);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [waveformStatus, setWaveformStatus] = useState<'loading' | 'ready' | 'error'>('loading');
 
-const FolderAudioPreview = ({ entry, onPlay }: { entry: FolderEntry; onPlay: (audio: HTMLAudioElement) => void }) => {
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    void scheduleTemporaryWaveformJob(async () => {
+      if (cancelled) return;
+      const arrayBuffer = source instanceof File
+        ? await source.arrayBuffer()
+        : await fetch(source, { signal: controller.signal }).then(response => {
+            if (!response.ok) throw new Error('Preview load failed');
+            return response.arrayBuffer();
+          });
+      if (cancelled) return;
+
+      temporaryWaveformAudioContext ??= new AudioContext();
+      const audioBuffer = await temporaryWaveformAudioContext.decodeAudioData(arrayBuffer);
+      if (cancelled) return;
+
+      setPeaks(createTemporaryWaveformPeaks(audioBuffer));
+      setDuration(audioBuffer.duration);
+      setWaveformStatus('ready');
+    }).catch(error => {
+      if (cancelled || (error instanceof DOMException && error.name === 'AbortError')) return;
+      console.error('Temporary waveform generation failed for', name, error);
+      setWaveformStatus('error');
+    });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [name, source]);
+
+  const waveformPath = useMemo(() => peaks.map((peak, index) => {
+    const amplitude = Math.max(1, peak * 18);
+    const x = index + 0.5;
+    return `M${x} ${20 - amplitude}V${20 + amplitude}`;
+  }).join(''), [peaks]);
+  const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
+
+  const playAudio = (audio: HTMLAudioElement) => {
+    void audio.play().catch(() => setIsPlaying(false));
+  };
+
+  const playFromPosition = (event: React.MouseEvent<HTMLButtonElement>) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / Math.max(1, bounds.width)));
+    const audioDuration = audio.duration || duration;
+    if (Number.isFinite(audioDuration) && audioDuration > 0) audio.currentTime = ratio * audioDuration;
+    playAudio(audio);
+  };
+
+  const togglePlayback = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.paused) playAudio(audio);
+    else audio.pause();
+  };
+
   return (
-    <audio
-      controls
-      preload="metadata"
-      src={`/api/import-folder?path=${encodeURIComponent(entry.path)}`}
-      className="w-full"
-      onClick={(event) => event.stopPropagation()}
-      onMouseDown={(event) => event.stopPropagation()}
-      onPlay={(event) => onPlay(event.currentTarget)}
-    >
-      Your browser does not support the audio element.
-    </audio>
+    <div className="min-w-0">
+      <audio
+        ref={audioRef}
+        preload="metadata"
+        src={src}
+        onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
+        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+        onPlay={(event) => {
+          setIsPlaying(true);
+          onPlay(event.currentTarget);
+        }}
+        onPause={() => setIsPlaying(false)}
+        onEnded={() => {
+          setIsPlaying(false);
+          setCurrentTime(0);
+        }}
+      />
+      <div className="flex items-stretch overflow-hidden rounded border border-border bg-background/80">
+        <button
+          type="button"
+          onClick={togglePlayback}
+          className="inline-flex w-10 shrink-0 items-center justify-center border-r border-border text-muted-foreground transition hover:text-foreground"
+          aria-label={`${isPlaying ? 'Pause' : 'Play'} ${name}`}
+          title={isPlaying ? 'Pause' : 'Play'}
+        >
+          {isPlaying ? (
+            <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M5.5 4h3v12h-3zm6 0h3v12h-3z" />
+            </svg>
+          ) : (
+            <svg className="ml-0.5 h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M6.5 3.5v13l10-6.5z" />
+            </svg>
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={playFromPosition}
+          className="relative h-14 min-w-0 flex-1 cursor-crosshair overflow-hidden"
+          aria-label={`Seek in ${name}`}
+          title="Click waveform to play from here"
+        >
+          {waveformStatus === 'ready' ? (
+            <>
+              <svg className="absolute inset-0 h-full w-full p-1.5 text-muted-foreground/55" viewBox={`0 0 ${TEMPORARY_WAVEFORM_BARS} 40`} preserveAspectRatio="none" aria-hidden="true">
+                <path d={waveformPath} fill="none" stroke="currentColor" strokeWidth="0.7" />
+              </svg>
+              <svg
+                className="absolute inset-0 h-full w-full p-1.5 text-accent"
+                viewBox={`0 0 ${TEMPORARY_WAVEFORM_BARS} 40`}
+                preserveAspectRatio="none"
+                style={{ clipPath: `inset(0 ${100 - progress}% 0 0)` }}
+                aria-hidden="true"
+              >
+                <path d={waveformPath} fill="none" stroke="currentColor" strokeWidth="0.7" />
+              </svg>
+            </>
+          ) : (
+            <span className="absolute inset-0 flex items-center justify-center px-2 text-xs text-muted-foreground">
+              {waveformStatus === 'loading' ? 'Generating preview…' : 'Preview unavailable'}
+            </span>
+          )}
+        </button>
+        <span className="flex w-16 shrink-0 items-center justify-center border-l border-border px-1 text-[11px] text-muted-foreground">
+          {formatPreviewTime(currentTime)} / {formatPreviewTime(duration)}
+        </span>
+      </div>
+    </div>
   );
 };
 
@@ -544,7 +714,7 @@ export default function UploadPage() {
         xhr.upload.onload = () => {
           setUploadProgressKnown(true);
           setUploadProgress(100);
-          setUploadStatus('Upload sent. Server is saving files...');
+          setUploadStatus('Upload sent. Server is saving files and generating full waveforms...');
         };
 
         xhr.onload = () => {
@@ -871,7 +1041,7 @@ export default function UploadPage() {
                   </div>
                   <button type="button" onClick={() => removeEntry(index)} className="text-red-500 hover:text-red-700">Remove</button>
                 </div>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-7">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-8">
                   <TagPicker
                     label="Instrument"
                     options={instrumentOptions}
@@ -927,9 +1097,14 @@ export default function UploadPage() {
                       className="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent sm:px-2 sm:py-1"
                     />
                   </div>
-                  <div>
+                  <div className="xl:col-span-2">
                     <label className="block text-sm font-medium mb-1 text-foreground">Preview</label>
-                    <AudioPreview entry={entry} onPlay={handlePreviewPlay} />
+                    <TemporaryWaveformPreview
+                      source={entry.file}
+                      src={entry.previewUrl}
+                      name={entry.file.name}
+                      onPlay={handlePreviewPlay}
+                    />
                     <button
                       type="button"
                       onClick={() => updateEntry(index, 'bobs', !entry.bobs)}
@@ -978,7 +1153,7 @@ export default function UploadPage() {
                     </div>
                   )}
                 </div>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-7">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-8">
                   <TagPicker
                     label="Instrument"
                     options={instrumentOptions}
@@ -1034,9 +1209,14 @@ export default function UploadPage() {
                       className="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent sm:px-2 sm:py-1"
                     />
                   </div>
-                  <div>
+                  <div className="xl:col-span-2">
                     <label className="block text-sm font-medium mb-1 text-foreground">Preview</label>
-                    <FolderAudioPreview entry={entry} onPlay={handlePreviewPlay} />
+                    <TemporaryWaveformPreview
+                      source={`/api/import-folder?path=${encodeURIComponent(entry.path)}`}
+                      src={`/api/import-folder?path=${encodeURIComponent(entry.path)}`}
+                      name={entry.name}
+                      onPlay={handlePreviewPlay}
+                    />
                     <button
                       type="button"
                       onClick={() => updateFolderEntry(index, 'bobs', !entry.bobs)}

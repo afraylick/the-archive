@@ -3,7 +3,9 @@ import { getSessionUser, type UserId } from '@/lib/auth';
 import path from 'path';
 import fs from 'fs';
 import { getCreatedAtWithYear, getRecordedDateFromFilename } from '@/lib/recorded-date';
+import { generateServerWaveform } from '@/lib/server-waveform';
 import { ensureStorageDirs, getDataFilePath, getUploadsDir } from '@/lib/storage';
+import { WAVEFORM_CACHE_VERSION } from '@/lib/waveform';
 
 interface UploadMetadata {
   instrument?: string;
@@ -146,6 +148,12 @@ export async function POST(req: NextRequest) {
       const createdAt = getCreatedAtWithYear(detectedCreatedAt, year);
       const finish = metadata.finish || (filenameRecordedDate ? 'Tracked' : deriveFinishFromFilename(file.name));
       const adamRating = Number.isFinite(metadata.rating) ? Math.max(0, Math.min(5, Math.round(metadata.rating || 0))) : 0;
+      let generatedWaveform: Awaited<ReturnType<typeof generateServerWaveform>> | null = null;
+      try {
+        generatedWaveform = await generateServerWaveform(filepath);
+      } catch (error) {
+        console.error('Uploaded waveform generation failed for', file.name, error);
+      }
       const newEntry = {
         id: filename,
         name: file.name,
@@ -158,6 +166,9 @@ export async function POST(req: NextRequest) {
         likedBy: [],
         bobs: Boolean(metadata.bobs),
         colorTags: cleanTagArray(metadata.colorTags).slice(0, 10),
+        waveformPeaks: generatedWaveform?.waveformPeaks,
+        waveformDuration: generatedWaveform?.waveformDuration,
+        waveformCacheVersion: generatedWaveform ? WAVEFORM_CACHE_VERSION : undefined,
         year,
         createdAt,
         ratings: { adam: adamRating },

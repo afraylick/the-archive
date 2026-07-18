@@ -4,7 +4,9 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { getCreatedAtWithYear, getRecordedDateFromFilename } from '@/lib/recorded-date';
+import { generateServerWaveform } from '@/lib/server-waveform';
 import { ensureStorageDirs, getDataFilePath, getUploadsDir, isImportPathAllowed } from '@/lib/storage';
+import { WAVEFORM_CACHE_VERSION } from '@/lib/waveform';
 import { Readable } from 'stream';
 
 interface AudioFileRecord {
@@ -24,6 +26,9 @@ interface AudioFileRecord {
     uploadedAt: string;
   };
   colorTags: string[];
+  waveformPeaks?: number[][];
+  waveformDuration?: number;
+  waveformCacheVersion?: number;
   year: number;
   createdAt: string;
   ratings: Partial<Record<UserId, number>>;
@@ -273,9 +278,9 @@ export async function POST(req: NextRequest) {
           bobs,
         }));
 
-    importFiles.forEach((fileMetadata, index) => {
+    for (const [index, fileMetadata] of importFiles.entries()) {
       const filePath = path.resolve(fileMetadata.path);
-      if (!fs.existsSync(filePath) || !isAudioFile(filePath)) return;
+      if (!fs.existsSync(filePath) || !isAudioFile(filePath)) continue;
 
       const ext = path.extname(filePath);
       const filename = Date.now() + '-' + Math.random().toString(36).slice(2, 11) + '-' + index + ext;
@@ -291,6 +296,12 @@ export async function POST(req: NextRequest) {
       const createdAt = getCreatedAtWithYear(fileMetadata.createdAt || sourceMetadata.createdAt, year);
 
       fs.copyFileSync(filePath, path.join(uploadsDir, filename));
+      let generatedWaveform: Awaited<ReturnType<typeof generateServerWaveform>> | null = null;
+      try {
+        generatedWaveform = await generateServerWaveform(path.join(uploadsDir, filename));
+      } catch (error) {
+        console.error('Imported waveform generation failed for', filePath, error);
+      }
 
       data.push({
         id: filename,
@@ -304,6 +315,9 @@ export async function POST(req: NextRequest) {
         likedBy: [],
         bobs: Boolean(fileMetadata.bobs ?? bobs),
         colorTags: sourceMetadata.colorTags,
+        waveformPeaks: generatedWaveform?.waveformPeaks,
+        waveformDuration: generatedWaveform?.waveformDuration,
+        waveformCacheVersion: generatedWaveform ? WAVEFORM_CACHE_VERSION : undefined,
         year,
         createdAt,
         ratings: { adam: adamRating },
@@ -316,7 +330,7 @@ export async function POST(req: NextRequest) {
       });
 
       results.push({ id: filename, name: path.basename(filePath), colorTags: sourceMetadata.colorTags });
-    });
+    }
 
     fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
 
