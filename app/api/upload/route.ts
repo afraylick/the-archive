@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser, type UserId } from '@/lib/auth';
 import path from 'path';
 import fs from 'fs';
-import { getRecordedDateFromFilename } from '@/lib/recorded-date';
+import { getCreatedAtWithYear, getRecordedDateFromFilename } from '@/lib/recorded-date';
 import { ensureStorageDirs, getDataFilePath, getUploadsDir } from '@/lib/storage';
 
 interface UploadMetadata {
@@ -138,8 +138,12 @@ export async function POST(req: NextRequest) {
           : [];
       const collections = cleanTagArray(metadata.collections);
       const filenameRecordedDate = getRecordedDateFromFilename(file.name);
-      const createdAt = filenameRecordedDate?.createdAt || metadata.createdAt || new Date().toISOString();
-      const year = filenameRecordedDate?.year || metadata.year || new Date(createdAt).getFullYear();
+      const detectedCreatedAt = metadata.createdAt || filenameRecordedDate?.createdAt || new Date().toISOString();
+      const detectedYear = new Date(detectedCreatedAt).getFullYear();
+      const year = Number.isInteger(metadata.year) && metadata.year! >= 1900 && metadata.year! <= 2100
+        ? metadata.year!
+        : filenameRecordedDate?.year || detectedYear;
+      const createdAt = getCreatedAtWithYear(detectedCreatedAt, year);
       const finish = metadata.finish || (filenameRecordedDate ? 'Tracked' : deriveFinishFromFilename(file.name));
       const adamRating = Number.isFinite(metadata.rating) ? Math.max(0, Math.min(5, Math.round(metadata.rating || 0))) : 0;
       const newEntry = {

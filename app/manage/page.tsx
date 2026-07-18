@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
+import { getCreatedAtWithYear } from '@/lib/recorded-date';
 
 interface AudioFile {
   id: string;
@@ -97,23 +98,6 @@ const getTags = (file: AudioFile, pluralKey: 'instruments' | 'vibes', singularKe
   if (Array.isArray(tags) && tags.length > 0) return tags.filter(Boolean).map(normalizeTag);
   const tag = file[singularKey];
   return tag ? [normalizeTag(tag)] : [];
-};
-
-const getCreatedAtWithYear = (createdAt: string | undefined, year: number) => {
-  const existingDate = createdAt ? new Date(createdAt) : null;
-  if (!existingDate || Number.isNaN(existingDate.getTime())) {
-    return new Date(Date.UTC(year, 0, 1)).toISOString();
-  }
-
-  return new Date(Date.UTC(
-    year,
-    existingDate.getUTCMonth(),
-    existingDate.getUTCDate(),
-    existingDate.getUTCHours(),
-    existingDate.getUTCMinutes(),
-    existingDate.getUTCSeconds(),
-    existingDate.getUTCMilliseconds()
-  )).toISOString();
 };
 
 const hasCachedWaveform = (file: AudioFile) => isValidWaveformCache(file.waveformPeaks, file.waveformDuration, file.waveformCacheVersion);
@@ -337,6 +321,10 @@ export default function ManagePage() {
   const [stemDeletingId, setStemDeletingId] = useState<string | null>(null);
   const [finderTagImporting, setFinderTagImporting] = useState(false);
   const [finderTagImportStatus, setFinderTagImportStatus] = useState('');
+  const [selectedCollection, setSelectedCollection] = useState('');
+  const [collectionName, setCollectionName] = useState('');
+  const [collectionStatus, setCollectionStatus] = useState('');
+  const [collectionBusy, setCollectionBusy] = useState(false);
   const activeWaveSurferRef = useRef<WaveSurfer | null>(null);
 
   const fetchFiles = useCallback(() => {
@@ -635,6 +623,64 @@ export default function ManagePage() {
     }
   };
 
+  const renameCollection = async () => {
+    const name = collectionName.trim();
+    if (!selectedCollection || !name || name === selectedCollection) return;
+
+    setCollectionBusy(true);
+    setCollectionStatus('');
+    try {
+      const res = await fetch('/api/collections', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ collection: selectedCollection, name }),
+      });
+      const data = await res.json().catch(() => null) as { error?: string; filesUpdated?: number } | null;
+      if (!res.ok) throw new Error(data?.error || 'Collection rename failed');
+
+      setFiles(prev => prev.map(file => ({
+        ...file,
+        collections: Array.from(new Set((file.collections || []).map(collection => collection === selectedCollection ? name : collection))),
+      })));
+      setSelectedCollection(name);
+      setCollectionName('');
+      setCollectionStatus(`Renamed on ${data?.filesUpdated || 0} song${data?.filesUpdated === 1 ? '' : 's'}.`);
+    } catch (error) {
+      setCollectionStatus(error instanceof Error ? error.message : 'Collection rename failed');
+    } finally {
+      setCollectionBusy(false);
+    }
+  };
+
+  const deleteCollection = async () => {
+    if (!selectedCollection) return;
+    if (!confirm(`Delete the collection "${selectedCollection}"? Songs in it will not be deleted.`)) return;
+
+    setCollectionBusy(true);
+    setCollectionStatus('');
+    try {
+      const res = await fetch('/api/collections', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ collection: selectedCollection }),
+      });
+      const data = await res.json().catch(() => null) as { error?: string; filesUpdated?: number } | null;
+      if (!res.ok) throw new Error(data?.error || 'Collection deletion failed');
+
+      setFiles(prev => prev.map(file => ({
+        ...file,
+        collections: (file.collections || []).filter(collection => collection !== selectedCollection),
+      })));
+      setSelectedCollection('');
+      setCollectionName('');
+      setCollectionStatus(`Deleted from ${data?.filesUpdated || 0} song${data?.filesUpdated === 1 ? '' : 's'}.`);
+    } catch (error) {
+      setCollectionStatus(error instanceof Error ? error.message : 'Collection deletion failed');
+    } finally {
+      setCollectionBusy(false);
+    }
+  };
+
   const exportCsv = () => {
     const userIds = accountUsers.map(user => user.id);
     const userNamesById = new Map(accountUsers.map(user => [user.id, user.name]));
@@ -752,6 +798,7 @@ export default function ManagePage() {
       String(file.year || '').includes(normalizedSearch)
     );
   });
+  const collectionOptions = Array.from(new Set(files.flatMap(file => file.collections || []))).sort((a, b) => a.localeCompare(b));
   const waveformBulkProgress = waveformBulkStatus.match(/(\d+)\/(\d+)/);
   const waveformBulkDone = waveformBulkProgress ? Number(waveformBulkProgress[1]) : 0;
   const waveformBulkTotal = waveformBulkProgress ? Number(waveformBulkProgress[2]) : 0;
@@ -831,6 +878,58 @@ export default function ManagePage() {
           {finderTagImportStatus && (
             <span className="text-sm text-muted-foreground">{finderTagImportStatus}</span>
           )}
+        </div>
+        <div className="mb-4 rounded border border-border bg-card p-4">
+          <div className="mb-3">
+            <h2 className="font-semibold">Manage Collections</h2>
+            <p className="text-xs text-muted-foreground">Renaming or deleting a collection updates every song that uses it.</p>
+          </div>
+          <div className="flex flex-col gap-2 md:flex-row md:items-center">
+            <select
+              value={selectedCollection}
+              onChange={(event) => {
+                setSelectedCollection(event.target.value);
+                setCollectionName('');
+                setCollectionStatus('');
+              }}
+              disabled={collectionOptions.length === 0 || collectionBusy}
+              className="min-w-56 rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent disabled:opacity-50"
+            >
+              <option value="">{collectionOptions.length > 0 ? 'Choose a collection' : 'No collections yet'}</option>
+              {collectionOptions.map(collection => <option key={collection} value={collection}>{displayTag(collection)}</option>)}
+            </select>
+            <input
+              type="text"
+              value={collectionName}
+              onChange={(event) => setCollectionName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  void renameCollection();
+                }
+              }}
+              placeholder="New collection name"
+              disabled={!selectedCollection || collectionBusy}
+              className="min-w-0 flex-1 rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent disabled:opacity-50 md:max-w-sm"
+            />
+            <button
+              type="button"
+              onClick={() => void renameCollection()}
+              disabled={!selectedCollection || !collectionName.trim() || collectionName.trim() === selectedCollection || collectionBusy}
+              className="rounded bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground transition hover:bg-accent/80 disabled:opacity-50"
+            >
+              Rename
+            </button>
+            <button
+              type="button"
+              onClick={() => void deleteCollection()}
+              disabled={!selectedCollection || collectionBusy}
+              className="rounded bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:opacity-50"
+            >
+              Delete Collection
+            </button>
+          </div>
+          {collectionStatus && <p className="mt-2 text-sm text-muted-foreground">{collectionStatus}</p>}
         </div>
         <div className="mb-4">
           <input

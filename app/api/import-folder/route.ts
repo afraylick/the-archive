@@ -3,7 +3,7 @@ import { getSessionUser, type UserId } from '@/lib/auth';
 import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { getRecordedDateFromFilename } from '@/lib/recorded-date';
+import { getCreatedAtWithYear, getRecordedDateFromFilename } from '@/lib/recorded-date';
 import { ensureStorageDirs, getDataFilePath, getUploadsDir, isImportPathAllowed } from '@/lib/storage';
 import { Readable } from 'stream';
 
@@ -56,6 +56,8 @@ interface ImportFolderRequest {
     vibes?: string[];
     collections?: string[];
     finish?: string;
+    year?: number;
+    createdAt?: string;
     rating?: number;
     notes?: string;
     bobs?: boolean;
@@ -258,7 +260,18 @@ export async function POST(req: NextRequest) {
           const resolvedPath = path.resolve(file.path);
           return resolvedPath.startsWith(sourceDir + path.sep) || resolvedPath === sourceDir;
         })
-      : audioFiles.map(filePath => ({ path: filePath, instruments: cleanInstruments, vibes: cleanVibes, collections: cleanCollections, finish: undefined, rating, notes: '', bobs }));
+      : audioFiles.map(filePath => ({
+          path: filePath,
+          instruments: cleanInstruments,
+          vibes: cleanVibes,
+          collections: cleanCollections,
+          finish: undefined,
+          year: undefined,
+          createdAt: undefined,
+          rating,
+          notes: '',
+          bobs,
+        }));
 
     importFiles.forEach((fileMetadata, index) => {
       const filePath = path.resolve(fileMetadata.path);
@@ -272,6 +285,10 @@ export async function POST(req: NextRequest) {
       const fileCollections = Array.isArray(fileMetadata.collections) ? cleanTagArray(fileMetadata.collections) : cleanCollections;
       const finish = fileMetadata.finish || sourceMetadata.finish;
       const adamRating = deriveRatingFromColorTags(sourceMetadata.colorTags, fileMetadata.rating ?? rating);
+      const year = Number.isInteger(fileMetadata.year) && fileMetadata.year! >= 1900 && fileMetadata.year! <= 2100
+        ? fileMetadata.year!
+        : sourceMetadata.year;
+      const createdAt = getCreatedAtWithYear(fileMetadata.createdAt || sourceMetadata.createdAt, year);
 
       fs.copyFileSync(filePath, path.join(uploadsDir, filename));
 
@@ -287,8 +304,8 @@ export async function POST(req: NextRequest) {
         likedBy: [],
         bobs: Boolean(fileMetadata.bobs ?? bobs),
         colorTags: sourceMetadata.colorTags,
-        year: sourceMetadata.year,
-        createdAt: sourceMetadata.createdAt,
+        year,
+        createdAt,
         ratings: { adam: adamRating },
         ratingUpdatedAt: adamRating > 0 ? { adam: new Date().toISOString() } : {},
         myRating: adamRating,

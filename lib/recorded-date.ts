@@ -34,6 +34,23 @@ export const getRecordedDateFromFilename = (filename: string) => {
   };
 };
 
+export const getCreatedAtWithYear = (createdAt: string | undefined, year: number) => {
+  const existingDate = createdAt ? new Date(createdAt) : null;
+  if (!existingDate || Number.isNaN(existingDate.getTime())) {
+    return new Date(Date.UTC(year, 0, 1)).toISOString();
+  }
+
+  return new Date(Date.UTC(
+    year,
+    existingDate.getUTCMonth(),
+    existingDate.getUTCDate(),
+    existingDate.getUTCHours(),
+    existingDate.getUTCMinutes(),
+    existingDate.getUTCSeconds(),
+    existingDate.getUTCMilliseconds()
+  )).toISOString();
+};
+
 const parseTwoDigitYear = (value: string) => {
   const year = Number(value);
   return year >= 70 ? 1900 + year : 2000 + year;

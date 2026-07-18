@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { getRecordedDateFromFilename } from '@/lib/recorded-date';
+import { getCreatedAtWithYear, getRecordedDateFromFilename } from '@/lib/recorded-date';
 
 const DEFAULT_INSTRUMENTS = ['E. Guitar', 'Keys', 'Vocal', 'Synth', 'Acoustic', 'Bass', 'Drums', 'Drum Machine', 'Uku'];
 const DEFAULT_VIBES = ['ambient', 'rock', 'indie', 'acoustic', 'hard', 'soft', 'country', 'electronic', 'Chill', 'Gainy', 'Spacey', 'Beats', 'Group Jam'];
@@ -145,10 +145,10 @@ const TagPicker = ({
           key={option}
           type="button"
           onClick={() => onToggle(option)}
-          className={`rounded px-3 py-2 text-sm transition sm:px-2 sm:py-1 ${
+          className={`rounded border px-3 py-2 text-sm transition sm:px-2 sm:py-1 ${
             selected.includes(option)
-              ? 'bg-accent text-accent-foreground'
-              : 'bg-background text-muted-foreground border border-border hover:bg-background/80'
+              ? 'border-accent bg-accent text-accent-foreground'
+              : 'border-border bg-background text-muted-foreground hover:bg-background/80'
           }`}
         >
           {displayTag(option)}
@@ -274,16 +274,16 @@ export default function UploadPage() {
       return {
         file,
         previewUrl: URL.createObjectURL(file),
-        instruments: [],
-        vibes: [],
-        collections: [],
-        finish: filenameRecordedDate ? 'Tracked' : deriveFinishFromFilename(file.name),
+        instruments: folderInstruments,
+        vibes: folderVibes,
+        collections: folderCollections,
+        finish: folderFinish || (filenameRecordedDate ? 'Tracked' : deriveFinishFromFilename(file.name)),
         notes: '',
         year: filenameRecordedDate?.year || new Date(createdAt).getFullYear(),
         createdAt,
         colorTags: [],
-        rating: 0,
-        bobs: false,
+        rating: folderRating,
+        bobs: folderBobs,
       };
     });
     setFileEntries(prev => [...prev, ...newEntries]);
@@ -313,6 +313,32 @@ export default function UploadPage() {
     ));
   };
 
+  const updateEntryYear = (index: number, value: string) => {
+    const year = Number(value);
+    if (!Number.isInteger(year) || year < 1900 || year > 2100) {
+      alert('Enter a valid year');
+      return;
+    }
+
+    setFileEntries(prev => prev.map((entry, i) => i === index
+      ? { ...entry, year, createdAt: getCreatedAtWithYear(entry.createdAt, year) }
+      : entry
+    ));
+  };
+
+  const updateFolderEntryYear = (index: number, value: string) => {
+    const year = Number(value);
+    if (!Number.isInteger(year) || year < 1900 || year > 2100) {
+      alert('Enter a valid year');
+      return;
+    }
+
+    setFolderEntries(prev => prev.map((entry, i) => i === index
+      ? { ...entry, year, createdAt: getCreatedAtWithYear(entry.createdAt, year) }
+      : entry
+    ));
+  };
+
   const toggleEntryTag = (index: number, field: 'instruments' | 'vibes' | 'collections', tag: string) => {
     setFileEntries(prev => prev.map((entry, i) => {
       if (i !== index) return entry;
@@ -332,10 +358,18 @@ export default function UploadPage() {
       : field === 'vibes'
         ? setFolderVibes
         : setFolderCollections;
-    setter(prev => prev.includes(tag)
-      ? prev.filter(selectedTag => selectedTag !== tag)
-      : [...prev, tag]
-    );
+    const selectedTags = field === 'instruments'
+      ? folderInstruments
+      : field === 'vibes'
+        ? folderVibes
+        : folderCollections;
+    const nextTags = selectedTags.includes(tag)
+      ? selectedTags.filter(selectedTag => selectedTag !== tag)
+      : [...selectedTags, tag];
+
+    setter(nextTags);
+    setFileEntries(prev => prev.map(entry => ({ ...entry, [field]: nextTags })));
+    setFolderEntries(prev => prev.map(entry => ({ ...entry, [field]: nextTags })));
   };
 
   const toggleFolderEntryTag = (index: number, field: 'instruments' | 'vibes' | 'collections', tag: string) => {
@@ -414,14 +448,29 @@ export default function UploadPage() {
     bobs: folderBobs,
   }));
 
-  const applyFinishToFolderEntries = () => {
-    if (!folderFinish) return;
-    setFolderEntries(prev => prev.map(entry => ({ ...entry, finish: folderFinish })));
+  const toggleFolderFinish = (finish: string) => {
+    const nextFinish = folderFinish === finish ? '' : finish;
+    setFolderFinish(nextFinish);
+    setFileEntries(prev => prev.map(entry => ({ ...entry, finish: nextFinish })));
+    setFolderEntries(prev => prev.map(entry => ({ ...entry, finish: nextFinish })));
+  };
+
+  const updateFolderRating = (rating: number) => {
+    setFolderRating(rating);
+    setFileEntries(prev => prev.map(entry => ({
+      ...entry,
+      rating: deriveRatingFromColorTags(entry.colorTags, rating),
+    })));
+    setFolderEntries(prev => prev.map(entry => ({
+      ...entry,
+      rating: deriveRatingFromColorTags(entry.colorTags, rating),
+    })));
   };
 
   const toggleFolderBobs = () => {
     setFolderBobs(prev => {
       const nextValue = !prev;
+      setFileEntries(entries => entries.map(entry => ({ ...entry, bobs: nextValue })));
       setFolderEntries(entries => entries.map(entry => ({ ...entry, bobs: nextValue })));
       return nextValue;
     });
@@ -578,6 +627,8 @@ export default function UploadPage() {
             collections: entry.collections,
             finish: entry.finish,
             notes: entry.notes,
+            year: entry.year,
+            createdAt: entry.createdAt,
             rating: entry.rating,
             bobs: entry.bobs,
           })),
@@ -689,6 +740,10 @@ export default function UploadPage() {
               {importingFolder ? 'Importing...' : 'Import Folder'}
             </button>
           </div>
+          <div className="mb-2 mt-4">
+            <h2 className="text-sm font-semibold text-foreground">Bulk tagging</h2>
+            <p className="text-xs text-muted-foreground">Changes apply immediately to every queued song, including individually uploaded files.</p>
+          </div>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-6">
             <TagPicker
               label="Instrument"
@@ -715,29 +770,22 @@ export default function UploadPage() {
                   <button
                     key={option}
                     type="button"
-                    onClick={() => setFolderFinish(prev => prev === option ? '' : option)}
-                    className={`rounded px-3 py-2 text-sm transition sm:px-2 sm:py-1 ${
+                    onClick={() => toggleFolderFinish(option)}
+                    className={`rounded border px-3 py-2 text-sm transition sm:px-2 sm:py-1 ${
                       folderFinish === option
-                        ? 'bg-accent text-accent-foreground'
-                        : 'bg-background text-muted-foreground border border-border hover:bg-background/80'
+                        ? 'border-accent bg-accent text-accent-foreground'
+                        : 'border-border bg-background text-muted-foreground hover:bg-background/80'
                     }`}
                   >
                     {option}
                   </button>
                 ))}
               </div>
-              <button
-                type="button"
-                onClick={applyFinishToFolderEntries}
-                disabled={!folderFinish || folderEntries.length === 0}
-                className="mt-2 rounded bg-muted px-3 py-2 text-xs text-muted-foreground transition hover:bg-muted/80 disabled:opacity-50 sm:py-1"
-              >
-                Tag Queue
-              </button>
+              <p className="mt-1 text-xs text-muted-foreground">Select again to clear the finish on the queue.</p>
             </div>
             <div>
               <label className="block text-sm font-medium mb-1 text-foreground">Fallback Rating</label>
-              <RatingInput value={folderRating} onChange={setFolderRating} />
+              <RatingInput value={folderRating} onChange={updateFolderRating} />
               <p className="mt-1 text-xs text-muted-foreground">
                 Finder colors override this when they match a rating rule.
               </p>
@@ -747,10 +795,10 @@ export default function UploadPage() {
               <button
                 type="button"
                 onClick={toggleFolderBobs}
-                className={`rounded px-3 py-2 text-sm transition sm:px-2 sm:py-1 ${
+                className={`rounded border px-3 py-2 text-sm transition sm:px-2 sm:py-1 ${
                   folderBobs
-                    ? 'bg-accent text-accent-foreground'
-                    : 'bg-background text-muted-foreground border border-border hover:bg-background/80'
+                    ? 'border-accent bg-accent text-accent-foreground'
+                    : 'border-border bg-background text-muted-foreground hover:bg-background/80'
                 }`}
               >
                 Bobs
@@ -823,7 +871,7 @@ export default function UploadPage() {
                   </div>
                   <button type="button" onClick={() => removeEntry(index)} className="text-red-500 hover:text-red-700">Remove</button>
                 </div>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-6">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-7">
                   <TagPicker
                     label="Instrument"
                     options={instrumentOptions}
@@ -854,10 +902,10 @@ export default function UploadPage() {
                           key={option}
                           type="button"
                           onClick={() => updateEntryFinish(index, option)}
-                          className={`rounded px-3 py-2 text-sm transition sm:px-2 sm:py-1 ${
+                          className={`rounded border px-3 py-2 text-sm transition sm:px-2 sm:py-1 ${
                             entry.finish === option
-                              ? 'bg-accent text-accent-foreground'
-                              : 'bg-background text-muted-foreground border border-border hover:bg-background/80'
+                              ? 'border-accent bg-accent text-accent-foreground'
+                              : 'border-border bg-background text-muted-foreground hover:bg-background/80'
                           }`}
                         >
                           {option}
@@ -866,15 +914,29 @@ export default function UploadPage() {
                     </div>
                   </div>
                   <div>
+                    <label className="block text-sm font-medium mb-1 text-foreground">Year</label>
+                    <input
+                      type="number"
+                      min="1900"
+                      max="2100"
+                      defaultValue={entry.year}
+                      onBlur={(event) => updateEntryYear(index, event.currentTarget.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') event.currentTarget.blur();
+                      }}
+                      className="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent sm:px-2 sm:py-1"
+                    />
+                  </div>
+                  <div>
                     <label className="block text-sm font-medium mb-1 text-foreground">Preview</label>
                     <AudioPreview entry={entry} onPlay={handlePreviewPlay} />
                     <button
                       type="button"
                       onClick={() => updateEntry(index, 'bobs', !entry.bobs)}
-                      className={`mt-2 rounded px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
+                      className={`mt-2 rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
                         entry.bobs
-                          ? 'bg-accent text-accent-foreground'
-                          : 'bg-background text-muted-foreground border border-border hover:bg-background/80'
+                          ? 'border-accent bg-accent text-accent-foreground'
+                          : 'border-border bg-background text-muted-foreground hover:bg-background/80'
                       }`}
                     >
                       Bobs
@@ -902,7 +964,6 @@ export default function UploadPage() {
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <span className="block truncate text-foreground">{entry.name}</span>
-                    <span className="text-xs text-muted-foreground">{entry.year}</span>
                   </div>
                   {(entry.colorTags || []).length > 0 && (
                     <div className="flex">
@@ -917,7 +978,7 @@ export default function UploadPage() {
                     </div>
                   )}
                 </div>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-6">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-7">
                   <TagPicker
                     label="Instrument"
                     options={instrumentOptions}
@@ -948,10 +1009,10 @@ export default function UploadPage() {
                           key={option}
                           type="button"
                           onClick={() => updateFolderEntry(index, 'finish', entry.finish === option ? '' : option)}
-                          className={`rounded px-3 py-2 text-sm transition sm:px-2 sm:py-1 ${
+                          className={`rounded border px-3 py-2 text-sm transition sm:px-2 sm:py-1 ${
                             entry.finish === option
-                              ? 'bg-accent text-accent-foreground'
-                              : 'bg-background text-muted-foreground border border-border hover:bg-background/80'
+                              ? 'border-accent bg-accent text-accent-foreground'
+                              : 'border-border bg-background text-muted-foreground hover:bg-background/80'
                           }`}
                         >
                           {option}
@@ -960,15 +1021,29 @@ export default function UploadPage() {
                     </div>
                   </div>
                   <div>
+                    <label className="block text-sm font-medium mb-1 text-foreground">Year</label>
+                    <input
+                      type="number"
+                      min="1900"
+                      max="2100"
+                      defaultValue={entry.year}
+                      onBlur={(event) => updateFolderEntryYear(index, event.currentTarget.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') event.currentTarget.blur();
+                      }}
+                      className="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent sm:px-2 sm:py-1"
+                    />
+                  </div>
+                  <div>
                     <label className="block text-sm font-medium mb-1 text-foreground">Preview</label>
                     <FolderAudioPreview entry={entry} onPlay={handlePreviewPlay} />
                     <button
                       type="button"
                       onClick={() => updateFolderEntry(index, 'bobs', !entry.bobs)}
-                      className={`mt-2 rounded px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
+                      className={`mt-2 rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
                         entry.bobs
-                          ? 'bg-accent text-accent-foreground'
-                          : 'bg-background text-muted-foreground border border-border hover:bg-background/80'
+                          ? 'border-accent bg-accent text-accent-foreground'
+                          : 'border-border bg-background text-muted-foreground hover:bg-background/80'
                       }`}
                     >
                       Bobs

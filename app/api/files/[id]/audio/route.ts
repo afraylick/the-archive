@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import { getSessionUser } from '@/lib/auth';
-import { ensureDir, getAudioContentType, getDataFilePath, getTranscodedDir, getUploadPath, isSafeStorageId } from '@/lib/storage';
+import { ensureDir, getAudioContentType, getDataFilePath, getSafeDownloadName, getTranscodedDir, getUploadPath, isSafeStorageId } from '@/lib/storage';
 import fs from 'fs';
 import path from 'path';
 import { Readable } from 'stream';
 
 interface AudioFileRecord {
   id: string;
+  name?: string;
+  originalName?: string;
   bobs?: boolean;
 }
 
@@ -33,7 +35,23 @@ const readRange = (rangeHeader: string | null, fileSize: number) => {
   return { start, end: Math.min(end, fileSize - 1) };
 };
 
-const streamAudioFile = (filePath: string, contentType: string, rangeHeader: string | null, cacheControl = AUDIO_CACHE_CONTROL) => {
+const getContentDisposition = (downloadName: string | undefined): Record<string, string> => {
+  if (!downloadName) return {};
+
+  const safeName = getSafeDownloadName(downloadName);
+  const fallbackName = safeName.replace(/[^\x20-\x7e]/g, '_');
+  return {
+    'Content-Disposition': `attachment; filename="${fallbackName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`,
+  };
+};
+
+const streamAudioFile = (
+  filePath: string,
+  contentType: string,
+  rangeHeader: string | null,
+  cacheControl = AUDIO_CACHE_CONTROL,
+  downloadName?: string
+) => {
   const stat = fs.statSync(filePath);
   const range = readRange(rangeHeader, stat.size);
 
@@ -48,6 +66,7 @@ const streamAudioFile = (filePath: string, contentType: string, rangeHeader: str
         'Content-Range': `bytes ${range.start}-${range.end}/${stat.size}`,
         'Content-Type': contentType,
         'Vary': 'Cookie',
+        ...getContentDisposition(downloadName),
       },
     });
   }
@@ -60,6 +79,7 @@ const streamAudioFile = (filePath: string, contentType: string, rangeHeader: str
       'Content-Length': String(stat.size),
       'Content-Type': contentType,
       'Vary': 'Cookie',
+      ...getContentDisposition(downloadName),
     },
   });
 };
@@ -149,19 +169,22 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
     const contentType = getAudioContentType(id);
     const wantsMobileAudio = req.nextUrl.searchParams.get('format') === 'mobile';
+    const downloadName = req.nextUrl.searchParams.get('download') === '1'
+      ? file.originalName || file.name || id
+      : undefined;
 
     if (wantsMobileAudio) {
       try {
         const mobileAudioPath = await getMobileAudioPath(filePath, id);
         if (mobileAudioPath) {
-          return streamAudioFile(mobileAudioPath, 'audio/mpeg', req.headers.get('range'), MOBILE_AUDIO_CACHE_CONTROL);
+          return streamAudioFile(mobileAudioPath, 'audio/mpeg', req.headers.get('range'), MOBILE_AUDIO_CACHE_CONTROL, downloadName);
         }
       } catch (error) {
         console.error('Mobile audio transcode failed for', id, error);
       }
     }
 
-    return streamAudioFile(filePath, contentType, req.headers.get('range'));
+    return streamAudioFile(filePath, contentType, req.headers.get('range'), AUDIO_CACHE_CONTROL, downloadName);
   } catch {
     return NextResponse.json({ error: 'Audio stream failed' }, { status: 500 });
   }

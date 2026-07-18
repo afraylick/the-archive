@@ -1304,6 +1304,17 @@ const AudioCard = memo(function AudioCard({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 11a8.1 8.1 0 0 0-15.5-2M4 5v4h4m-4 4a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" />
               </svg>
             </button>
+            <a
+              href={`/api/files/${encodeURIComponent(file.id)}/audio?download=1`}
+              download={file.originalName || file.name}
+              className="inline-flex h-8 w-9 items-center justify-center border-l border-border/70 text-muted-foreground transition hover:text-foreground"
+              title="Download audio"
+              aria-label={`Download ${file.name}`}
+            >
+              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v11m0 0 4-4m-4 4-4-4M5 19h14" />
+              </svg>
+            </a>
           </div>
 
           <div className="relative mt-1 min-h-40 min-w-0 sm:min-h-36 md:-ml-[3.25rem] md:-mt-5 md:w-[calc(100%+3.25rem)] md:min-h-[118px]">
@@ -1336,6 +1347,17 @@ const AudioCard = memo(function AudioCard({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 11a8.1 8.1 0 0 0-15.5-2M4 5v4h4m-4 4a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" />
                 </svg>
               </button>
+              <a
+                href={`/api/files/${encodeURIComponent(file.id)}/audio?download=1`}
+                download={file.originalName || file.name}
+                className="inline-flex h-8 w-9 items-center justify-center border-l border-border/70 text-muted-foreground transition hover:text-foreground"
+                title="Download audio"
+                aria-label={`Download ${file.name}`}
+              >
+                <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v11m0 0 4-4m-4 4-4-4M5 19h14" />
+                </svg>
+              </a>
             </div>
             <div 
               ref={waveformRef} 
