@@ -10,6 +10,7 @@ interface AudioFileRecord {
   defaultVersionId?: string;
   uploadedBy?: string;
   uploadedByName?: string;
+  interactionUserIds?: string[];
   name?: string;
   originalName?: string;
   instrument?: string;
@@ -57,6 +58,25 @@ const TAG_NORMALIZATIONS: Record<string, string> = {
 const normalizeTag = (tag: string) => TAG_NORMALIZATIONS[tag.toLowerCase()] || tag;
 
 const getRating = (file: AudioFileRecord, userId: UserId) => file.ratings?.[userId] || 0;
+
+const getInteractionUserIds = (versions: AudioFileRecord[]) => {
+  const userIds = new Set<string>();
+
+  versions.forEach(version => {
+    Object.entries(version.ratings || {}).forEach(([userId, rating]) => {
+      if ((rating || 0) > 0) userIds.add(userId);
+    });
+    (Array.isArray(version.likedBy) ? version.likedBy : []).forEach(userId => userIds.add(userId));
+    (Array.isArray(version.comments) ? version.comments : []).forEach(comment => {
+      if (comment.userId) userIds.add(comment.userId);
+    });
+    if (version.projectId && version.uploadedBy) {
+      userIds.add(version.uploadedBy);
+    }
+  });
+
+  return Array.from(userIds);
+};
 
 const getUploadedAtFromId = (id: string | undefined) => {
   const timestampText = id?.match(/^(\d{12,})-/)?.[1];
@@ -171,13 +191,17 @@ export async function GET(req: NextRequest) {
 
     const projects = data.filter(file => !file.projectId);
     const visibleProjects = user.id === 'bobs' ? projects.filter(file => file.bobs) : projects;
-    return NextResponse.json(visibleProjects.map(project => ({
-      ...sanitizeFileForUser(project, user.id, user.isAdmin),
-      uploads: data
+    return NextResponse.json(visibleProjects.map(project => {
+      const uploads = data
         .filter(file => file.projectId === project.id)
-        .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime())
-        .map(file => sanitizeFileForUser(file, user.id, user.isAdmin)),
-    })));
+        .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime());
+
+      return {
+        ...sanitizeFileForUser(project, user.id, user.isAdmin),
+        interactionUserIds: getInteractionUserIds([project, ...uploads]),
+        uploads: uploads.map(file => sanitizeFileForUser(file, user.id, user.isAdmin)),
+      };
+    }));
   } catch {
     return NextResponse.json({ error: 'Failed to load files' }, { status: 500 });
   }

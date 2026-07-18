@@ -11,6 +11,7 @@ interface AudioFile {
   defaultVersionId?: string;
   uploadedBy?: string;
   uploadedByName?: string;
+  interactionUserIds?: string[];
   uploads?: AudioFile[];
   name: string;
   originalName?: string;
@@ -95,7 +96,7 @@ interface ActivityEntry {
 
 type EndMode = 'repeat' | 'next' | 'stop';
 type SortBy = 'random' | 'name' | 'date' | 'uploadDate' | 'adamsRatingRandom' | 'adamsRating' | 'userRating';
-type FilterCategory = 'instruments' | 'vibes' | 'collections' | 'finish' | 'years' | 'adamsRatings';
+type FilterCategory = 'instruments' | 'vibes' | 'collections' | 'interactions' | 'finish' | 'years' | 'adamsRatings';
 type FilterMode = 'none' | 'include' | 'exclude';
 type FilterValue = string | number;
 
@@ -181,6 +182,26 @@ const isUntaggedFile = (file: AudioFile) => (
 const hasAny = <T,>(values: T[], selected: T[]) => values.some(value => selected.includes(value));
 const getAdamRating = (file: AudioFile) => file.ratings?.adam || file.myRating || 0;
 const getProjectId = (file: AudioFile) => file.projectId || file.id;
+
+const getInteractionUserIds = (project: AudioFile) => {
+  const userIds = new Set<string>(Array.isArray(project.interactionUserIds) ? project.interactionUserIds : []);
+  const versions = [project, ...(Array.isArray(project.uploads) ? project.uploads : [])];
+
+  versions.forEach(version => {
+    Object.entries(version.ratings || {}).forEach(([userId, rating]) => {
+      if ((rating || 0) > 0) userIds.add(userId);
+    });
+    (Array.isArray(version.likedBy) ? version.likedBy : []).forEach(userId => userIds.add(userId));
+    (Array.isArray(version.comments) ? version.comments : []).forEach(comment => {
+      if (comment.userId) userIds.add(comment.userId);
+    });
+    if (version.projectId && version.uploadedBy) {
+      userIds.add(version.uploadedBy);
+    }
+  });
+
+  return Array.from(userIds);
+};
 
 const getDefaultVersion = (project: AudioFile) => {
   if (!project.defaultVersionId || project.defaultVersionId === project.id) return project;
@@ -413,7 +434,7 @@ const StarIcon = ({ filled, size = 'h-4 w-4' }: { filled: boolean; size?: string
   </svg>
 );
 
-const SidebarIcon = ({ name }: { name: 'instruments' | 'vibes' | 'collections' | 'finish' | 'years' | 'rating' | 'liked' | 'untagged' | 'search' | 'plus' }) => {
+const SidebarIcon = ({ name }: { name: 'instruments' | 'vibes' | 'collections' | 'interactions' | 'finish' | 'years' | 'rating' | 'liked' | 'untagged' | 'search' | 'plus' }) => {
   const common = {
     fill: 'none',
     stroke: 'currentColor',
@@ -439,6 +460,14 @@ const SidebarIcon = ({ name }: { name: 'instruments' | 'vibes' | 'collections' |
         </>
       )}
       {name === 'collections' && <path {...common} d="M3.5 7.5h7l2 2H20.5v10H3.5z" />}
+      {name === 'interactions' && (
+        <>
+          <path {...common} d="M8.5 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+          <path {...common} d="M2.5 20c.5-4 2.5-6 6-6s5.5 2 6 6" />
+          <path {...common} d="m16.5 7 1.5 1.5L21.5 5" />
+          <path {...common} d="M16 13.5h5M18.5 11v5" />
+        </>
+      )}
       {name === 'finish' && (
         <>
           <path {...common} d="M12 3.5 19.5 9 12 20.5 4.5 9z" />
@@ -1663,7 +1692,7 @@ const AudioCard = memo(function AudioCard({
             <div className="pointer-events-none absolute bottom-0 right-[18rem] z-10 hidden h-14 w-20 bg-gradient-to-r from-transparent via-[#10181e]/85 to-[#10181e] md:block" />
             <div className="pointer-events-none absolute bottom-0 right-0 z-10 hidden h-14 w-[18rem] bg-[#10181e] md:block" />
             <div className="flex w-full max-w-full flex-wrap gap-3 md:absolute md:bottom-0 md:right-0 md:z-20 md:w-auto md:justify-end">
-              <div className="inline-flex max-w-full overflow-hidden rounded border border-border/70 bg-[#0f171c] shadow-[0_0_16px_rgba(16,24,30,0.85)]">
+              <div className="flex w-full max-w-full flex-wrap overflow-hidden rounded border border-border/70 bg-[#0f171c] shadow-[0_0_16px_rgba(16,24,30,0.85)] sm:inline-flex sm:w-auto sm:flex-nowrap">
                 <button
                   type="button"
                   onClick={toggleLike}
@@ -2160,12 +2189,14 @@ export default function Home() {
   const [selectedVibes, setSelectedVibes] = useState<string[]>([]);
   const [selectedFinishes, setSelectedFinishes] = useState<string[]>(['Tracked', 'Recorder']);
   const [selectedCollections, setSelectedCollections] = useState<string[]>([]);
+  const [selectedInteractionUsers, setSelectedInteractionUsers] = useState<string[]>([]);
   const [selectedYears, setSelectedYears] = useState<number[]>([]);
   const [selectedAdamRatings, setSelectedAdamRatings] = useState<number[]>([]);
   const [excludedInstruments, setExcludedInstruments] = useState<string[]>([]);
   const [excludedVibes, setExcludedVibes] = useState<string[]>([]);
   const [excludedFinishes, setExcludedFinishes] = useState<string[]>([]);
   const [excludedCollections, setExcludedCollections] = useState<string[]>([]);
+  const [excludedInteractionUsers, setExcludedInteractionUsers] = useState<string[]>([]);
   const [excludedYears, setExcludedYears] = useState<number[]>([]);
   const [excludedAdamRatings, setExcludedAdamRatings] = useState<number[]>([]);
   const [likedOnly, setLikedOnly] = useState(false);
@@ -2179,6 +2210,7 @@ export default function Home() {
     vibes: true,
     finish: true,
     collections: true,
+    interactions: true,
     years: true,
     adamsRatings: true,
   });
@@ -2190,7 +2222,6 @@ export default function Home() {
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [randomSortSeed, setRandomSortSeed] = useState(() => Math.random());
   const [randomTrackIds, setRandomTrackIds] = useState<string[] | null>(null);
-  const [randomIncludeVoiceMemos, setRandomIncludeVoiceMemos] = useState(false);
   const [activeTrack, setActiveTrack] = useState<AudioFile | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -2282,11 +2313,20 @@ export default function Home() {
     const instruments = getTags(file, 'instruments', 'instrument');
     const vibes = getTags(file, 'vibes', 'vibe');
     const fileCollections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
+    const interactionUserIds = getInteractionUserIds(file);
     const fileYear = file.year || 0;
     const adamRating = getAdamRating(file);
     const matchesSearch = normalizedSearch.length === 0
       || file.name.toLowerCase().includes(normalizedSearch)
       || (searchNotes && getNoteText(file).toLowerCase().includes(normalizedSearch));
+    const matchesCollectionFilter = (
+      (selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection)))
+      && !hasAny(fileCollections, excludedCollections)
+    );
+
+    if (selectedCollections.length > 0 || excludedCollections.length > 0) {
+      return matchesCollectionFilter;
+    }
 
     return (
       matchesSearch &&
@@ -2298,25 +2338,35 @@ export default function Home() {
       !hasAny(vibes, excludedVibes) &&
       (selectedFinishes.length === 0 || (file.finish ? selectedFinishes.includes(file.finish) : false)) &&
       (!file.finish || !excludedFinishes.includes(file.finish)) &&
-      (selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection))) &&
-      !hasAny(fileCollections, excludedCollections) &&
+      matchesCollectionFilter &&
+      (selectedInteractionUsers.length === 0 || hasAny(interactionUserIds, selectedInteractionUsers)) &&
+      !hasAny(interactionUserIds, excludedInteractionUsers) &&
       (selectedYears.length === 0 || selectedYears.includes(fileYear)) &&
       !excludedYears.includes(fileYear) &&
       (selectedAdamRatings.length === 0 || selectedAdamRatings.includes(adamRating)) &&
       !excludedAdamRatings.includes(adamRating)
     );
-  }, [excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, likedOnly, searchNotes, searchQuery, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
+  }, [excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedInteractionUsers, excludedVibes, excludedYears, likedOnly, searchNotes, searchQuery, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedInteractionUsers, selectedVibes, selectedYears, untaggedOnly]);
 
   const matchesFiltersExcept = useCallback((file: AudioFile, except: FilterCategory) => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
     const instruments = getTags(file, 'instruments', 'instrument');
     const vibes = getTags(file, 'vibes', 'vibe');
     const fileCollections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
+    const interactionUserIds = getInteractionUserIds(file);
     const fileYear = file.year || 0;
     const adamRating = getAdamRating(file);
     const matchesSearch = normalizedSearch.length === 0
       || file.name.toLowerCase().includes(normalizedSearch)
       || (searchNotes && getNoteText(file).toLowerCase().includes(normalizedSearch));
+    const matchesCollectionFilter = (
+      (selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection)))
+      && !hasAny(fileCollections, excludedCollections)
+    );
+
+    if (except !== 'collections' && (selectedCollections.length > 0 || excludedCollections.length > 0)) {
+      return matchesCollectionFilter;
+    }
 
     return (
       matchesSearch &&
@@ -2325,43 +2375,52 @@ export default function Home() {
       (except === 'instruments' || ((selectedInstruments.length === 0 || hasAny(instruments, selectedInstruments)) && !hasAny(instruments, excludedInstruments))) &&
       (except === 'vibes' || ((selectedVibes.length === 0 || hasAny(vibes, selectedVibes)) && !hasAny(vibes, excludedVibes))) &&
       (except === 'finish' || ((selectedFinishes.length === 0 || (file.finish ? selectedFinishes.includes(file.finish) : false)) && (!file.finish || !excludedFinishes.includes(file.finish)))) &&
-      (except === 'collections' || ((selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection))) && !hasAny(fileCollections, excludedCollections))) &&
+      (except === 'collections' || matchesCollectionFilter) &&
+      (except === 'interactions' || ((selectedInteractionUsers.length === 0 || hasAny(interactionUserIds, selectedInteractionUsers)) && !hasAny(interactionUserIds, excludedInteractionUsers))) &&
       (except === 'years' || ((selectedYears.length === 0 || selectedYears.includes(fileYear)) && !excludedYears.includes(fileYear))) &&
       (except === 'adamsRatings' || ((selectedAdamRatings.length === 0 || selectedAdamRatings.includes(adamRating)) && !excludedAdamRatings.includes(adamRating)))
     );
-  }, [excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, likedOnly, searchNotes, searchQuery, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
+  }, [excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedInteractionUsers, excludedVibes, excludedYears, likedOnly, searchNotes, searchQuery, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedInteractionUsers, selectedVibes, selectedYears, untaggedOnly]);
 
   const matchesRandomFilters = useCallback((file: AudioFile) => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
     const instruments = getTags(file, 'instruments', 'instrument');
     const vibes = getTags(file, 'vibes', 'vibe');
     const fileCollections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
+    const interactionUserIds = getInteractionUserIds(file);
     const fileYear = file.year || 0;
     const adamRating = getAdamRating(file);
     const matchesSearch = normalizedSearch.length === 0
       || file.name.toLowerCase().includes(normalizedSearch)
       || (searchNotes && getNoteText(file).toLowerCase().includes(normalizedSearch));
-    const finish = file.finish || '';
+    const matchesCollectionFilter = (
+      (selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection)))
+      && !hasAny(fileCollections, excludedCollections)
+    );
+
+    if (selectedCollections.length > 0 || excludedCollections.length > 0) {
+      return matchesCollectionFilter;
+    }
 
     return (
       matchesSearch &&
       (!likedOnly || Boolean(file.liked)) &&
       (!untaggedOnly || isUntaggedFile(file)) &&
-      (randomIncludeVoiceMemos || finish !== 'Voice Memo') &&
       (selectedInstruments.length === 0 || hasAny(instruments, selectedInstruments)) &&
       !hasAny(instruments, excludedInstruments) &&
       (selectedVibes.length === 0 || hasAny(vibes, selectedVibes)) &&
       !hasAny(vibes, excludedVibes) &&
       (selectedFinishes.length === 0 || (file.finish ? selectedFinishes.includes(file.finish) : false)) &&
       (!file.finish || !excludedFinishes.includes(file.finish)) &&
-      (selectedCollections.length === 0 || fileCollections.some(collection => selectedCollections.includes(collection))) &&
-      !hasAny(fileCollections, excludedCollections) &&
+      matchesCollectionFilter &&
+      (selectedInteractionUsers.length === 0 || hasAny(interactionUserIds, selectedInteractionUsers)) &&
+      !hasAny(interactionUserIds, excludedInteractionUsers) &&
       (selectedYears.length === 0 || selectedYears.includes(fileYear)) &&
       !excludedYears.includes(fileYear) &&
       (selectedAdamRatings.length === 0 || selectedAdamRatings.includes(adamRating)) &&
       !excludedAdamRatings.includes(adamRating)
     );
-  }, [excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, likedOnly, randomIncludeVoiceMemos, searchNotes, searchQuery, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, untaggedOnly]);
+  }, [excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedInteractionUsers, excludedVibes, excludedYears, likedOnly, searchNotes, searchQuery, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedInteractionUsers, selectedVibes, selectedYears, untaggedOnly]);
 
   const sortedFilteredFiles = useMemo(() => {
     return files.filter(matchesFilters).sort(compareFiles);
@@ -2371,7 +2430,23 @@ export default function Home() {
     return files.filter(matchesRandomFilters);
   }, [files, matchesRandomFilters]);
 
+  const activityFileIds = useMemo(() => new Set(
+    files
+      .filter(file => {
+        const hasCommentActivity = (Array.isArray(file.comments) ? file.comments : [])
+          .some(comment => comment.userId && comment.userId !== 'adam' && comment.text);
+        const hasRatingActivity = Object.entries(file.ratings || {})
+          .some(([userId, rating]) => userId !== 'adam' && (rating || 0) > 0);
+        return hasCommentActivity || hasRatingActivity;
+      })
+      .map(file => file.id)
+  ), [files]);
+
   const filteredFiles = useMemo(() => {
+    if (showActivity) {
+      return files.filter(file => activityFileIds.has(file.id)).sort(compareFiles);
+    }
+
     if (!randomTrackIds) return sortedFilteredFiles;
 
     const fileById = new Map(files.map(file => [file.id, file]));
@@ -2379,7 +2454,7 @@ export default function Home() {
       const file = fileById.get(id);
       return file && matchesRandomFilters(file) ? [file] : [];
     });
-  }, [files, matchesRandomFilters, randomTrackIds, sortedFilteredFiles]);
+  }, [activityFileIds, compareFiles, files, matchesRandomFilters, randomTrackIds, showActivity, sortedFilteredFiles]);
 
   const filterKey = useMemo(() => JSON.stringify({
     searchNotes,
@@ -2387,12 +2462,14 @@ export default function Home() {
     selectedCollections,
     selectedFinishes,
     selectedInstruments,
+    selectedInteractionUsers,
     selectedVibes,
     selectedYears,
     selectedAdamRatings,
     excludedCollections,
     excludedFinishes,
     excludedInstruments,
+    excludedInteractionUsers,
     excludedVibes,
     excludedYears,
     excludedAdamRatings,
@@ -2400,9 +2477,10 @@ export default function Home() {
     untaggedOnly,
     randomTrackIds,
     randomSortSeed,
+    showActivity,
     sortBy,
     sortDirection,
-  }), [excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, likedOnly, randomSortSeed, randomTrackIds, searchNotes, searchQuery, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears, sortBy, sortDirection, untaggedOnly]);
+  }), [excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedInteractionUsers, excludedVibes, excludedYears, likedOnly, randomSortSeed, randomTrackIds, searchNotes, searchQuery, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedInteractionUsers, selectedVibes, selectedYears, showActivity, sortBy, sortDirection, untaggedOnly]);
 
   const renderLimit = renderWindow.key === filterKey ? renderWindow.limit : INITIAL_RENDER_LIMIT;
 
@@ -2454,6 +2532,11 @@ export default function Home() {
   const collectionOptions = useMemo(() => (
     Array.from(new Set(files.flatMap(file => Array.isArray(file.collections) ? file.collections.filter(Boolean) : []))).sort((a, b) => a.localeCompare(b))
   ), [files]);
+  const interactionUsers = useMemo(() => (
+    accountUsers
+      .filter(user => user.id !== currentUser?.id)
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+  ), [accountUsers, currentUser?.id]);
 
   const activityEntries = useMemo<ActivityEntry[]>(() => {
     if (!currentUser?.isAdmin) return [];
@@ -2510,6 +2593,7 @@ export default function Home() {
       instruments: new Map<string, number>(),
       vibes: new Map<string, number>(),
       collections: new Map<string, number>(),
+      interactions: new Map<string, number>(),
       finish: new Map<string, number>(),
       years: new Map<number, number>(),
       adamsRatings: new Map<number, number>(),
@@ -2528,6 +2612,9 @@ export default function Home() {
       }
       if (matchesFiltersExcept(file, 'collections')) {
         new Set(Array.isArray(file.collections) ? file.collections.filter(Boolean) : []).forEach(collection => increment(counts.collections, collection));
+      }
+      if (matchesFiltersExcept(file, 'interactions')) {
+        getInteractionUserIds(file).forEach(userId => increment(counts.interactions, userId));
       }
       if (matchesFiltersExcept(file, 'finish') && file.finish) {
         increment(counts.finish, file.finish);
@@ -2932,57 +3019,28 @@ export default function Home() {
   }, [activeTrack, excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears]);
 
   const showActivityTrack = useCallback((file: AudioFile) => {
-    const fileInstruments = getTags(file, 'instruments', 'instrument');
-    const fileVibes = getTags(file, 'vibes', 'vibe');
-    const fileFinish = file.finish || '';
-    const fileCollections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
-    const fileYear = file.year || 0;
-    const fileAdamRating = getAdamRating(file);
-
     setRandomTrackIds(null);
-    setLikedOnly(false);
-    setUntaggedOnly(false);
-    setSearchQuery('');
     setActivityTargetTrackId(file.id);
     setRenderWindow(prev => ({ ...prev, key: '', limit: INITIAL_RENDER_LIMIT }));
+  }, []);
 
-    if (selectedInstruments.length > 0 && !fileInstruments.some(tag => selectedInstruments.includes(tag)) && fileInstruments[0]) {
-      setSelectedInstruments(prev => prev.includes(fileInstruments[0]) ? prev : [...prev, fileInstruments[0]]);
+  const randomIncludeVoiceMemos = (
+    !excludedFinishes.includes('Voice Memo')
+    && (selectedFinishes.length === 0 || selectedFinishes.includes('Voice Memo'))
+  );
+
+  const setVoiceMemosIncluded = useCallback((included: boolean) => {
+    if (included) {
+      setExcludedFinishes(prev => prev.filter(finish => finish !== 'Voice Memo'));
+      setSelectedFinishes(prev => (
+        prev.length === 0 || prev.includes('Voice Memo') ? prev : [...prev, 'Voice Memo']
+      ));
+      return;
     }
-    if (fileInstruments.some(tag => excludedInstruments.includes(tag))) {
-      setExcludedInstruments(prev => prev.filter(tag => !fileInstruments.includes(tag)));
-    }
-    if (selectedVibes.length > 0 && !fileVibes.some(tag => selectedVibes.includes(tag)) && fileVibes[0]) {
-      setSelectedVibes(prev => prev.includes(fileVibes[0]) ? prev : [...prev, fileVibes[0]]);
-    }
-    if (fileVibes.some(tag => excludedVibes.includes(tag))) {
-      setExcludedVibes(prev => prev.filter(tag => !fileVibes.includes(tag)));
-    }
-    if (selectedFinishes.length > 0 && fileFinish && !selectedFinishes.includes(fileFinish)) {
-      setSelectedFinishes(prev => prev.includes(fileFinish) ? prev : [...prev, fileFinish]);
-    }
-    if (fileFinish && excludedFinishes.includes(fileFinish)) {
-      setExcludedFinishes(prev => prev.filter(finish => finish !== fileFinish));
-    }
-    if (selectedCollections.length > 0 && !fileCollections.some(collection => selectedCollections.includes(collection)) && fileCollections[0]) {
-      setSelectedCollections(prev => prev.includes(fileCollections[0]) ? prev : [...prev, fileCollections[0]]);
-    }
-    if (fileCollections.some(collection => excludedCollections.includes(collection))) {
-      setExcludedCollections(prev => prev.filter(collection => !fileCollections.includes(collection)));
-    }
-    if (selectedYears.length > 0 && fileYear && !selectedYears.includes(fileYear)) {
-      setSelectedYears(prev => prev.includes(fileYear) ? prev : [...prev, fileYear]);
-    }
-    if (fileYear && excludedYears.includes(fileYear)) {
-      setExcludedYears(prev => prev.filter(year => year !== fileYear));
-    }
-    if (selectedAdamRatings.length > 0 && !selectedAdamRatings.includes(fileAdamRating)) {
-      setSelectedAdamRatings(prev => prev.includes(fileAdamRating) ? prev : [...prev, fileAdamRating]);
-    }
-    if (excludedAdamRatings.includes(fileAdamRating)) {
-      setExcludedAdamRatings(prev => prev.filter(rating => rating !== fileAdamRating));
-    }
-  }, [excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedVibes, excludedYears, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedVibes, selectedYears]);
+
+    setSelectedFinishes(prev => prev.filter(finish => finish !== 'Voice Memo'));
+    setExcludedFinishes(prev => prev.includes('Voice Memo') ? prev : [...prev, 'Voice Memo']);
+  }, []);
 
   const toggleFilterCollapsed = (filter: keyof typeof collapsedFilters) => {
     setCollapsedFilters(prev => ({ ...prev, [filter]: !prev[filter] }));
@@ -3003,6 +3061,20 @@ export default function Home() {
   const ratingFilterSummary = (selected: number[], excluded: number[]) => {
     const includedText = selected.map(ratingFilterLabel).join(', ');
     const excludedText = excluded.map(ratingFilterLabel).join(', ');
+    if (!includedText && !excludedText) return 'All';
+    return [
+      includedText,
+      excludedText ? `Not ${excludedText}` : '',
+    ].filter(Boolean).join(' · ');
+  };
+
+  const interactionUserName = (userId: string) => (
+    interactionUsers.find(user => user.id === userId)?.name || userId
+  );
+
+  const interactionFilterSummary = (selected: string[], excluded: string[]) => {
+    const includedText = selected.map(interactionUserName).join(', ');
+    const excludedText = excluded.map(interactionUserName).join(', ');
     if (!includedText && !excludedText) return 'All';
     return [
       includedText,
@@ -3045,8 +3117,8 @@ export default function Home() {
   };
 
   const activeFilterCount =
-    selectedInstruments.length + selectedVibes.length + selectedCollections.length + selectedFinishes.length + selectedYears.length + selectedAdamRatings.length +
-    excludedInstruments.length + excludedVibes.length + excludedCollections.length + excludedFinishes.length + excludedYears.length + excludedAdamRatings.length +
+    selectedInstruments.length + selectedVibes.length + selectedCollections.length + selectedInteractionUsers.length + selectedFinishes.length + selectedYears.length + selectedAdamRatings.length +
+    excludedInstruments.length + excludedVibes.length + excludedCollections.length + excludedInteractionUsers.length + excludedFinishes.length + excludedYears.length + excludedAdamRatings.length +
     (likedOnly ? 1 : 0) + (untaggedOnly ? 1 : 0) + (searchQuery.trim() ? 1 : 0);
   const collapsedSummaryClass = "mt-0.5 block max-w-full truncate text-[11px] font-normal text-muted-foreground/70";
   const filterOptionClass = (mode: FilterMode) => {
@@ -3144,6 +3216,27 @@ export default function Home() {
           </button>
         </div>
         <div className={`${showMobileFilters ? 'block' : 'hidden'} w-full rounded border border-border/60 bg-[#10181e]/95 p-3 pb-6 shadow-2xl shadow-black/20 md:sticky md:top-4 md:block md:max-h-[calc(100vh-2rem)] md:w-72 md:shrink-0 md:overflow-y-auto md:rounded-none md:border-0 md:bg-transparent md:p-0 md:pr-3 md:pb-44 md:shadow-none`}>
+          <div className="relative mb-4">
+            <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2">
+              <SidebarIcon name="search" />
+            </span>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search filters..."
+              className="h-12 w-full rounded-xl border border-border/55 bg-[#131a1f]/86 pl-12 pr-28 text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground/70 shadow-[inset_0_1px_rgba(255,255,255,0.03)] focus:border-accent/55"
+            />
+            <label className="absolute right-3 top-1/2 flex -translate-y-1/2 cursor-pointer items-center gap-1.5 text-[11px] font-medium text-muted-foreground/70 transition hover:text-muted-foreground" title="Include notes in search">
+              <input
+                type="checkbox"
+                checked={searchNotes}
+                onChange={(event) => setSearchNotes(event.target.checked)}
+                className="h-3.5 w-3.5 rounded accent-accent"
+              />
+              Include Notes
+            </label>
+          </div>
           <div className="rounded-t-xl border border-b-0 border-border/55 bg-[#131a1f]/86 p-0 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
             <button
               type="button"
@@ -3191,6 +3284,57 @@ export default function Home() {
                 </div>
                 );
               })}
+            </div>}
+          </div>
+          <div className="border border-b-0 border-border/55 bg-[#131a1f]/86 p-0 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
+            <button
+              type="button"
+              onClick={() => toggleFilterCollapsed('interactions')}
+              className="flex min-h-16 w-full items-center gap-4 px-5 text-left text-sm font-medium text-foreground"
+            >
+              <SidebarIcon name="interactions" />
+              <span className="min-w-0 flex-1">
+                <span className="block">Interactions</span>
+                {collapsedFilters.interactions && (selectedInteractionUsers.length > 0 || excludedInteractionUsers.length > 0) && (
+                  <span className={collapsedSummaryClass}>{interactionFilterSummary(selectedInteractionUsers, excludedInteractionUsers)}</span>
+                )}
+              </span>
+              <SidebarChevron open={!collapsedFilters.interactions} />
+            </button>
+            {!collapsedFilters.interactions && <div className="space-y-1 px-3 pb-3">
+              {interactionUsers.length > 0 ? interactionUsers.map(user => {
+                const mode = getFilterMode(user.id, selectedInteractionUsers, excludedInteractionUsers);
+                return (
+                <div
+                  key={user.id}
+                  onClick={() => toggleFilterValue(user.id, selectedInteractionUsers, setSelectedInteractionUsers, excludedInteractionUsers, setExcludedInteractionUsers)}
+                  className={filterOptionClass(mode)}
+                >
+                  <span>{user.name}</span>
+                  <span className="flex items-center gap-2">
+                    {mode === 'include' && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          excludeFilterValue(user.id, setSelectedInteractionUsers, setExcludedInteractionUsers);
+                        }}
+                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-accent-foreground/40 text-xs text-accent-foreground/80 hover:bg-accent-foreground/10"
+                        aria-label={`Exclude interactions by ${user.name}`}
+                      >
+                        -
+                      </button>
+                    )}
+                    {mode === 'exclude' && (
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-red-200/70">Excluded</span>
+                    )}
+                    <span className={filterCountClass(mode)}>{filterCounts.interactions.get(user.id) || 0}</span>
+                  </span>
+                </div>
+                );
+              }) : (
+                <p className="rounded border border-border/50 bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">No other users yet</p>
+              )}
             </div>}
           </div>
           <div className="border border-b-0 border-border/55 bg-[#131a1f]/86 p-0 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
@@ -3466,27 +3610,6 @@ export default function Home() {
               </label>
             )}
           </div>
-          <div className="relative mb-4">
-            <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2">
-              <SidebarIcon name="search" />
-            </span>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search filters..."
-              className="h-12 w-full rounded-xl border border-border/55 bg-[#131a1f]/86 pl-12 pr-28 text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground/70 shadow-[inset_0_1px_rgba(255,255,255,0.03)] focus:border-accent/55"
-            />
-            <label className="absolute right-3 top-1/2 flex -translate-y-1/2 cursor-pointer items-center gap-1.5 text-[11px] font-medium text-muted-foreground/70 transition hover:text-muted-foreground" title="Include notes in search">
-              <input
-                type="checkbox"
-                checked={searchNotes}
-                onChange={(event) => setSearchNotes(event.target.checked)}
-                className="h-3.5 w-3.5 rounded accent-accent"
-              />
-              Include Notes
-            </label>
-          </div>
           <div className="space-y-3">
             <div className="relative flex min-h-14 items-center gap-3 rounded-xl border border-border/55 bg-[#131a1f]/86 px-4 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
               <SidebarIcon name="plus" />
@@ -3606,7 +3729,7 @@ export default function Home() {
                 <input
                   type="checkbox"
                   checked={randomIncludeVoiceMemos}
-                  onChange={(event) => setRandomIncludeVoiceMemos(event.target.checked)}
+                  onChange={(event) => setVoiceMemosIncluded(event.target.checked)}
                   className="h-3.5 w-3.5 accent-accent"
                 />
                 Voice memos
