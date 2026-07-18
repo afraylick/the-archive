@@ -6,6 +6,8 @@ import { isValidWaveformCache } from '@/lib/waveform';
 
 interface AudioFileRecord {
   id: string;
+  projectId?: string;
+  uploads?: unknown;
   name?: string;
   originalName?: string;
   instrument?: string;
@@ -42,6 +44,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     }
 
     const updatedFile = await req.json() as AudioFileRecord;
+    delete updatedFile.uploads;
     const dataFile = getDataFilePath();
     let data: AudioFileRecord[] = [];
     if (fs.existsSync(dataFile)) {
@@ -128,18 +131,23 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     if (!isSafeStorageId(id)) {
       return NextResponse.json({ error: 'Invalid file id' }, { status: 400 });
     }
-    const filePath = getUploadPath(id);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
-    if (data[index].stems?.id && isSafeStorageId(data[index].stems.id)) {
-      const stemPath = getStemPath(data[index].stems.id);
-      if (fs.existsSync(stemPath)) {
-        fs.unlinkSync(stemPath);
+    const recordsToDelete = data.filter(file => file.id === id || file.projectId === id);
+    for (const record of recordsToDelete) {
+      if (isSafeStorageId(record.id)) {
+        const filePath = getUploadPath(record.id);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      }
+      if (record.stems?.id && isSafeStorageId(record.stems.id)) {
+        const stemPath = getStemPath(record.stems.id);
+        if (fs.existsSync(stemPath)) {
+          fs.unlinkSync(stemPath);
+        }
       }
     }
-    data.splice(index, 1);
-    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+    const deletedIds = new Set(recordsToDelete.map(record => record.id));
+    fs.writeFileSync(dataFile, JSON.stringify(data.filter(record => !deletedIds.has(record.id)), null, 2));
     return NextResponse.json({ message: 'Deleted successfully' });
   } catch {
     return NextResponse.json({ error: 'Delete failed' }, { status: 500 });

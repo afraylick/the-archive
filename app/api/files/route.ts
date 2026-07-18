@@ -6,6 +6,9 @@ import { getDataFilePath, getUploadPath, isSafeStorageId } from '@/lib/storage';
 
 interface AudioFileRecord {
   id: string;
+  projectId?: string;
+  uploadedBy?: string;
+  uploadedByName?: string;
   name?: string;
   originalName?: string;
   instrument?: string;
@@ -165,8 +168,15 @@ export async function GET(req: NextRequest) {
     // Save migrated data
     fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
 
-    const visibleData = user.id === 'bobs' ? data.filter(file => file.bobs) : data;
-    return NextResponse.json(visibleData.map(file => sanitizeFileForUser(file, user.id, user.isAdmin)));
+    const projects = data.filter(file => !file.projectId);
+    const visibleProjects = user.id === 'bobs' ? projects.filter(file => file.bobs) : projects;
+    return NextResponse.json(visibleProjects.map(project => ({
+      ...sanitizeFileForUser(project, user.id, user.isAdmin),
+      uploads: data
+        .filter(file => file.projectId === project.id)
+        .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime())
+        .map(file => sanitizeFileForUser(file, user.id, user.isAdmin)),
+    })));
   } catch {
     return NextResponse.json({ error: 'Failed to load files' }, { status: 500 });
   }

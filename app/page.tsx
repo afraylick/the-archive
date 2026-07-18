@@ -7,6 +7,10 @@ import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFO
 
 interface AudioFile {
   id: string;
+  projectId?: string;
+  uploadedBy?: string;
+  uploadedByName?: string;
+  uploads?: AudioFile[];
   name: string;
   originalName?: string;
   instrument?: string;
@@ -174,6 +178,7 @@ const isUntaggedFile = (file: AudioFile) => (
 
 const hasAny = <T,>(values: T[], selected: T[]) => values.some(value => selected.includes(value));
 const getAdamRating = (file: AudioFile) => file.ratings?.adam || file.myRating || 0;
+const getProjectId = (file: AudioFile) => file.projectId || file.id;
 
 const getRandomSortValue = (id: string, seed: number) => {
   let hash = Math.floor(seed * 1000000000);
@@ -257,6 +262,28 @@ const formatCreatedDate = (file: AudioFile) => {
     year: '2-digit',
   }).format(new Date(timestamp));
 };
+
+const formatShortDate = (value: string | undefined) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    year: '2-digit',
+  }).format(date);
+};
+
+const replaceFileVersion = (projects: AudioFile[], updatedFile: AudioFile) => projects.map(project => {
+  if (project.id === updatedFile.id) {
+    return { ...updatedFile, uploads: project.uploads };
+  }
+  if (!project.uploads?.some(upload => upload.id === updatedFile.id)) return project;
+  return {
+    ...project,
+    uploads: project.uploads.map(upload => upload.id === updatedFile.id ? updatedFile : upload),
+  };
+});
 
 const formatDuration = (duration: number | undefined) => {
   if (!duration || duration <= 0 || !Number.isFinite(duration)) return '';
@@ -437,7 +464,7 @@ const SidebarChevron = ({ open }: { open: boolean }) => (
 );
 
 const AudioCard = memo(function AudioCard({
-  file,
+  file: project,
   setFiles,
   isActive,
   currentUser,
@@ -452,6 +479,10 @@ const AudioCard = memo(function AudioCard({
   onStop,
   onDestroy,
 }: AudioCardProps) {
+  const [selectedFileId, setSelectedFileId] = useState(project.id);
+  const file = selectedFileId === project.id
+    ? project
+    : project.uploads?.find(upload => upload.id === selectedFileId) || project;
   const waveformRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
@@ -461,10 +492,17 @@ const AudioCard = memo(function AudioCard({
   const [hoveredUserRating, setHoveredUserRating] = useState(0);
   const [openTagPicker, setOpenTagPicker] = useState<'instruments' | 'vibes' | null>(null);
   const [isRenaming, setIsRenaming] = useState(false);
-  const [renameDraft, setRenameDraft] = useState(file.name);
+  const [renameDraft, setRenameDraft] = useState(project.name);
+  const [showVersions, setShowVersions] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [showCollections, setShowCollections] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadNotes, setUploadNotes] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const uploadInputRef = useRef<HTMLInputElement>(null);
   const [showNewCollectionForm, setShowNewCollectionForm] = useState(false);
   const [newCollection, setNewCollection] = useState('');
   const [newComment, setNewComment] = useState('');
@@ -496,6 +534,19 @@ const AudioCard = memo(function AudioCard({
   useEffect(() => {
     durationRef.current = duration;
   }, [duration]);
+
+  const selectFileVersion = (nextFile: AudioFile) => {
+    wavesurferRef.current?.pause();
+    setSelectedFileId(nextFile.id);
+    setNoteText(getNoteText(nextFile));
+    setNewComment('');
+    setCommentTimecode('');
+    setCurrentTime(0);
+    setDuration(nextFile.waveformDuration || 0);
+    durationRef.current = nextFile.waveformDuration || 0;
+    setHasStartedPlayback(tracksStartedFromWaveformClick.has(nextFile.id));
+    setIsCardPlaying(false);
+  };
 
   useEffect(() => {
     const cardElement = cardRef.current;
@@ -739,7 +790,7 @@ const AudioCard = memo(function AudioCard({
         });
 
         if (res.ok) {
-          setFiles(prev => prev.map(f => f.id === latestFile.id ? updatedFile : f));
+          setFiles(prev => replaceFileVersion(prev, updatedFile));
         }
       } catch (error) {
         console.error('Failed to cache waveform for', latestFile.id, error);
@@ -773,7 +824,7 @@ const AudioCard = memo(function AudioCard({
       pendingPlaybackRef.current = null;
       setIsCardPlaying(false);
     };
-  }, [canRenderCachedWaveform, onDestroy, onPause, onPlay, onReady, onStop, playFromProgress, setFiles, shouldRenderWaveform, waveformRefreshKey]);
+  }, [canRenderCachedWaveform, file.id, onDestroy, onPause, onPlay, onReady, onStop, playFromProgress, setFiles, shouldRenderWaveform, waveformRefreshKey]);
 
   useEffect(() => {
     const mediaElement = wavesurferRef.current?.getMediaElement();
@@ -839,7 +890,7 @@ const AudioCard = memo(function AudioCard({
 
     const ratingData = await res.json() as Pick<AudioFile, 'ratings' | 'myRating' | 'userRating' | 'ratingUpdatedAt'>;
     const updatedFile = { ...file, ...ratingData };
-    setFiles(prev => prev.map(f => f.id === file.id ? updatedFile : f));
+    setFiles(prev => replaceFileVersion(prev, updatedFile));
   };
 
   const toggleLike = async () => {
@@ -852,30 +903,33 @@ const AudioCard = memo(function AudioCard({
     if (!res.ok) return;
 
     const data = await res.json() as { liked: boolean; likedBy: string[] };
-    setFiles(prev => prev.map(f => f.id === file.id ? { ...f, ...data } : f));
+    setFiles(prev => replaceFileVersion(prev, { ...file, ...data }));
   };
 
   const updateFile = async (updatedFile: AudioFile) => {
-    await fetch(`/api/files/${encodeURIComponent(file.id)}`, {
+    const persistedFile = { ...updatedFile };
+    delete persistedFile.uploads;
+    const res = await fetch(`/api/files/${encodeURIComponent(updatedFile.id)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updatedFile),
+      body: JSON.stringify(persistedFile),
     });
-    setFiles(prev => prev.map(f => f.id === file.id ? updatedFile : f));
+    if (!res.ok) throw new Error('Update failed');
+    setFiles(prev => replaceFileVersion(prev, updatedFile));
   };
 
   const saveRename = async () => {
     const nextName = renameDraft.trim();
-    if (!nextName || nextName === file.name) {
-      setRenameDraft(file.name);
+    if (!nextName || nextName === project.name) {
+      setRenameDraft(project.name);
       setIsRenaming(false);
       return;
     }
 
     const updatedFile = {
-      ...file,
+      ...project,
       name: nextName,
-      originalName: file.originalName || file.name,
+      originalName: project.originalName || project.name,
     };
 
     try {
@@ -945,7 +999,7 @@ const AudioCard = memo(function AudioCard({
 
     const data = await res.json() as { collections: string[] };
     const updatedFile = { ...file, collections: data.collections };
-    setFiles(prev => prev.map(f => f.id === file.id ? updatedFile : f));
+    setFiles(prev => replaceFileVersion(prev, updatedFile));
   };
 
   const saveNotes = async () => {
@@ -1006,7 +1060,7 @@ const AudioCard = memo(function AudioCard({
     if (!res.ok) return;
 
     const data = await res.json() as { comments: AudioComment[] };
-    setFiles(prev => prev.map(f => f.id === file.id ? { ...f, comments: data.comments } : f));
+    setFiles(prev => replaceFileVersion(prev, { ...file, comments: data.comments }));
     setNewComment('');
   };
 
@@ -1020,7 +1074,45 @@ const AudioCard = memo(function AudioCard({
     if (!res.ok) return;
 
     const data = await res.json() as { comments: AudioComment[] };
-    setFiles(prev => prev.map(f => f.id === file.id ? { ...f, comments: data.comments } : f));
+    setFiles(prev => replaceFileVersion(prev, { ...file, comments: data.comments }));
+  };
+
+  const uploadVersion = async () => {
+    if (!uploadFile || isUploading) return;
+
+    setIsUploading(true);
+    setUploadError('');
+    const formData = new FormData();
+    formData.set('file', uploadFile);
+    formData.set('notes', uploadNotes);
+
+    try {
+      const res = await fetch(`/api/files/${encodeURIComponent(project.id)}/uploads`, {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json() as { upload?: AudioFile; error?: string };
+      if (!res.ok || !data.upload) {
+        setUploadError(data.error || 'Upload failed');
+        return;
+      }
+
+      const uploadedVersion = data.upload;
+      setFiles(prev => prev.map(song => song.id === project.id
+        ? { ...song, uploads: [uploadedVersion, ...(song.uploads || [])] }
+        : song
+      ));
+      selectFileVersion(uploadedVersion);
+      setUploadFile(null);
+      setUploadNotes('');
+      setShowUpload(false);
+      setShowVersions(false);
+      if (uploadInputRef.current) uploadInputRef.current.value = '';
+    } catch {
+      setUploadError('Upload failed. Please try again.');
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   const ensureGainNode = async () => {
@@ -1083,7 +1175,7 @@ const AudioCard = memo(function AudioCard({
 
         setDuration(waveformData.waveformDuration);
         setCurrentTime(0);
-        setFiles(prev => prev.map(f => f.id === latestFile.id ? updatedFile : f));
+        setFiles(prev => replaceFileVersion(prev, updatedFile));
         setShouldMountWaveform(true);
         setWaveformRefreshKey(prev => prev + 1);
         return;
@@ -1115,7 +1207,7 @@ const AudioCard = memo(function AudioCard({
 
       setDuration(audioBuffer.duration);
       setCurrentTime(0);
-      setFiles(prev => prev.map(f => f.id === latestFile.id ? updatedFile : f));
+      setFiles(prev => replaceFileVersion(prev, updatedFile));
       setShouldMountWaveform(true);
       setWaveformRefreshKey(prev => prev + 1);
     } catch (error) {
@@ -1130,6 +1222,11 @@ const AudioCard = memo(function AudioCard({
   const vibes = getTags(file, 'vibes', 'vibe');
   const finish = file.finish || '';
   const collections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
+  const uploads = Array.isArray(project.uploads) ? project.uploads : [];
+  const selectedUploadDate = formatShortDate(file.uploadedAt);
+  const selectedVersionMetadata = file.projectId
+    ? `Uploaded by ${file.uploadedByName || file.uploadedBy || 'Unknown'}${selectedUploadDate ? ` on ${selectedUploadDate}` : ''}`
+    : '';
   const adamRating = file.ratings?.adam || file.myRating || 0;
   const displayedAdamRating = hoveredAdamRating || adamRating;
   const currentUserRating = file.ratings?.[currentUser.id] || file.userRating || 0;
@@ -1168,8 +1265,8 @@ const AudioCard = memo(function AudioCard({
     <div ref={cardRef} className="audio-card relative border-b border-border/70 bg-[#10181e]/92 px-3 py-3 scroll-mt-24 transition hover:bg-[#11191f] sm:px-4 md:px-6">
       <div className="grid gap-3 md:grid-cols-[2.75rem_minmax(0,1fr)] md:items-start md:gap-3">
         <div className="relative z-40 order-1 flex items-center justify-between gap-3 md:hidden">
-          <span className="truncate text-[11px] font-light text-muted-foreground opacity-75 md:hidden" title={`Recorded ${formatCreatedDate(file)}`}>
-            {[finish ? displayTag(finish) : '', file.year || 'N/A'].filter(Boolean).join(' - ')}
+          <span className="truncate text-[11px] font-light text-muted-foreground opacity-75 md:hidden" title={file.projectId ? selectedVersionMetadata : `Recorded ${formatCreatedDate(file)}`}>
+            {file.projectId ? selectedVersionMetadata : [finish ? displayTag(finish) : '', file.year || 'N/A'].filter(Boolean).join(' - ')}
           </span>
           <button
             type="button"
@@ -1230,7 +1327,7 @@ const AudioCard = memo(function AudioCard({
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') void saveRename();
                     if (event.key === 'Escape') {
-                      setRenameDraft(file.name);
+                      setRenameDraft(project.name);
                       setIsRenaming(false);
                     }
                   }}
@@ -1238,19 +1335,43 @@ const AudioCard = memo(function AudioCard({
                   autoFocus
                 />
               ) : (
-                <div className="inline-flex max-w-full min-w-0 items-baseline gap-2 rounded bg-[#0b0f14]/25 px-2 py-0.5 shadow-[0_0_9px_rgba(11,15,20,0.22)] backdrop-blur-[1px]">
-                  <h2 className="min-w-0 truncate text-xl font-semibold leading-8 text-foreground md:text-2xl">
-                    {file.name}
-                  </h2>
-                  {file.year && (
+                <div className="relative inline-flex max-w-full min-w-0 items-baseline gap-2 rounded bg-[#0b0f14]/25 px-2 py-0.5 shadow-[0_0_9px_rgba(11,15,20,0.22)] backdrop-blur-[1px]">
+                  {uploads.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowVersions(prev => !prev)}
+                      className="group inline-flex min-w-0 items-center gap-1.5 text-left"
+                      aria-expanded={showVersions}
+                      aria-label={`Choose a version of ${project.name}`}
+                    >
+                      <h2 className="min-w-0 truncate text-xl font-semibold leading-8 text-foreground md:text-2xl">
+                        {project.name}
+                      </h2>
+                      <svg className={`h-4 w-4 shrink-0 text-muted-foreground/70 transition ${showVersions ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+                      </svg>
+                      <span className="shrink-0 rounded-full bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent/80">
+                        {uploads.length + 1}
+                      </span>
+                    </button>
+                  ) : (
+                    <h2 className="min-w-0 truncate text-xl font-semibold leading-8 text-foreground md:text-2xl">
+                      {project.name}
+                    </h2>
+                  )}
+                  {file.projectId ? (
+                    <span className="hidden min-w-0 truncate text-xs font-light text-muted-foreground/65 md:inline" title={selectedVersionMetadata}>
+                      {selectedVersionMetadata}
+                    </span>
+                  ) : file.year ? (
                     <span
                       className="shrink-0 text-xs font-light text-muted-foreground/65"
                       title={`Recorded ${formatCreatedDate(file)}`}
                     >
                       {file.year}
                     </span>
-                  )}
-                  {file.originalName && file.originalName !== file.name && (
+                  ) : null}
+                  {!file.projectId && file.originalName && file.originalName !== project.name && (
                     <span className="hidden min-w-0 truncate text-sm font-light text-muted-foreground/70 sm:block">
                       ({file.originalName})
                     </span>
@@ -1259,17 +1380,55 @@ const AudioCard = memo(function AudioCard({
                     <button
                       type="button"
                       onClick={() => {
-                        setRenameDraft(file.name);
+                        setRenameDraft(project.name);
                         setIsRenaming(true);
                       }}
                       className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-border/60 text-muted-foreground opacity-60 transition hover:border-border hover:text-foreground hover:opacity-100"
-                      title="Rename file"
-                      aria-label={`Rename ${file.name}`}
+                      title="Rename song project"
+                      aria-label={`Rename ${project.name}`}
                     >
                       <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m16.9 4.7 2.4 2.4M4 20h4.8L20 8.8a1.7 1.7 0 0 0 0-2.4L17.6 4a1.7 1.7 0 0 0-2.4 0L4 15.2V20z" />
                       </svg>
                     </button>
+                  )}
+                  {showVersions && (
+                    <div className="absolute left-0 top-[calc(100%+0.35rem)] z-50 w-[min(28rem,calc(100vw-2rem))] overflow-hidden rounded-md border border-border/75 bg-[#0d1419]/98 py-1 shadow-2xl shadow-black/50 backdrop-blur">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          selectFileVersion(project);
+                          setShowVersions(false);
+                        }}
+                        className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition hover:bg-muted/45 ${file.id === project.id ? 'bg-accent/10' : ''}`}
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium text-foreground">Original recording</span>
+                          <span className="block truncate text-xs text-muted-foreground">{project.originalName || project.name}</span>
+                        </span>
+                        <span className="shrink-0 text-[11px] text-muted-foreground/70">{project.year || ''}</span>
+                      </button>
+                      {uploads.map(upload => {
+                        const uploadDate = formatShortDate(upload.uploadedAt);
+                        return (
+                          <button
+                            key={upload.id}
+                            type="button"
+                            onClick={() => {
+                              selectFileVersion(upload);
+                              setShowVersions(false);
+                            }}
+                            className={`flex w-full items-center justify-between gap-3 border-t border-border/45 px-3 py-2 text-left transition hover:bg-muted/45 ${file.id === upload.id ? 'bg-accent/10' : ''}`}
+                          >
+                            <span className="min-w-0">
+                              <span className="block truncate text-sm font-medium text-foreground">{upload.originalName || 'Uploaded version'}</span>
+                              <span className="block truncate text-xs text-muted-foreground">Uploaded by {upload.uploadedByName || upload.uploadedBy || 'Unknown'}</span>
+                            </span>
+                            <span className="shrink-0 text-[11px] text-muted-foreground/70">{uploadDate}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   )}
                 </div>
               )}
@@ -1550,7 +1709,7 @@ const AudioCard = memo(function AudioCard({
                 <button
                   type="button"
                   onClick={() => setShowCollections(prev => !prev)}
-                  className={`inline-flex items-center gap-2 px-4 py-1.5 text-sm transition ${
+                  className={`inline-flex items-center gap-2 border-r border-border/70 px-4 py-1.5 text-sm transition ${
                     hasCollections
                       ? 'bg-accent/10 text-accent hover:bg-accent/15'
                       : 'text-muted-foreground hover:text-foreground'
@@ -1560,6 +1719,24 @@ const AudioCard = memo(function AudioCard({
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M3.5 7.5h6l2 2h9v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" />
                   </svg>
                   Collections
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowUpload(prev => !prev);
+                    setUploadError('');
+                  }}
+                  className={`inline-flex items-center gap-2 px-4 py-1.5 text-sm transition ${
+                    showUpload
+                      ? 'bg-accent/10 text-accent hover:bg-accent/15'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  aria-expanded={showUpload}
+                >
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v5h14v-5" />
+                  </svg>
+                  Upload
                 </button>
               </div>
               {file.stems && (
@@ -1755,7 +1932,7 @@ const AudioCard = memo(function AudioCard({
         </div>
       </div>
 
-      {(showNotes || showComments || showCollections) && (
+      {(showNotes || showComments || showCollections || showUpload) && (
         <div className="mt-3 space-y-3">
           {showNotes && (
             <div>
@@ -1910,6 +2087,50 @@ const AudioCard = memo(function AudioCard({
                     Add
                   </button>
                 </div>
+              )}
+            </div>
+          )}
+          {showUpload && (
+            <div className="rounded-md border border-accent/25 bg-background/45 p-3 sm:p-4">
+              <div className="mb-3">
+                <p className="text-sm font-medium text-foreground">Upload a new version</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">It will stay attached to {project.name} with its own notes and comments.</p>
+              </div>
+              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_auto] md:items-end">
+                <label className="block min-w-0">
+                  <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Audio file</span>
+                  <input
+                    ref={uploadInputRef}
+                    type="file"
+                    accept="audio/*,.aif,.aiff,.flac,.m4a,.mp3,.ogg,.wav"
+                    onChange={(event) => {
+                      setUploadFile(event.target.files?.[0] || null);
+                      setUploadError('');
+                    }}
+                    className="block w-full min-w-0 rounded border border-border/65 bg-background/65 text-sm text-muted-foreground file:mr-3 file:border-0 file:border-r file:border-border/65 file:bg-muted/40 file:px-3 file:py-2.5 file:text-xs file:font-medium file:text-foreground hover:file:bg-muted/60"
+                  />
+                </label>
+                <label className="block min-w-0">
+                  <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Notes</span>
+                  <textarea
+                    value={uploadNotes}
+                    onChange={(event) => setUploadNotes(event.target.value)}
+                    maxLength={10000}
+                    placeholder="What changed in this version?"
+                    className="min-h-10 w-full resize-y rounded border border-border/65 bg-background/65 px-3 py-2 text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus:border-accent"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={uploadVersion}
+                  disabled={!uploadFile || isUploading}
+                  className="min-h-10 rounded bg-accent px-4 py-2 text-sm font-medium text-accent-foreground transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  {isUploading ? 'Uploading…' : 'Upload Version'}
+                </button>
+              </div>
+              {uploadError && (
+                <p className="mt-2 text-xs text-red-300" role="alert">{uploadError}</p>
               )}
             </div>
           )}
@@ -2176,11 +2397,11 @@ export default function Home() {
   const visibleFileIds = useMemo(() => new Set(filteredFiles.map(file => file.id)), [filteredFiles]);
 
   const renderedFiles = useMemo(() => {
-    if (!activeTrack || visibleFileIds.has(activeTrack.id)) {
+    if (!activeTrack || visibleFileIds.has(getProjectId(activeTrack))) {
       return filteredFiles;
     }
 
-    const activeFile = files.find(file => file.id === activeTrack.id) || activeTrack;
+    const activeFile = files.find(file => file.id === getProjectId(activeTrack)) || activeTrack;
     return [...filteredFiles, activeFile].sort(compareFiles);
   }, [activeTrack, compareFiles, files, filteredFiles, visibleFileIds]);
 
@@ -2189,7 +2410,7 @@ export default function Home() {
     ? Math.min(renderedFiles.length, targetTrackIndex + RENDER_BATCH_SIZE)
     : renderLimit;
 
-  const activeTrackIndex = activeTrack ? renderedFiles.findIndex(file => file.id === activeTrack.id) : -1;
+  const activeTrackIndex = activeTrack ? renderedFiles.findIndex(file => file.id === getProjectId(activeTrack)) : -1;
 
   const playbackPreloadFileIds = useMemo(() => {
     const ids = new Set<string>();
@@ -2462,7 +2683,8 @@ export default function Home() {
   const handleCardReady = useCallback((file: AudioFile, cardElement: HTMLDivElement, wavesurfer: WaveSurfer) => {
     const player = { cardElement, wavesurfer };
     playerRegistryRef.current.set(file.id, player);
-    if (pendingPlaybackTrackIdRef.current === file.id) {
+    playerRegistryRef.current.set(getProjectId(file), player);
+    if (pendingPlaybackTrackIdRef.current === file.id || pendingPlaybackTrackIdRef.current === getProjectId(file)) {
       pendingPlaybackTrackIdRef.current = null;
       playRegisteredPlayer(player);
     }
@@ -2494,7 +2716,7 @@ export default function Home() {
 
     if (endModeRef.current === 'next' && activeTrackIdRef.current === file.id && activeWaveSurferRef.current === wavesurfer) {
       const currentList = renderedFilesRef.current;
-      const currentIndex = currentList.findIndex(track => track.id === file.id);
+      const currentIndex = currentList.findIndex(track => track.id === getProjectId(file));
       const nextTrack = currentIndex >= 0 ? currentList[currentIndex + 1] : undefined;
       const nextPlayer = nextTrack ? playerRegistryRef.current.get(nextTrack.id) : undefined;
 
@@ -2523,6 +2745,10 @@ export default function Home() {
     const registeredPlayer = playerRegistryRef.current.get(file.id);
     if (registeredPlayer?.wavesurfer === wavesurfer) {
       playerRegistryRef.current.delete(file.id);
+    }
+    const projectPlayer = playerRegistryRef.current.get(getProjectId(file));
+    if (projectPlayer?.wavesurfer === wavesurfer) {
+      playerRegistryRef.current.delete(getProjectId(file));
     }
 
     if (activeTrackIdRef.current === file.id && activeWaveSurferRef.current === wavesurfer) {
@@ -2562,8 +2788,9 @@ export default function Home() {
 
   const playRelativeTrack = useCallback((direction: 1 | -1) => {
     const currentTrackId = activeTrackIdRef.current;
+    const currentProjectId = activeTrack?.projectId || currentTrackId;
     const currentList = renderedFilesRef.current;
-    const currentIndex = currentTrackId ? currentList.findIndex(track => track.id === currentTrackId) : -1;
+    const currentIndex = currentProjectId ? currentList.findIndex(track => track.id === currentProjectId) : -1;
     const nextTrack = currentIndex >= 0 ? currentList[currentIndex + direction] : undefined;
     const nextPlayer = nextTrack ? playerRegistryRef.current.get(nextTrack.id) : undefined;
 
@@ -2580,7 +2807,7 @@ export default function Home() {
       const nextLimit = Math.max(currentLimit, Math.min(currentList.length, currentIndex + direction + RENDER_BATCH_SIZE));
       return nextLimit === currentLimit ? prev : { key: filterKey, limit: nextLimit };
     });
-  }, [filterKey, playRegisteredPlayer]);
+  }, [activeTrack, filterKey, playRegisteredPlayer]);
 
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
@@ -3411,7 +3638,7 @@ export default function Home() {
           </div>
           <div className="overflow-hidden rounded-b-md border border-border/65 bg-[#0b0f14]/92 shadow-2xl shadow-black/20">
             {displayedFiles.map(file => {
-              const hiddenActiveTrack = activeTrack?.id === file.id && !visibleFileIds.has(file.id);
+              const hiddenActiveTrack = Boolean(activeTrack && getProjectId(activeTrack) === file.id && !visibleFileIds.has(file.id));
               if (!currentUser) return null;
 
               return (
@@ -3431,7 +3658,7 @@ export default function Home() {
                   <AudioCard
                     file={file}
                     setFiles={setFiles}
-                    isActive={activeTrack?.id === file.id}
+                    isActive={Boolean(activeTrack && getProjectId(activeTrack) === file.id)}
                     currentUser={currentUser}
                     accountUsers={accountUsers}
                     instrumentOptions={instrumentOptions}
