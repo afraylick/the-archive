@@ -43,6 +43,62 @@ interface AudioFileRecord {
 const MAX_UPLOAD_FILE_BYTES = 30 * 1024 * 1024;
 const MAX_NOTES_LENGTH = 10000;
 const AUDIO_EXTENSIONS = new Set(['.aac', '.aif', '.aiff', '.flac', '.m4a', '.mp3', '.ogg', '.wav']);
+const AUDIO_MIME_TYPES = new Set([
+  'application/octet-stream',
+  'application/ogg',
+  'audio/aac',
+  'audio/aiff',
+  'audio/flac',
+  'audio/mp3',
+  'audio/mp4',
+  'audio/mpeg',
+  'audio/ogg',
+  'audio/vnd.wave',
+  'audio/wav',
+  'audio/wave',
+  'audio/x-aac',
+  'audio/x-aiff',
+  'audio/x-flac',
+  'audio/x-m4a',
+  'audio/x-wav',
+]);
+
+const hasAsciiAt = (buffer: Buffer, value: string, offset = 0) => (
+  buffer.length >= offset + value.length && buffer.subarray(offset, offset + value.length).toString('ascii') === value
+);
+
+const containsAscii = (buffer: Buffer, value: string, maxBytes = buffer.length) => (
+  buffer.subarray(0, Math.min(buffer.length, maxBytes)).indexOf(Buffer.from(value, 'ascii')) >= 0
+);
+
+const isSupportedAudioBuffer = (buffer: Buffer, extension: string) => {
+  if (buffer.length < 4) return false;
+
+  const hasFrameSync = buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0;
+  const isMp3 = hasAsciiAt(buffer, 'ID3') || (hasFrameSync && (buffer[1] & 0x06) !== 0);
+  const isAac = hasFrameSync && (buffer[1] & 0x06) === 0;
+  const isWav = hasAsciiAt(buffer, 'RIFF') && hasAsciiAt(buffer, 'WAVE', 8);
+  const isAiff = hasAsciiAt(buffer, 'FORM') && (hasAsciiAt(buffer, 'AIFF', 8) || hasAsciiAt(buffer, 'AIFC', 8));
+  const isFlac = hasAsciiAt(buffer, 'fLaC');
+  const isOggAudio = hasAsciiAt(buffer, 'OggS') && (
+    containsAscii(buffer, 'OpusHead', 65536) || containsAscii(buffer, 'vorbis', 65536)
+  );
+  const isMp4Container = hasAsciiAt(buffer, 'ftyp', 4);
+  const isM4a = isMp4Container && (
+    containsAscii(buffer, 'M4A ', 65536)
+    || containsAscii(buffer, 'mp4a')
+    || containsAscii(buffer, 'alac')
+  );
+
+  if (extension === '.mp3') return isMp3;
+  if (extension === '.wav') return isWav;
+  if (extension === '.aif' || extension === '.aiff') return isAiff;
+  if (extension === '.flac') return isFlac;
+  if (extension === '.ogg') return isOggAudio;
+  if (extension === '.m4a') return isM4a;
+  if (extension === '.aac') return isAac || isM4a;
+  return false;
+};
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id: projectId } = await params;
@@ -68,7 +124,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     const extension = path.extname(file.name).toLowerCase();
     if (!AUDIO_EXTENSIONS.has(extension)) {
-      return NextResponse.json({ error: 'Unsupported audio file type' }, { status: 415 });
+      return NextResponse.json({ error: 'Use an MP3, WAV, M4A, AAC, FLAC, OGG, or AIFF audio file' }, { status: 415 });
+    }
+    const mimeType = file.type.toLowerCase().split(';', 1)[0];
+    if (mimeType && !AUDIO_MIME_TYPES.has(mimeType)) {
+      return NextResponse.json({ error: 'The selected file is not a supported audio type' }, { status: 415 });
     }
 
     ensureStorageDirs();
@@ -81,10 +141,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'Song project not found' }, { status: 404 });
     }
 
+    const buffer = Buffer.from(await file.arrayBuffer());
+    if (!isSupportedAudioBuffer(buffer, extension)) {
+      return NextResponse.json({ error: 'The selected file does not contain supported audio data' }, { status: 415 });
+    }
+
     const now = new Date();
     const storageId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}${extension}`;
     const filePath = path.join(getUploadsDir(), storageId);
-    const buffer = Buffer.from(await file.arrayBuffer());
     fs.writeFileSync(filePath, buffer);
 
     let generatedWaveform: Awaited<ReturnType<typeof generateServerWaveform>> | null = null;

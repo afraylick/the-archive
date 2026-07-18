@@ -118,6 +118,8 @@ const MOBILE_WAVEFORM_IDLE_TIMEOUT = 900;
 const VOL_BOOST_DB = 12;
 const VOL_BOOST_GAIN = Math.pow(10, VOL_BOOST_DB / 20);
 const MAX_VERSION_UPLOAD_BYTES = 30 * 1024 * 1024;
+const VERSION_AUDIO_EXTENSIONS = new Set(['.aac', '.aif', '.aiff', '.flac', '.m4a', '.mp3', '.ogg', '.wav']);
+const VERSION_AUDIO_ACCEPT = '.mp3,.wav,.m4a,.aac,.flac,.ogg,.aif,.aiff,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/x-m4a,audio/aac,audio/flac,audio/ogg,audio/aiff,audio/x-aiff';
 const TAG_LABELS: Record<string, string> = {
   'electric guitar': 'E. Guitar',
   'e. guitar': 'E. Guitar',
@@ -180,6 +182,11 @@ const isUntaggedFile = (file: AudioFile) => (
 );
 
 const hasAny = <T,>(values: T[], selected: T[]) => values.some(value => selected.includes(value));
+const isCommonVersionAudioFile = (file: File) => {
+  const extensionIndex = file.name.lastIndexOf('.');
+  const extension = extensionIndex >= 0 ? file.name.slice(extensionIndex).toLowerCase() : '';
+  return VERSION_AUDIO_EXTENSIONS.has(extension);
+};
 const getAdamRating = (file: AudioFile) => file.ratings?.adam || file.myRating || 0;
 const getProjectId = (file: AudioFile) => file.projectId || file.id;
 
@@ -1115,6 +1122,10 @@ const AudioCard = memo(function AudioCard({
 
   const uploadVersion = async () => {
     if (!uploadFile || isUploading) return;
+    if (!isCommonVersionAudioFile(uploadFile)) {
+      setUploadError('Use an MP3, WAV, M4A, AAC, FLAC, OGG, or AIFF audio file');
+      return;
+    }
     if (uploadFile.size > MAX_VERSION_UPLOAD_BYTES) {
       setUploadError('Audio uploads are limited to 30 MB');
       return;
@@ -2138,7 +2149,7 @@ const AudioCard = memo(function AudioCard({
               <div className="mb-3">
                 <p className="text-sm font-medium text-foreground">Upload a new version</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">It will stay attached to {project.name} with its own notes and comments.</p>
-                <p className="mt-1 text-xs font-medium text-accent/85">Please use MP3 files when possible · 30 MB limit</p>
+                <p className="mt-1 text-xs font-medium text-accent/85">MP3, WAV, M4A, AAC, FLAC, OGG, or AIFF · 30 MB limit</p>
               </div>
               <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_auto] md:items-end">
                 <label className="block min-w-0">
@@ -2146,11 +2157,18 @@ const AudioCard = memo(function AudioCard({
                   <input
                     ref={uploadInputRef}
                     type="file"
-                    accept="audio/*,.aif,.aiff,.flac,.m4a,.mp3,.ogg,.wav"
+                    accept={VERSION_AUDIO_ACCEPT}
                     onChange={(event) => {
                       const nextFile = event.target.files?.[0] || null;
-                      setUploadFile(nextFile);
-                      setUploadError(nextFile && nextFile.size > MAX_VERSION_UPLOAD_BYTES ? 'Audio uploads are limited to 30 MB' : '');
+                      const hasInvalidType = Boolean(nextFile && !isCommonVersionAudioFile(nextFile));
+                      setUploadFile(hasInvalidType ? null : nextFile);
+                      setUploadError(
+                        hasInvalidType
+                          ? 'Use an MP3, WAV, M4A, AAC, FLAC, OGG, or AIFF audio file'
+                          : nextFile && nextFile.size > MAX_VERSION_UPLOAD_BYTES
+                            ? 'Audio uploads are limited to 30 MB'
+                            : ''
+                      );
                     }}
                     className="block w-full min-w-0 rounded border border-border/65 bg-background/65 text-sm text-muted-foreground file:mr-3 file:border-0 file:border-r file:border-border/65 file:bg-muted/40 file:px-3 file:py-2.5 file:text-xs file:font-medium file:text-foreground hover:file:bg-muted/60"
                   />
@@ -3041,9 +3059,14 @@ export default function Home() {
       return;
     }
 
-    setSelectedFinishes(prev => prev.filter(finish => finish !== 'Voice Memo'));
-    setExcludedFinishes(prev => prev.includes('Voice Memo') ? prev : [...prev, 'Voice Memo']);
-  }, []);
+    setSelectedFinishes(prev => {
+      const withoutVoiceMemos = prev.filter(finish => finish !== 'Voice Memo');
+      return withoutVoiceMemos.length > 0
+        ? withoutVoiceMemos
+        : finishOptions.filter(finish => finish !== 'Voice Memo');
+    });
+    setExcludedFinishes(prev => prev.filter(finish => finish !== 'Voice Memo'));
+  }, [finishOptions]);
 
   const toggleFilterCollapsed = (filter: keyof typeof collapsedFilters) => {
     setCollapsedFilters(prev => ({ ...prev, [filter]: !prev[filter] }));
