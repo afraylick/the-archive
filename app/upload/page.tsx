@@ -4,8 +4,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { getCreatedAtWithYear, getRecordedDateFromFilename } from '@/lib/recorded-date';
 
-const DEFAULT_INSTRUMENTS = ['E. Guitar', 'Keys', 'Vocal', 'Synth', 'Acoustic', 'Bass', 'Drums', 'Drum Machine', 'Uku'];
-const DEFAULT_VIBES = ['ambient', 'rock', 'indie', 'acoustic', 'hard', 'soft', 'country', 'electronic', 'Chill', 'Gainy', 'Spacey', 'Beats', 'Group Jam'];
 const FINISH_OPTIONS = ['Tracked', 'Recorder', 'Voice Memo'];
 const TAG_LABELS: Record<string, string> = {
   'electric guitar': 'E. Guitar',
@@ -372,22 +370,6 @@ interface FileEntry {
   createdAt: string;
   colorTags: string[];
   rating: number;
-  bobs: boolean;
-}
-
-interface FolderEntry {
-  path: string;
-  name: string;
-  instruments: string[];
-  vibes: string[];
-  collections: string[];
-  finish: string;
-  notes: string;
-  year: number;
-  createdAt: string;
-  colorTags: string[];
-  rating: number;
-  bobs: boolean;
 }
 
 export default function UploadPage() {
@@ -397,18 +379,15 @@ export default function UploadPage() {
   const [uploadProgressKnown, setUploadProgressKnown] = useState(false);
   const [uploadStatus, setUploadStatus] = useState('');
   const [finderTagImportStatus, setFinderTagImportStatus] = useState('');
-  const [importingFolder, setImportingFolder] = useState(false);
-  const [loadingFolder, setLoadingFolder] = useState(false);
-  const [folderPath, setFolderPath] = useState('');
+  const [finderTagFileName, setFinderTagFileName] = useState('');
+  const [useFinderColorRating, setUseFinderColorRating] = useState(false);
   const [folderInstruments, setFolderInstruments] = useState<string[]>([]);
   const [folderVibes, setFolderVibes] = useState<string[]>([]);
   const [folderCollections, setFolderCollections] = useState<string[]>([]);
   const [folderFinish, setFolderFinish] = useState('');
   const [folderRating, setFolderRating] = useState(0);
-  const [folderBobs, setFolderBobs] = useState(false);
-  const [folderEntries, setFolderEntries] = useState<FolderEntry[]>([]);
-  const [instrumentOptions, setInstrumentOptions] = useState<string[]>(DEFAULT_INSTRUMENTS);
-  const [vibeOptions, setVibeOptions] = useState<string[]>(DEFAULT_VIBES);
+  const [instrumentOptions, setInstrumentOptions] = useState<string[]>([]);
+  const [vibeOptions, setVibeOptions] = useState<string[]>([]);
   const [collectionOptions, setCollectionOptions] = useState<string[]>([]);
   const [newInstrument, setNewInstrument] = useState('');
   const [newVibe, setNewVibe] = useState('');
@@ -427,6 +406,13 @@ export default function UploadPage() {
   }, []);
 
   useEffect(() => {
+    fetch('/api/session')
+      .then(res => res.json())
+      .then((data: { settings?: { defaultInstruments?: string[]; defaultVibes?: string[] } }) => {
+        setInstrumentOptions(prev => Array.from(new Set([...prev, ...(data.settings?.defaultInstruments || [])])));
+        setVibeOptions(prev => Array.from(new Set([...prev, ...(data.settings?.defaultVibes || [])])));
+      });
+
     fetch('/api/files')
       .then(res => res.json())
       .then((files: AudioFile[]) => {
@@ -436,8 +422,7 @@ export default function UploadPage() {
       });
   }, []);
 
-  const onDrop = (acceptedFiles: File[]) => {
-    const newEntries = acceptedFiles.map(file => {
+  const createFileEntries = (files: File[]) => files.map(file => {
       const filenameRecordedDate = getRecordedDateFromFilename(file.name);
       const createdAt = filenameRecordedDate?.createdAt || new Date(file.lastModified).toISOString();
 
@@ -453,16 +438,29 @@ export default function UploadPage() {
         createdAt,
         colorTags: [],
         rating: folderRating,
-        bobs: folderBobs,
       };
     });
-    setFileEntries(prev => [...prev, ...newEntries]);
+
+  const onDrop = (acceptedFiles: File[]) => {
+    const metadataFile = acceptedFiles.find(file => file.name.toLowerCase().endsWith('.json')) || null;
+    const audioFiles = acceptedFiles.filter(file => !file.name.toLowerCase().endsWith('.json'));
+    const newEntries = createFileEntries(audioFiles);
+
+    if (metadataFile) {
+      void applyFinderTagMetadata(metadataFile, newEntries);
+    } else if (newEntries.length > 0) {
+      setFileEntries(prev => [...prev, ...newEntries]);
+    }
   };
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive, open: openFilePicker } = useDropzone({
     onDrop,
-    accept: { 'audio/*': [] },
+    accept: {
+      'audio/*': ['.aac', '.aif', '.aiff', '.flac', '.m4a', '.mp3', '.ogg', '.wav'],
+      'application/json': ['.json'],
+    },
     multiple: true,
+    noClick: true,
   });
 
   const updateEntry = (index: number, field: keyof FileEntry, value: string[] | number | string | boolean) => {
@@ -477,12 +475,6 @@ export default function UploadPage() {
     ));
   };
 
-  const updateFolderEntry = (index: number, field: keyof FolderEntry, value: string[] | number | string | boolean) => {
-    setFolderEntries(prev => prev.map((entry, i) =>
-      i === index ? { ...entry, [field]: value } : entry
-    ));
-  };
-
   const updateEntryYear = (index: number, value: string) => {
     const year = Number(value);
     if (!Number.isInteger(year) || year < 1900 || year > 2100) {
@@ -491,19 +483,6 @@ export default function UploadPage() {
     }
 
     setFileEntries(prev => prev.map((entry, i) => i === index
-      ? { ...entry, year, createdAt: getCreatedAtWithYear(entry.createdAt, year) }
-      : entry
-    ));
-  };
-
-  const updateFolderEntryYear = (index: number, value: string) => {
-    const year = Number(value);
-    if (!Number.isInteger(year) || year < 1900 || year > 2100) {
-      alert('Enter a valid year');
-      return;
-    }
-
-    setFolderEntries(prev => prev.map((entry, i) => i === index
       ? { ...entry, year, createdAt: getCreatedAtWithYear(entry.createdAt, year) }
       : entry
     ));
@@ -539,20 +518,6 @@ export default function UploadPage() {
 
     setter(nextTags);
     setFileEntries(prev => prev.map(entry => ({ ...entry, [field]: nextTags })));
-    setFolderEntries(prev => prev.map(entry => ({ ...entry, [field]: nextTags })));
-  };
-
-  const toggleFolderEntryTag = (index: number, field: 'instruments' | 'vibes' | 'collections', tag: string) => {
-    setFolderEntries(prev => prev.map((entry, i) => {
-      if (i !== index) return entry;
-      const selectedTags = entry[field];
-      return {
-        ...entry,
-        [field]: selectedTags.includes(tag)
-          ? selectedTags.filter(selectedTag => selectedTag !== tag)
-          : [...selectedTags, tag],
-      };
-    }));
   };
 
   const removeEntry = (index: number) => {
@@ -563,8 +528,9 @@ export default function UploadPage() {
     });
   };
 
-  const applyFinderTagMetadata = async (metadataFile: File | null) => {
+  const applyFinderTagMetadata = async (metadataFile: File | null, additionalEntries: FileEntry[] = []) => {
     if (!metadataFile) return;
+    setFinderTagFileName(metadataFile.name);
 
     try {
       const metadata = JSON.parse(await metadataFile.text()) as FinderTagExport;
@@ -581,7 +547,7 @@ export default function UploadPage() {
       }
 
       let matched = 0;
-      setFileEntries(prev => prev.map(entry => {
+      setFileEntries(prev => [...prev, ...additionalEntries].map(entry => {
         const colorTags = tagsByName.get(normalizeFilename(entry.file.name));
         if (!colorTags) return entry;
 
@@ -589,12 +555,15 @@ export default function UploadPage() {
         return {
           ...entry,
           colorTags,
-          rating: deriveRatingFromColorTags(colorTags, entry.rating),
+          rating: useFinderColorRating ? deriveRatingFromColorTags(colorTags, entry.rating) : entry.rating,
         };
       }));
 
       setFinderTagImportStatus(`Applied Finder tags to ${matched} queued file${matched === 1 ? '' : 's'}.`);
     } catch (error) {
+      if (additionalEntries.length > 0) {
+        setFileEntries(prev => [...prev, ...additionalEntries]);
+      }
       setFinderTagImportStatus(error instanceof Error ? error.message : 'Failed to apply Finder tags');
     }
   };
@@ -607,43 +576,18 @@ export default function UploadPage() {
     }
   };
 
-  const applyFolderDefaults = (entries: FolderEntry[]) => entries.map(entry => ({
-    ...entry,
-    instruments: folderInstruments,
-    vibes: folderVibes,
-    collections: folderCollections,
-    finish: folderFinish || entry.finish,
-    notes: entry.notes,
-    rating: entry.rating || folderRating,
-    bobs: folderBobs,
-  }));
-
   const toggleFolderFinish = (finish: string) => {
     const nextFinish = folderFinish === finish ? '' : finish;
     setFolderFinish(nextFinish);
     setFileEntries(prev => prev.map(entry => ({ ...entry, finish: nextFinish })));
-    setFolderEntries(prev => prev.map(entry => ({ ...entry, finish: nextFinish })));
   };
 
   const updateFolderRating = (rating: number) => {
     setFolderRating(rating);
     setFileEntries(prev => prev.map(entry => ({
       ...entry,
-      rating: deriveRatingFromColorTags(entry.colorTags, rating),
+      rating: useFinderColorRating ? deriveRatingFromColorTags(entry.colorTags, rating) : rating,
     })));
-    setFolderEntries(prev => prev.map(entry => ({
-      ...entry,
-      rating: deriveRatingFromColorTags(entry.colorTags, rating),
-    })));
-  };
-
-  const toggleFolderBobs = () => {
-    setFolderBobs(prev => {
-      const nextValue = !prev;
-      setFileEntries(entries => entries.map(entry => ({ ...entry, bobs: nextValue })));
-      setFolderEntries(entries => entries.map(entry => ({ ...entry, bobs: nextValue })));
-      return nextValue;
-    });
   };
 
   const addVibe = () => {
@@ -690,7 +634,6 @@ export default function UploadPage() {
         createdAt: entry.createdAt,
         colorTags: entry.colorTags,
         rating: entry.rating,
-        bobs: entry.bobs,
       }));
     });
 
@@ -739,87 +682,14 @@ export default function UploadPage() {
     }
   };
 
-  const loadFolder = async () => {
-    const trimmedPath = folderPath.trim();
-    if (!trimmedPath) return;
-
-    setLoadingFolder(true);
-    try {
-      const res = await fetch('/api/import-folder', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'scan',
-          folderPath: trimmedPath,
-          rating: folderRating,
-          bobs: folderBobs,
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json() as { files: Omit<FolderEntry, 'instruments' | 'vibes' | 'collections'>[] };
-        setFolderEntries(applyFolderDefaults(data.files.map(file => ({
-          ...file,
-          instruments: folderInstruments,
-          vibes: folderVibes,
-          collections: folderCollections,
-          finish: folderFinish || file.finish,
-          notes: file.notes || '',
-          bobs: folderBobs,
-        }))));
-      } else {
-        const data = await res.json().catch(() => null);
-        alert(data?.error || 'Folder load failed');
-      }
-    } catch {
-      alert('Error loading folder');
-    } finally {
-      setLoadingFolder(false);
-    }
-  };
-
-  const importFolder = async () => {
-    const trimmedPath = folderPath.trim();
-    if (!trimmedPath || folderEntries.length === 0) return;
-
-    setImportingFolder(true);
-    try {
-      const res = await fetch('/api/import-folder', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'import',
-          folderPath: trimmedPath,
-          files: folderEntries.map(entry => ({
-            path: entry.path,
-            instruments: entry.instruments,
-            vibes: entry.vibes,
-            collections: entry.collections,
-            finish: entry.finish,
-            notes: entry.notes,
-            year: entry.year,
-            createdAt: entry.createdAt,
-            rating: entry.rating,
-            bobs: entry.bobs,
-          })),
-        }),
-      });
-
-      if (res.ok) {
-        window.location.href = '/';
-      } else {
-        const data = await res.json().catch(() => null);
-        alert(data?.error || 'Folder import failed');
-      }
-    } catch {
-      alert('Error importing folder');
-    } finally {
-      setImportingFolder(false);
-    }
-  };
-
   return (
-    <div className="container mx-auto p-4 bg-background text-foreground min-h-screen">
+    <div {...getRootProps()} className="container relative mx-auto min-h-screen bg-background p-4 text-foreground">
+      <input {...getInputProps()} />
+      {isDragActive && (
+        <div className="pointer-events-none fixed inset-0 z-[60] flex items-center justify-center border-4 border-dashed border-accent bg-background/90 p-8 text-center text-xl font-semibold text-foreground backdrop-blur-sm">
+          Drop audio files and optional Finder JSON anywhere on this page
+        </div>
+      )}
       <div className="mb-4 flex items-center gap-3">
         <button
           type="button"
@@ -849,13 +719,17 @@ export default function UploadPage() {
             </div>
           </div>
         )}
-        <div {...getRootProps()} className="border-2 border-dashed border-border p-8 mb-4 cursor-pointer bg-muted">
-          <input {...getInputProps()} />
-          {isDragActive ? (
-            <p className="text-foreground">Drop the audio files here...</p>
-          ) : (
-            <p className="text-foreground">Drag and drop audio files here, or click to select multiple files</p>
-          )}
+        <div
+          className="mb-4 cursor-pointer border-2 border-dashed border-border bg-muted p-8"
+          onClick={openFilePicker}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') openFilePicker();
+          }}
+        >
+          <p className="text-foreground">Drag audio files anywhere on this page, or click here to select files</p>
+          <p className="mt-2 text-sm text-muted-foreground">You can include one Finder color-tag JSON file in the same drop.</p>
         </div>
         <div className="mb-4 rounded border border-border bg-muted p-4">
           <label className="mb-2 block text-sm font-medium text-foreground">Apply Finder color tag JSON to upload queue</label>
@@ -875,46 +749,36 @@ export default function UploadPage() {
                 }}
               />
             </label>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={useFinderColorRating}
+              onClick={() => setUseFinderColorRating(enabled => !enabled)}
+              className={`rounded border px-4 py-3 text-sm transition sm:py-2 ${
+                useFinderColorRating
+                  ? 'border-accent bg-accent text-accent-foreground'
+                  : 'border-border bg-background text-muted-foreground hover:border-accent hover:text-foreground'
+              }`}
+            >
+              Use Finder Color-Rating logic: {useFinderColorRating ? 'On' : 'Off'}
+            </button>
+            {finderTagFileName && (
+              <span className="text-sm text-muted-foreground">{finderTagFileName}</span>
+            )}
             {finderTagImportStatus && (
               <span className="text-sm text-muted-foreground">{finderTagImportStatus}</span>
             )}
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            Add audio files first, then choose the JSON generated on your Mac.
+            Color tags are always imported. Rating rules are only applied when the toggle is on before choosing or dropping the JSON.
           </p>
         </div>
         <div className="mb-4 rounded border border-border bg-muted p-4">
-          <label className="mb-2 block text-sm font-medium text-foreground">Import local folder with Finder color tags</label>
-          <div className="mb-3 flex flex-col gap-2 sm:flex-row">
-            <input
-              type="text"
-              value={folderPath}
-              onChange={(event) => setFolderPath(event.target.value)}
-              placeholder="/Users/adam.froehlich/Music/Folder"
-              className="flex-1 rounded border border-border bg-background p-3 text-sm text-foreground sm:p-2"
-            />
-            <button
-              type="button"
-              onClick={loadFolder}
-              disabled={!folderPath.trim() || loadingFolder || importingFolder}
-              className="rounded bg-muted px-4 py-3 text-sm font-semibold text-muted-foreground transition hover:bg-muted/80 disabled:opacity-50 sm:py-2"
-            >
-              {loadingFolder ? 'Loading...' : 'Load Folder'}
-            </button>
-            <button
-              type="button"
-              onClick={importFolder}
-              disabled={folderEntries.length === 0 || importingFolder || loadingFolder}
-              className="rounded bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground transition hover:bg-accent/80 disabled:opacity-50 sm:py-2"
-            >
-              {importingFolder ? 'Importing...' : 'Import Folder'}
-            </button>
-          </div>
-          <div className="mb-2 mt-4">
+          <div className="mb-2">
             <h2 className="text-sm font-semibold text-foreground">Bulk tagging</h2>
-            <p className="text-xs text-muted-foreground">Changes apply immediately to every queued song, including individually uploaded files.</p>
+            <p className="text-xs text-muted-foreground">Changes apply immediately to every queued song.</p>
           </div>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-6">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
             <TagPicker
               label="Instrument"
               options={instrumentOptions}
@@ -957,23 +821,8 @@ export default function UploadPage() {
               <label className="block text-sm font-medium mb-1 text-foreground">Fallback Rating</label>
               <RatingInput value={folderRating} onChange={updateFolderRating} />
               <p className="mt-1 text-xs text-muted-foreground">
-                Finder colors override this when they match a rating rule.
+                Finder colors override this only when color-rating logic is enabled.
               </p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1 text-foreground">Demo</label>
-              <button
-                type="button"
-                onClick={toggleFolderBobs}
-                className={`rounded border px-3 py-2 text-sm transition sm:px-2 sm:py-1 ${
-                  folderBobs
-                    ? 'border-accent bg-accent text-accent-foreground'
-                    : 'border-border bg-background text-muted-foreground hover:bg-background/80'
-                }`}
-              >
-                Bobs
-              </button>
-              <p className="mt-1 text-xs text-muted-foreground">Only the Bobs account is limited by this.</p>
             </div>
           </div>
         </div>
@@ -1105,17 +954,6 @@ export default function UploadPage() {
                       name={entry.file.name}
                       onPlay={handlePreviewPlay}
                     />
-                    <button
-                      type="button"
-                      onClick={() => updateEntry(index, 'bobs', !entry.bobs)}
-                      className={`mt-2 rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
-                        entry.bobs
-                          ? 'border-accent bg-accent text-accent-foreground'
-                          : 'border-border bg-background text-muted-foreground hover:bg-background/80'
-                      }`}
-                    >
-                      Bobs
-                    </button>
                   </div>
                 </div>
                 <div className="mt-4">
@@ -1123,118 +961,6 @@ export default function UploadPage() {
                   <textarea
                     value={entry.notes}
                     onChange={(event) => updateEntry(index, 'notes', event.target.value)}
-                    placeholder="Add notes for this song..."
-                    className="min-h-24 w-full resize-y rounded border border-border bg-background p-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent"
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-        {folderEntries.length > 0 && (
-          <div className="mb-4">
-            <h2 className="text-lg font-semibold mb-2 text-foreground">Folder Files to Import</h2>
-            {folderEntries.map((entry, index) => (
-              <div key={entry.path} className="border border-border p-4 mb-2 rounded bg-muted">
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <span className="block truncate text-foreground">{entry.name}</span>
-                  </div>
-                  {(entry.colorTags || []).length > 0 && (
-                    <div className="flex">
-                      {entry.colorTags.filter(color => FINDER_COLOR_HEX[color]).map(color => (
-                        <span
-                          key={color}
-                          className="-ml-1 first:ml-0 h-3.5 w-3.5 rounded-full border border-background"
-                          style={{ backgroundColor: FINDER_COLOR_HEX[color] }}
-                          title={displayTag(color)}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-8">
-                  <TagPicker
-                    label="Instrument"
-                    options={instrumentOptions}
-                    selected={entry.instruments}
-                    onToggle={(tag) => toggleFolderEntryTag(index, 'instruments', tag)}
-                  />
-                  <TagPicker
-                    label="Vibe"
-                    options={vibeOptions}
-                    selected={entry.vibes}
-                    onToggle={(tag) => toggleFolderEntryTag(index, 'vibes', tag)}
-                  />
-                  <TagPicker
-                    label="Collections"
-                    options={collectionOptions}
-                    selected={entry.collections}
-                    onToggle={(tag) => toggleFolderEntryTag(index, 'collections', tag)}
-                  />
-                  <div>
-                    <label className="block text-sm font-medium mb-1 text-foreground">Rating</label>
-                    <RatingInput value={entry.rating} onChange={(rating) => updateFolderEntry(index, 'rating', rating)} />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1 text-foreground">Finish</label>
-                    <div className="flex flex-wrap gap-2">
-                      {FINISH_OPTIONS.map(option => (
-                        <button
-                          key={option}
-                          type="button"
-                          onClick={() => updateFolderEntry(index, 'finish', entry.finish === option ? '' : option)}
-                          className={`rounded border px-3 py-2 text-sm transition sm:px-2 sm:py-1 ${
-                            entry.finish === option
-                              ? 'border-accent bg-accent text-accent-foreground'
-                              : 'border-border bg-background text-muted-foreground hover:bg-background/80'
-                          }`}
-                        >
-                          {option}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1 text-foreground">Year</label>
-                    <input
-                      type="number"
-                      min="1900"
-                      max="2100"
-                      defaultValue={entry.year}
-                      onBlur={(event) => updateFolderEntryYear(index, event.currentTarget.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') event.currentTarget.blur();
-                      }}
-                      className="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent sm:px-2 sm:py-1"
-                    />
-                  </div>
-                  <div className="xl:col-span-2">
-                    <label className="block text-sm font-medium mb-1 text-foreground">Preview</label>
-                    <TemporaryWaveformPreview
-                      source={`/api/import-folder?path=${encodeURIComponent(entry.path)}`}
-                      src={`/api/import-folder?path=${encodeURIComponent(entry.path)}`}
-                      name={entry.name}
-                      onPlay={handlePreviewPlay}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => updateFolderEntry(index, 'bobs', !entry.bobs)}
-                      className={`mt-2 rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
-                        entry.bobs
-                          ? 'border-accent bg-accent text-accent-foreground'
-                          : 'border-border bg-background text-muted-foreground hover:bg-background/80'
-                      }`}
-                    >
-                      Bobs
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-4">
-                  <label className="block text-sm font-medium mb-1 text-foreground">Notes</label>
-                  <textarea
-                    value={entry.notes}
-                    onChange={(event) => updateFolderEntry(index, 'notes', event.target.value)}
                     placeholder="Add notes for this song..."
                     className="min-h-24 w-full resize-y rounded border border-border bg-background p-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent"
                   />

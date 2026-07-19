@@ -19,7 +19,6 @@ interface AudioFileRecord {
   vibes?: string[];
   finish?: string;
   collections?: string[];
-  bobs?: boolean;
   colorTags?: string[];
   waveformPeaks?: number[][];
   waveformDuration?: number;
@@ -107,7 +106,6 @@ const sanitizeFileForUser = (file: AudioFileRecord, userId: UserId, isAdmin: boo
 
   return {
     ...file,
-    bobs: isAdmin ? file.bobs : undefined,
     liked: file.likedBy?.includes(userId) || false,
     likedBy: isAdmin ? (file.likedBy || []) : file.likedBy?.includes(userId) ? [userId] : [],
     ratings: visibleRatings,
@@ -190,8 +188,7 @@ export async function GET(req: NextRequest) {
     fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
 
     const projects = data.filter(file => !file.projectId);
-    const visibleProjects = user.id === 'bobs' ? projects.filter(file => file.bobs) : projects;
-    return NextResponse.json(visibleProjects.map(project => {
+    return NextResponse.json(projects.map(project => {
       const uploads = data
         .filter(file => file.projectId === project.id)
         .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime());

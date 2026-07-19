@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import type { NextRequest } from 'next/server';
+import { getArchiveSettings } from './archive-settings';
 import { getStorageRoot } from './storage';
 
 export type UserId = string;
@@ -16,22 +17,24 @@ export const SESSION_COOKIE = 'archive_session';
 const DEFAULT_DEV_SECRET = 'songie-local-dev-secret';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 
-export const ARCHIVE_USERS: ArchiveUser[] = [
+const LEGACY_USERS: ArchiveUser[] = [
   { id: 'adam', name: 'Adam', isAdmin: true },
   { id: 'maurer', name: 'Maurer', isAdmin: false },
   { id: 'wills', name: 'Wills', isAdmin: false },
   { id: 'jordi', name: 'Jordi', isAdmin: false },
   { id: 'roland', name: 'Roland', isAdmin: false },
-  { id: 'bobs', name: 'Bobs', isAdmin: false },
 ];
 
-const DEFAULT_CODES: Record<UserId, string> = {
+const CLEAN_USERS: ArchiveUser[] = [
+  { id: 'adam', name: 'Admin', isAdmin: true },
+];
+
+const LEGACY_CODES: Record<UserId, string> = {
   adam: 'adam',
   maurer: 'maurer',
   wills: 'wills',
   jordi: 'jordi',
   roland: 'roland',
-  bobs: 'bobs',
 };
 
 const isProduction = () => process.env.NODE_ENV === 'production';
@@ -93,7 +96,7 @@ const readCustomUsers = () => {
   const usersById = new Map<string, ArchiveUser>();
 
   [...legacyUsers, ...storageUsers]
-    .filter(user => user.id && user.name && user.id !== 'adam')
+    .filter(user => user.id && user.name)
     .forEach(user => usersById.set(user.id, user));
 
   return Array.from(usersById.values());
@@ -109,10 +112,11 @@ const writeCustomUsers = (users: ArchiveUser[]) => {
 };
 
 const getAllUsers = () => {
-  const customUsers = readCustomUsers();
+  const builtInUsers = getArchiveSettings().legacyDefaults ? LEGACY_USERS : CLEAN_USERS;
+  const customUsers = readCustomUsers().filter(user => user.id !== 'bobs');
   const customIds = new Set(customUsers.map(user => user.id));
   return [
-    ...ARCHIVE_USERS.filter(user => !customIds.has(user.id)),
+    ...builtInUsers.filter(user => !customIds.has(user.id)),
     ...customUsers,
   ];
 };
@@ -134,8 +138,11 @@ export const verifyPasscode = (userId: string, passcode: string) => {
       timingSafeEqualText(storedHash, hashPasscodeWithSecret(passcode, DEFAULT_DEV_SECRET));
   }
 
-  const expectedCode = configuredCodes[user.id] || DEFAULT_CODES[user.id];
-  if (isProduction() && !configuredCodes[user.id]) return false;
+  const configuredCode = configuredCodes[user.id];
+  const settings = getArchiveSettings();
+  const expectedCode = configuredCode || (settings.legacyDefaults ? LEGACY_CODES[user.id] : user.id === 'adam' ? 'admin' : undefined);
+  if (!expectedCode) return false;
+  if (isProduction() && !configuredCode && (settings.legacyDefaults || user.id !== 'adam')) return false;
   return timingSafeEqualText(passcode, expectedCode);
 };
 
@@ -206,7 +213,7 @@ const getUserIdFromName = (name: string) => {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 40) || 'user';
-  const existingIds = new Set(getAllUsers().map(user => user.id));
+  const existingIds = new Set([...getAllUsers().map(user => user.id), 'bobs']);
   let id = baseId;
   let suffix = 2;
   while (existingIds.has(id)) {
@@ -232,8 +239,28 @@ export const createUser = (name: string, passcode: string) => {
   return user;
 };
 
+export const renameUser = (userId: UserId, name: string) => {
+  const cleanName = name.trim();
+  if (!cleanName) throw new Error('User name is required');
+
+  const users = getAllUsers();
+  const user = users.find(candidate => candidate.id === userId);
+  if (!user) throw new Error('User not found');
+  if (users.some(candidate => candidate.id !== userId && candidate.name.toLowerCase() === cleanName.toLowerCase())) {
+    throw new Error('User name is already in use');
+  }
+
+  const storedUsers = readCustomUsers();
+  const renamedUser = { ...user, name: cleanName };
+  const storedIndex = storedUsers.findIndex(candidate => candidate.id === userId);
+  if (storedIndex >= 0) storedUsers[storedIndex] = renamedUser;
+  else storedUsers.push(renamedUser);
+  writeCustomUsers(storedUsers);
+  return renamedUser;
+};
+
 export const deleteUser = (userId: UserId) => {
-  if (userId === 'adam') throw new Error('Adam cannot be deleted');
+  if (userId === 'adam') throw new Error('The Admin account cannot be deleted');
 
   const customUsers = readCustomUsers();
   const nextUsers = customUsers.filter(user => user.id !== userId);

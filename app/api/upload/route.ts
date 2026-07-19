@@ -19,7 +19,6 @@ interface UploadMetadata {
   createdAt?: string;
   rating?: number;
   notes?: string;
-  bobs?: boolean;
 }
 
 const MAX_UPLOAD_FILES = 200;
@@ -39,7 +38,6 @@ interface AudioFileRecord {
   finish: string;
   collections: string[];
   likedBy: string[];
-  bobs?: boolean;
   stems?: {
     id: string;
     name: string;
@@ -164,7 +162,6 @@ export async function POST(req: NextRequest) {
         finish,
         collections,
         likedBy: [],
-        bobs: Boolean(metadata.bobs),
         colorTags: cleanTagArray(metadata.colorTags).slice(0, 10),
         waveformPeaks: generatedWaveform?.waveformPeaks,
         waveformDuration: generatedWaveform?.waveformDuration,

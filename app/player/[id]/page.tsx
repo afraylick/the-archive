@@ -9,8 +9,6 @@ declare global {
   var currentActiveWaveSurfer: WaveSurfer | null;
 }
 
-const DEFAULT_INSTRUMENTS = ['E. Guitar', 'Keys', 'Vocal', 'Synth', 'Acoustic', 'Bass', 'Drums', 'Drum Machine', 'Uku'];
-const DEFAULT_VIBES = ['ambient', 'rock', 'indie', 'acoustic', 'hard', 'soft', 'country', 'electronic', 'Chill', 'Gainy', 'Spacey', 'Beats', 'Group Jam'];
 const MOBILE_PLACEHOLDER_WAVEFORM_PEAKS = [[0, 0]];
 const MOBILE_PLACEHOLDER_DURATION = 0.001;
 const TAG_LABELS: Record<string, string> = {
@@ -132,12 +130,13 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
   const [accountUsers, setAccountUsers] = useState<ArchiveUser[]>([]);
   const [editInstruments, setEditInstruments] = useState<string[]>([]);
   const [editVibes, setEditVibes] = useState<string[]>([]);
-  const [instrumentOptions, setInstrumentOptions] = useState<string[]>(DEFAULT_INSTRUMENTS);
-  const [vibeOptions, setVibeOptions] = useState<string[]>(DEFAULT_VIBES);
+  const [instrumentOptions, setInstrumentOptions] = useState<string[]>([]);
+  const [vibeOptions, setVibeOptions] = useState<string[]>([]);
   const [editMyRating, setEditMyRating] = useState(0);
   const [newComment, setNewComment] = useState('');
   const waveformRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
+  const adminName = accountUsers.find(user => user.id === 'adam')?.name || 'Admin';
 
   const handleUpdate = async () => {
     if (!file) return;
@@ -157,9 +156,11 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
   useEffect(() => {
     fetch('/api/session')
       .then(res => res.json())
-      .then((data: { user: ArchiveUser | null; users: ArchiveUser[] }) => {
+      .then((data: { user: ArchiveUser | null; users: ArchiveUser[]; settings?: { defaultInstruments?: string[]; defaultVibes?: string[] } }) => {
         setCurrentUser(data.user);
         setAccountUsers(data.users);
+        setInstrumentOptions(prev => Array.from(new Set([...prev, ...(data.settings?.defaultInstruments || [])])));
+        setVibeOptions(prev => Array.from(new Set([...prev, ...(data.settings?.defaultVibes || [])])));
       });
 
     fetch('/api/files')
@@ -325,7 +326,7 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
         <p className="text-muted-foreground">Vibe: {vibes.map(displayTag).join(', ') || 'None'}</p>
         <p className="text-muted-foreground">Finish: {file.finish || 'None'}</p>
         <p className="text-muted-foreground">Year: {file.year || 'N/A'}</p>
-        <p className="text-muted-foreground">Adam&apos;s Rating: {file.ratings?.adam || file.myRating}/5</p>
+        <p className="text-muted-foreground">{adminName}&apos;s Rating: {file.ratings?.adam || file.myRating}/5</p>
         {currentUser && currentUser.id !== 'adam' && (
           <p className="text-muted-foreground">Your Rating: {file.ratings?.[currentUser.id] || file.userRating}/5</p>
         )}
@@ -357,7 +358,7 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
             </button>
           ))}
         </div>
-        <label className="block text-sm font-medium mb-2 mt-2 text-foreground">Adam&apos;s Rating</label>
+        <label className="block text-sm font-medium mb-2 mt-2 text-foreground">{adminName}&apos;s Rating</label>
         <RatingInput value={editMyRating} onChange={setEditMyRating} />
         <div className="mt-2 grid gap-2 sm:grid-cols-2">
           {accountUsers.filter(user => user.id !== 'adam' && (file.ratings?.[user.id] || 0) > 0).map(user => (

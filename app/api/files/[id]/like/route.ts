@@ -5,7 +5,6 @@ import { getDataFilePath } from '@/lib/storage';
 
 interface AudioFileRecord {
   id: string;
-  bobs?: boolean;
   likedBy?: string[];
 }
 
@@ -28,10 +27,6 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     if (index === -1) {
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
-    if (user.id === 'bobs' && !data[index].bobs) {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
-    }
-
     const likedBy = new Set(Array.isArray(data[index].likedBy) ? data[index].likedBy : []);
     if (liked) {
       likedBy.add(user.id);

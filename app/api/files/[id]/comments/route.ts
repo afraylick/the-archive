@@ -14,7 +14,6 @@ interface AudioComment {
 
 interface AudioFileRecord {
   id: string;
-  bobs?: boolean;
   comments?: AudioComment[];
 }
 
@@ -46,10 +45,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (index === -1) {
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
-    if (user.id === 'bobs' && !data[index].bobs) {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
-    }
-
     const comments = Array.isArray(data[index].comments)
       ? data[index].comments!.filter(comment => comment.userId && comment.text)
       : [];
@@ -94,10 +89,6 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     if (index === -1) {
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
-    if (user.id === 'bobs' && !data[index].bobs) {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
-    }
-
     const comments = Array.isArray(data[index].comments) ? data[index].comments! : [];
     const comment = comments.find(existingComment => existingComment.id === commentId);
     if (!comment || comment.userId !== user.id) {

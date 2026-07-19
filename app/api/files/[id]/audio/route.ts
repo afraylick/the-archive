@@ -10,7 +10,6 @@ interface AudioFileRecord {
   id: string;
   name?: string;
   originalName?: string;
-  bobs?: boolean;
 }
 
 const AUDIO_CACHE_CONTROL = 'private, max-age=86400, stale-while-revalidate=604800';
@@ -158,7 +157,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
       : [];
     const file = data.find(item => item.id === id);
-    if (!file || !isSafeStorageId(file.id) || (user.id === 'bobs' && !file.bobs)) {
+    if (!file || !isSafeStorageId(file.id)) {
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
 

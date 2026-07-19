@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { getUserFromSessionToken, SESSION_COOKIE } from './lib/auth';
 
 const PUBLIC_PATHS = ['/login', '/api/session'];
-const ADMIN_PATHS = ['/manage', '/users', '/upload', '/api/upload', '/api/import-folder', '/api/users'];
+const ADMIN_PATHS = ['/manage', '/users', '/upload', '/api/upload', '/api/users'];
 const SECURITY_HEADERS: Record<string, string> = {
   'Content-Security-Policy': "base-uri 'self'; object-src 'none'; frame-ancestors 'none'",
   'Permissions-Policy': 'camera=(), geolocation=(), microphone=()',

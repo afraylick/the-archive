@@ -7,7 +7,6 @@ import fs from 'fs';
 
 interface AudioFileRecord {
   id: string;
-  bobs?: boolean;
   waveformPeaks?: number[][];
   waveformDuration?: number;
   waveformCacheVersion?: number;

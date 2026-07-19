@@ -28,7 +28,6 @@ interface AudioFileRecord {
   ratings?: Partial<Record<UserId, number>>;
   ratingUpdatedAt?: Partial<Record<UserId, string>>;
   likedBy?: string[];
-  bobs?: boolean;
   stems?: {
     id: string;
     name: string;
@@ -55,10 +54,6 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     if (index === -1) {
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
-    if (user.id === 'bobs' && !data[index].bobs) {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
-    }
-
     if (!user.isAdmin) {
       if (updatedFile.waveformPeaks || updatedFile.waveformDuration) {
         if (!isValidWaveformCache(updatedFile.waveformPeaks, updatedFile.waveformDuration, updatedFile.waveformCacheVersion)) {

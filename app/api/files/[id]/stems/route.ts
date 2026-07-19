@@ -13,7 +13,6 @@ interface StemAttachment {
 interface AudioFileRecord {
   id: string;
   stems?: StemAttachment;
-  bobs?: boolean;
 }
 
 const MAX_STEMS_ZIP_BYTES = 2 * 1024 * 1024 * 1024;
@@ -120,7 +119,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
       : [];
     const file = data.find(item => item.id === id);
-    if (!file?.stems?.id || !isSafeStorageId(file.stems.id) || (user.id === 'bobs' && !file.bobs)) {
+    if (!file?.stems?.id || !isSafeStorageId(file.stems.id)) {
       return NextResponse.json({ error: 'Stems not found' }, { status: 404 });
     }
 

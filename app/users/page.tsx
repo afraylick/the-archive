@@ -19,10 +19,11 @@ interface UserSummary {
   commentedSongs: { id: string; name: string }[];
 }
 
-const BUILT_IN_USER_IDS = new Set(['adam', 'maurer', 'wills', 'jordi', 'roland', 'bobs']);
+const BUILT_IN_USER_IDS = new Set(['adam', 'maurer', 'wills', 'jordi', 'roland']);
 
 export default function ManageUsersPage() {
   const [users, setUsers] = useState<UserSummary[]>([]);
+  const [names, setNames] = useState<Record<string, string>>({});
   const [passwords, setPasswords] = useState<Record<string, string>>({});
   const [expandedUsers, setExpandedUsers] = useState<Record<string, boolean>>({});
   const [newUserName, setNewUserName] = useState('');
@@ -34,7 +35,11 @@ export default function ManageUsersPage() {
   const fetchUsers = () => {
     fetch('/api/users')
       .then(res => res.json())
-      .then((data: { users: UserSummary[] }) => setUsers(data.users || []));
+      .then((data: { users: UserSummary[] }) => {
+        const nextUsers = data.users || [];
+        setUsers(nextUsers);
+        setNames(Object.fromEntries(nextUsers.map(user => [user.id, user.name])));
+      });
   };
 
   useEffect(() => {
@@ -56,6 +61,21 @@ export default function ManageUsersPage() {
     if (res.ok) {
       setPasswords(prev => ({ ...prev, [userId]: '' }));
     }
+  };
+
+  const updateName = async (user: UserSummary) => {
+    const name = names[user.id]?.trim();
+    if (!name || name === user.name) return;
+
+    const res = await fetch('/api/users', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: user.id, name }),
+    });
+
+    const data = await res.json().catch(() => null) as { error?: string } | null;
+    setStatus(res.ok ? 'User name updated' : data?.error || 'User name update failed');
+    if (res.ok) fetchUsers();
   };
 
   const addUser = async (event: React.FormEvent) => {
@@ -190,21 +210,43 @@ export default function ManageUsersPage() {
                     {user.stats.ratingCount} ratings · avg {user.stats.averageRating || 'N/A'} · {user.stats.likeCount} likes · {user.stats.commentCount} comments
                   </p>
                 </button>
-                <div className="flex min-w-0 max-w-md flex-1 flex-wrap justify-end gap-2 sm:flex-nowrap sm:gap-0">
-                  <input
-                    type="password"
-                    value={passwords[user.id] || ''}
-                    onChange={(event) => setPasswords(prev => ({ ...prev, [user.id]: event.target.value }))}
-                    placeholder="New password"
-                    className="min-w-0 flex-[1_1_12rem] rounded border border-border bg-background p-3 text-sm text-foreground sm:rounded-l sm:rounded-r-none sm:p-2"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => updatePassword(user.id)}
-                    className="rounded bg-accent px-3 py-3 text-sm text-accent-foreground transition hover:bg-accent/80 sm:rounded-l-none sm:rounded-r sm:py-2"
-                  >
-                    Save
-                  </button>
+                <div className="flex min-w-0 max-w-2xl flex-1 flex-wrap justify-end gap-2">
+                  <div className="flex min-w-0 flex-[1_1_14rem]">
+                    <input
+                      type="text"
+                      value={names[user.id] || ''}
+                      onChange={(event) => setNames(prev => ({ ...prev, [user.id]: event.target.value }))}
+                      placeholder="User name"
+                      aria-label={`User name for ${user.name}`}
+                      className="min-w-0 flex-1 rounded-l border border-border bg-background p-3 text-sm text-foreground sm:p-2"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => updateName(user)}
+                      disabled={!names[user.id]?.trim() || names[user.id]?.trim() === user.name}
+                      className="rounded-r bg-accent px-3 py-3 text-sm text-accent-foreground transition hover:bg-accent/80 disabled:opacity-50 sm:py-2"
+                    >
+                      Save name
+                    </button>
+                  </div>
+                  <div className="flex min-w-0 flex-[1_1_14rem]">
+                    <input
+                      type="password"
+                      value={passwords[user.id] || ''}
+                      onChange={(event) => setPasswords(prev => ({ ...prev, [user.id]: event.target.value }))}
+                      placeholder="New password"
+                      aria-label={`New password for ${user.name}`}
+                      className="min-w-0 flex-1 rounded-l border border-border bg-background p-3 text-sm text-foreground sm:p-2"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => updatePassword(user.id)}
+                      disabled={!passwords[user.id]?.trim()}
+                      className="rounded-r bg-accent px-3 py-3 text-sm text-accent-foreground transition hover:bg-accent/80 disabled:opacity-50 sm:py-2"
+                    >
+                      Save password
+                    </button>
+                  </div>
                   {!BUILT_IN_USER_IDS.has(user.id) && (
                     <button
                       type="button"

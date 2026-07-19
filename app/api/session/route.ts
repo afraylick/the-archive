@@ -6,6 +6,7 @@ import {
   getSessionUser,
   SESSION_COOKIE,
 } from '@/lib/auth';
+import { getArchiveSettings } from '@/lib/archive-settings';
 import { clearFailedLogins, getLoginRateLimitStatus, recordFailedLogin } from '@/lib/login-rate-limit';
 
 const isSecureRequest = (req: NextRequest) => (
@@ -19,6 +20,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     user,
     users: getPublicUsers(),
+    settings: getArchiveSettings(),
   });
 }
 

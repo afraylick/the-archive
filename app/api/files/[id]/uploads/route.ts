@@ -35,7 +35,6 @@ interface AudioFileRecord {
   ratings?: Partial<Record<UserId, number>>;
   ratingUpdatedAt?: Partial<Record<UserId, string>>;
   likedBy?: string[];
-  bobs?: boolean;
   notes?: string;
   comments?: AudioComment[];
 }
@@ -137,7 +136,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
       : [];
     const project = data.find(item => item.id === projectId && !item.projectId);
-    if (!project || (user.id === 'bobs' && !project.bobs)) {
+    if (!project) {
       return NextResponse.json({ error: 'Song project not found' }, { status: 404 });
     }
 
@@ -186,7 +185,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       myRating: 0,
       userRating: 0,
       likedBy: [],
-      bobs: Boolean(project.bobs),
       notes: typeof notesValue === 'string' ? notesValue.slice(0, MAX_NOTES_LENGTH) : '',
       comments: [],
       waveformPeaks: generatedWaveform?.waveformPeaks,

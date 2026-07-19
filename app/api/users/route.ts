@@ -6,6 +6,7 @@ import {
   getSessionUser,
   getUserById,
   isPasscodeInUse,
+  renameUser,
   setUserPasscode,
   type UserId,
 } from '@/lib/auth';
@@ -82,19 +83,30 @@ export async function PATCH(req: NextRequest) {
   }
 
   try {
-    const { userId, passcode } = await req.json() as { userId?: UserId; passcode?: string };
-    if (!userId || !getUserById(userId) || !passcode?.trim()) {
-      return NextResponse.json({ error: 'User and password are required' }, { status: 400 });
+    const { userId, passcode, name } = await req.json() as { userId?: UserId; passcode?: string; name?: string };
+    if (!userId || !getUserById(userId)) {
+      return NextResponse.json({ error: 'User is required' }, { status: 400 });
     }
-    if (isPasscodeInUse(passcode.trim(), userId)) {
-      return NextResponse.json({ error: 'Password is already in use' }, { status: 409 });
+    if (passcode?.trim() && name?.trim()) {
+      return NextResponse.json({ error: 'Update the user name and password separately' }, { status: 400 });
+    }
+    if (name?.trim()) {
+      const renamedUser = renameUser(userId, name);
+      return NextResponse.json({ message: 'User name updated', user: renamedUser });
+    }
+    if (passcode?.trim()) {
+      if (isPasscodeInUse(passcode.trim(), userId)) {
+        return NextResponse.json({ error: 'Password is already in use' }, { status: 409 });
+      }
+
+      setUserPasscode(userId, passcode.trim());
+      return NextResponse.json({ message: 'Password updated' });
     }
 
-    setUserPasscode(userId, passcode.trim());
-    return NextResponse.json({ message: 'Password updated' });
+    return NextResponse.json({ error: 'A new user name or password is required' }, { status: 400 });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Password update failed' },
+      { error: error instanceof Error ? error.message : 'User update failed' },
       { status: 400 }
     );
   }

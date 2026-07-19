@@ -105,8 +105,6 @@ interface PlayerRegistryEntry {
   wavesurfer: WaveSurfer;
 }
 
-const DEFAULT_INSTRUMENTS = ['E. Guitar', 'Keys', 'Vocal', 'Synth', 'Acoustic', 'Bass', 'Drums', 'Drum Machine', 'Uku'];
-const DEFAULT_VIBES = ['ambient', 'rock', 'indie', 'acoustic', 'hard', 'soft', 'country', 'electronic', 'Chill', 'Gainy', 'Spacey', 'Beats', 'Group Jam'];
 const FINISH_OPTIONS = ['Tracked', 'Recorder', 'Voice Memo'];
 const INITIAL_RENDER_LIMIT = 30;
 const RENDER_BATCH_SIZE = 30;
@@ -1274,13 +1272,16 @@ const AudioCard = memo(function AudioCard({
   const collections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
   const uploads = Array.isArray(project.uploads) ? project.uploads : [];
   const selectedUploadDate = formatShortDate(file.uploadedAt);
+  const adminName = accountUsers.find(user => user.id === 'adam')?.name || 'Admin';
+  const accountNamesById = new Map(accountUsers.map(user => [user.id, user.name]));
   const selectedVersionMetadata = file.projectId
-    ? `Uploaded by ${file.uploadedByName || file.uploadedBy || 'Unknown'}${selectedUploadDate ? ` on ${selectedUploadDate}` : ''}`
+    ? `Uploaded by ${(file.uploadedBy ? accountNamesById.get(file.uploadedBy) : '') || file.uploadedByName || file.uploadedBy || 'Unknown'}${selectedUploadDate ? ` on ${selectedUploadDate}` : ''}`
     : '';
   const adamRating = file.ratings?.adam || file.myRating || 0;
   const displayedAdamRating = hoveredAdamRating || adamRating;
   const currentUserRating = file.ratings?.[currentUser.id] || file.userRating || 0;
   const displayedUserRating = hoveredUserRating || currentUserRating;
+  const getCommentDisplayName = (comment: AudioComment) => accountNamesById.get(comment.userId) || comment.userName;
   const otherUserRatings = currentUser.isAdmin
     ? accountUsers
         .filter(user => user.id !== 'adam')
@@ -1472,7 +1473,7 @@ const AudioCard = memo(function AudioCard({
                           >
                             <span className="min-w-0">
                               <span className="block truncate text-sm font-medium text-foreground">{upload.originalName || 'Uploaded version'}</span>
-                              <span className="block truncate text-xs text-muted-foreground">Uploaded by {upload.uploadedByName || upload.uploadedBy || 'Unknown'}</span>
+                              <span className="block truncate text-xs text-muted-foreground">Uploaded by {(upload.uploadedBy ? accountNamesById.get(upload.uploadedBy) : '') || upload.uploadedByName || upload.uploadedBy || 'Unknown'}</span>
                             </span>
                             <span className="shrink-0 text-[11px] text-muted-foreground/70">{uploadDate}</span>
                           </button>
@@ -1603,8 +1604,8 @@ const AudioCard = memo(function AudioCard({
                     }}
                     className="group pointer-events-auto absolute bottom-2 flex h-[88%] w-7 -translate-x-1/2 items-end justify-center rounded-sm transition hover:bg-accent/10 sm:w-5"
                     style={{ left: `${Math.min(100, Math.max(0, ((comment.timestamp || 0) / markerDuration) * 100))}%` }}
-                    title={`${comment.userName}: ${comment.text}`}
-                    aria-label={`Open comment from ${comment.userName}`}
+                    title={`${getCommentDisplayName(comment)}: ${comment.text}`}
+                    aria-label={`Open comment from ${getCommentDisplayName(comment)}`}
                   >
                     <span className="absolute bottom-0 top-2 w-px rounded-full bg-accent/45" />
                     <span className="relative h-3.5 w-3.5 rounded-full border border-background/80 bg-accent/80 shadow-sm transition group-hover:bg-accent" />
@@ -1857,7 +1858,7 @@ const AudioCard = memo(function AudioCard({
           )}
 
           <div className="mt-3 grid grid-cols-[4.75rem_auto] items-center gap-x-3 gap-y-1 rounded border border-border/35 bg-background/45 p-2 md:hidden">
-            <span className="text-xs font-light text-muted-foreground">Adam&apos;s</span>
+            <span className="text-xs font-light text-muted-foreground">{adminName}&apos;s</span>
             <div className="flex items-center">
               {[1, 2, 3, 4, 5].map((star) => (
                 currentUser.isAdmin ? (
@@ -1868,8 +1869,8 @@ const AudioCard = memo(function AudioCard({
                     onMouseEnter={() => setHoveredAdamRating(star)}
                     onMouseLeave={() => setHoveredAdamRating(0)}
                     className={`inline-flex h-8 w-7 items-center justify-center ${star <= displayedAdamRating ? adamRatingColorClass : emptyRatingColorClass}`}
-                    aria-label={`Set Adam's rating to ${star} stars`}
-                    title={`Set Adam's rating to ${star}`}
+                    aria-label={`Set ${adminName}'s rating to ${star} stars`}
+                    title={`Set ${adminName}'s rating to ${star}`}
                   >
                     <StarIcon filled={star <= displayedAdamRating} />
                   </button>
@@ -1922,7 +1923,7 @@ const AudioCard = memo(function AudioCard({
         </div>
 
         <div className="pointer-events-auto absolute right-4 top-3 z-40 hidden max-w-[11.5rem] rounded bg-[#0b0f14]/30 px-2 py-1.5 shadow-[0_0_12px_rgba(11,15,20,0.28)] backdrop-blur-[1px] md:grid md:grid-cols-[3.7rem_auto] md:items-center md:gap-x-2 md:gap-y-1">
-          <span className="text-xs font-light text-muted-foreground">Adam&apos;s</span>
+          <span className="text-xs font-light text-muted-foreground">{adminName}&apos;s</span>
           <div className="flex items-center">
             {[1, 2, 3, 4, 5].map((star) => (
               currentUser.isAdmin ? (
@@ -1933,8 +1934,8 @@ const AudioCard = memo(function AudioCard({
                   onMouseEnter={() => setHoveredAdamRating(star)}
                   onMouseLeave={() => setHoveredAdamRating(0)}
                   className={`inline-flex h-6 w-5 items-center justify-center ${star <= displayedAdamRating ? adamRatingColorClass : emptyRatingColorClass}`}
-                  aria-label={`Set Adam's rating to ${star} stars`}
-                  title={`Set Adam's rating to ${star}`}
+                  aria-label={`Set ${adminName}'s rating to ${star} stars`}
+                  title={`Set ${adminName}'s rating to ${star}`}
                 >
                   <StarIcon filled={star <= displayedAdamRating} />
                 </button>
@@ -2018,7 +2019,7 @@ const AudioCard = memo(function AudioCard({
                     }`}
                   >
                     <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                      <span className="font-medium text-foreground" title={formatCommentDate(comment.createdAt)}>{comment.userName}</span>
+                      <span className="font-medium text-foreground" title={formatCommentDate(comment.createdAt)}>{getCommentDisplayName(comment)}</span>
                       {typeof comment.timestamp === 'number' && (
                         <button
                           type="button"
@@ -2236,8 +2237,8 @@ export default function Home() {
     years: true,
     adamsRatings: true,
   });
-  const [instrumentOptions, setInstrumentOptions] = useState<string[]>(DEFAULT_INSTRUMENTS);
-  const [vibeOptions, setVibeOptions] = useState<string[]>(DEFAULT_VIBES);
+  const [instrumentOptions, setInstrumentOptions] = useState<string[]>([]);
+  const [vibeOptions, setVibeOptions] = useState<string[]>([]);
   const [newInstrument, setNewInstrument] = useState('');
   const [newVibe, setNewVibe] = useState('');
   const [sortBy, setSortBy] = useState<SortBy>('adamsRatingRandom');
@@ -2263,13 +2264,16 @@ export default function Home() {
   const playerRegistryRef = useRef<Map<string, PlayerRegistryEntry>>(new Map());
   const renderedFilesRef = useRef<AudioFile[]>([]);
   const pendingPlaybackTrackIdRef = useRef<string | null>(null);
+  const adminName = accountUsers.find(user => user.id === 'adam')?.name || 'Admin';
 
   useEffect(() => {
     fetch('/api/session')
       .then(res => res.json())
-      .then((data: { user: ArchiveUser | null; users: ArchiveUser[] }) => {
+      .then((data: { user: ArchiveUser | null; users: ArchiveUser[]; settings?: { defaultInstruments?: string[]; defaultVibes?: string[] } }) => {
         setCurrentUser(data.user);
         setAccountUsers(data.users);
+        setInstrumentOptions(prev => Array.from(new Set([...prev, ...(data.settings?.defaultInstruments || [])])));
+        setVibeOptions(prev => Array.from(new Set([...prev, ...(data.settings?.defaultVibes || [])])));
       });
 
     fetch('/api/files')
@@ -2573,7 +2577,7 @@ export default function Home() {
             id: `comment-${file.id}-${comment.id}`,
             type: 'comment' as const,
             file,
-            userName: comment.userName || userNameById.get(comment.userId) || comment.userId,
+            userName: userNameById.get(comment.userId) || comment.userName || comment.userId,
             text: comment.timestamp !== undefined
               ? `commented at @${formatDuration(comment.timestamp)}: ${comment.text}`
               : `commented: ${comment.text}`,
@@ -3454,7 +3458,7 @@ export default function Home() {
             >
               <SidebarIcon name="rating" />
               <span className="min-w-0 flex-1">
-                <span className="block">Adam&apos;s Rating</span>
+                <span className="block">{adminName}&apos;s Rating</span>
                 {collapsedFilters.adamsRatings && (selectedAdamRatings.length > 0 || excludedAdamRatings.length > 0) && (
                   <span className={collapsedSummaryClass}>{ratingFilterSummary(selectedAdamRatings, excludedAdamRatings)}</span>
                 )}
@@ -3815,7 +3819,7 @@ export default function Home() {
                 <option value="name">Name</option>
                 <option value="date">Date</option>
                 <option value="uploadDate">Date Added</option>
-                <option value="adamsRating">Adam&apos;s Rating</option>
+                <option value="adamsRating">{adminName}&apos;s Rating</option>
                 <option value="userRating">User Rating</option>
               </select>
               <button

@@ -29,7 +29,6 @@ interface AudioFile {
   ratings?: Record<string, number>;
   likedBy?: string[];
   stems?: StemAttachment;
-  bobs?: boolean;
   myRating: number;
   userRating: number;
   notes?: string;
@@ -372,6 +371,8 @@ export default function ManagePage() {
   const [collectionStatus, setCollectionStatus] = useState('');
   const [collectionBusy, setCollectionBusy] = useState(false);
   const activeWaveSurferRef = useRef<WaveSurfer | null>(null);
+  const adminName = accountUsers.find(user => user.id === 'adam')?.name || 'Admin';
+  const accountNamesById = new Map(accountUsers.map(user => [user.id, user.name]));
 
   const fetchFiles = useCallback(() => {
     fetch('/api/files')
@@ -606,14 +607,6 @@ export default function ManagePage() {
     }
   };
 
-  const toggleBobs = async (file: AudioFile) => {
-    try {
-      await saveFile({ ...file, bobs: !file.bobs }, 'Failed to update Bobs tag');
-    } catch {
-      alert('Failed to update Bobs tag');
-    }
-  };
-
   const uploadStems = async (file: AudioFile, zipFile: File | null) => {
     if (!zipFile) return;
     if (!zipFile.name.toLowerCase().endsWith('.zip')) {
@@ -748,7 +741,6 @@ export default function ManagePage() {
       ...userIds.map(userId => `rating:${userNamesById.get(userId) || userId}`),
       'comments',
       'collections',
-      'bobs',
       'hasStems',
       'stemsName',
       'instruments',
@@ -765,7 +757,7 @@ export default function ManagePage() {
 
     const rows = getAllManagedFiles(files).map(file => {
       const comments = (file.comments || []).map(comment => {
-        const userName = comment.userName || (comment.userId ? userNamesById.get(comment.userId) : '') || comment.userId || 'Unknown';
+        const userName = (comment.userId ? userNamesById.get(comment.userId) : '') || comment.userName || comment.userId || 'Unknown';
         const timecode = typeof comment.timestamp === 'number' ? ` @${comment.timestamp.toFixed(2)}s` : '';
         const createdAt = comment.createdAt ? ` (${formatCsvDate(comment.createdAt)})` : '';
         return `${userName}${timecode}${createdAt}: ${comment.text}`;
@@ -779,7 +771,6 @@ export default function ManagePage() {
         ...userIds.map(userId => file.ratings?.[userId] || ''),
         comments,
         (file.collections || []).join('; '),
-        file.bobs ? 'yes' : 'no',
         file.stems ? 'yes' : 'no',
         file.stems?.name || '',
         getTags(file, 'instruments', 'instrument').map(displayTag).join('; '),
@@ -1021,7 +1012,7 @@ export default function ManagePage() {
                         <option value={file.id}>Original recording</option>
                         {(file.uploads || []).map(variation => (
                           <option key={variation.id} value={variation.id}>
-                            {variation.originalName || 'Uploaded variation'} · {variation.uploadedByName || variation.uploadedBy || 'Unknown'}
+                            {variation.originalName || 'Uploaded variation'} · {(variation.uploadedBy ? accountNamesById.get(variation.uploadedBy) : '') || variation.uploadedByName || variation.uploadedBy || 'Unknown'}
                           </option>
                         ))}
                       </select>
@@ -1062,20 +1053,6 @@ export default function ManagePage() {
                       className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
                     />
                   </label>
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <span>Bobs:</span>
-                    <button
-                      type="button"
-                      onClick={() => toggleBobs(file)}
-                      className={`rounded px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
-                        file.bobs
-                          ? 'bg-accent text-accent-foreground'
-                          : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                      }`}
-                    >
-                      {file.bobs ? 'On' : 'Off'}
-                    </button>
-                  </div>
                   {(file.colorTags || []).length > 0 && (
                     <div className="flex items-center gap-2 text-muted-foreground">
                       <span>Finder Tags:</span>
@@ -1098,7 +1075,7 @@ export default function ManagePage() {
                     Stems: {file.stems ? file.stems.name : 'None'}
                   </p>
                   <div className="flex items-center gap-2 text-muted-foreground">
-                    <span>Adam&apos;s Rating:</span>
+                    <span>{adminName}&apos;s Rating:</span>
                     <RatingInput value={file.ratings?.adam || file.myRating} onChange={(rating) => updateRating(file.id, 'adam', rating)} />
                   </div>
                   <div className="mt-1 grid gap-1 text-muted-foreground sm:grid-cols-2">
@@ -1195,7 +1172,7 @@ export default function ManagePage() {
                             <div className="mb-3 flex flex-wrap items-baseline gap-x-2 gap-y-1">
                               <h4 className="break-words font-semibold text-foreground">{variation.originalName || 'Uploaded variation'}</h4>
                               <span className="text-xs text-muted-foreground">
-                                Uploaded by {variation.uploadedByName || variation.uploadedBy || 'Unknown'}{formatShortDate(variation.uploadedAt) ? ` on ${formatShortDate(variation.uploadedAt)}` : ''}
+                                Uploaded by {(variation.uploadedBy ? accountNamesById.get(variation.uploadedBy) : '') || variation.uploadedByName || variation.uploadedBy || 'Unknown'}{formatShortDate(variation.uploadedAt) ? ` on ${formatShortDate(variation.uploadedAt)}` : ''}
                               </span>
                             </div>
                             <div className="grid gap-3 sm:grid-cols-2">
@@ -1293,7 +1270,7 @@ export default function ManagePage() {
                             <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm text-muted-foreground">
                               <span>Waveform: {hasCachedWaveform(variation) ? 'Cached' : 'Not cached'}</span>
                               <span className="flex items-center gap-2">
-                                Adam&apos;s Rating:
+                                {adminName}&apos;s Rating:
                                 <RatingInput value={variation.ratings?.adam || variation.myRating} onChange={(rating) => updateRating(variation.id, 'adam', rating)} />
                               </span>
                             </div>

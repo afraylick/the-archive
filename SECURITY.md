@@ -8,22 +8,12 @@ Do not copy a development `data` directory over the production storage directory
 - `ARCHIVE_AUTH_SECRET`: long random secret used to sign sessions and password hashes. Set this before starting the app in production.
 - `ARCHIVE_STORAGE_DIR`: absolute path to the production storage directory that contains `data.json`, `uploads`, `stems`, `users.json`, and `accounts.json`.
 
+New archives initially accept the password `admin` for the Admin account. Change it immediately from the Manage Users page. User passwords created or changed in production must be at least eight characters.
+
 Generate a secret with:
 
 ```bash
 openssl rand -base64 48
-```
-
-## Optional production environment
-
-- `ARCHIVE_IMPORT_ROOTS`: path-delimited allowlist of server folders that Adam can use with the folder import feature.
-  - On Linux, separate paths with `:`.
-  - If unset in production, folder import and folder preview are blocked.
-
-Example:
-
-```bash
-ARCHIVE_IMPORT_ROOTS=/mnt/music/imports:/mnt/archive/dropbox
 ```
 
 ## Before pulling new code on the server
