@@ -2208,9 +2208,10 @@ export default function Home() {
   const [files, setFiles] = useState<AudioFile[]>([]);
   const [currentUser, setCurrentUser] = useState<ArchiveUser | null>(null);
   const [accountUsers, setAccountUsers] = useState<ArchiveUser[]>([]);
+  const [archiveName, setArchiveName] = useState('the archive');
   const [selectedInstruments, setSelectedInstruments] = useState<string[]>([]);
   const [selectedVibes, setSelectedVibes] = useState<string[]>([]);
-  const [selectedFinishes, setSelectedFinishes] = useState<string[]>(['Tracked', 'Recorder']);
+  const [selectedFinishes, setSelectedFinishes] = useState<string[]>([]);
   const [selectedCollections, setSelectedCollections] = useState<string[]>([]);
   const [selectedInteractionUsers, setSelectedInteractionUsers] = useState<string[]>([]);
   const [selectedYears, setSelectedYears] = useState<number[]>([]);
@@ -2269,9 +2270,11 @@ export default function Home() {
   useEffect(() => {
     fetch('/api/session')
       .then(res => res.json())
-      .then((data: { user: ArchiveUser | null; users: ArchiveUser[]; settings?: { defaultInstruments?: string[]; defaultVibes?: string[] } }) => {
+      .then((data: { user: ArchiveUser | null; users: ArchiveUser[]; settings?: { archiveName?: string; defaultInstruments?: string[]; defaultVibes?: string[]; legacyDefaults?: boolean } }) => {
         setCurrentUser(data.user);
         setAccountUsers(data.users);
+        setArchiveName(data.settings?.archiveName || 'the archive');
+        setSelectedFinishes(data.settings?.legacyDefaults ? ['Tracked', 'Recorder'] : []);
         setInstrumentOptions(prev => Array.from(new Set([...prev, ...(data.settings?.defaultInstruments || [])])));
         setVibeOptions(prev => Array.from(new Set([...prev, ...(data.settings?.defaultVibes || [])])));
       });
@@ -2944,7 +2947,7 @@ export default function Home() {
     if (typeof MediaMetadata !== 'undefined') {
       navigator.mediaSession.metadata = new MediaMetadata({
         title: activeTrack.name,
-        artist: 'the archive',
+        artist: archiveName,
         album: [
           ...getTags(activeTrack, 'instruments', 'instrument'),
           ...getTags(activeTrack, 'vibes', 'vibe'),
@@ -2978,7 +2981,7 @@ export default function Home() {
       if (!wavesurfer || details.seekTime === undefined) return;
       wavesurfer.setTime(details.seekTime);
     });
-  }, [activeTrack, isPlaying, playRelativeTrack]);
+  }, [activeTrack, archiveName, isPlaying, playRelativeTrack]);
 
   const updateMiniVolume = useCallback((value: number) => {
     const nextVolume = Math.min(1, Math.max(0, value));
@@ -3211,6 +3214,9 @@ export default function Home() {
     next: 'Continue to next song',
     repeat: 'Repeat song',
   }[endMode];
+  const archiveNameParts = archiveName.trim().split(/\s+/);
+  const archiveNameAccent = archiveNameParts.pop() || 'archive';
+  const archiveNameLead = archiveNameParts.join(' ');
 
   return (
     <div className="archive-shell min-h-screen text-foreground">
@@ -3222,8 +3228,8 @@ export default function Home() {
             <path d="M4 22h112" fill="none" stroke="rgba(255,255,255,0.8)" strokeLinecap="round" strokeWidth="2" />
           </svg>
           <div className="text-2xl font-light tracking-normal">
-            <span className="text-foreground">the </span>
-            <span className="text-accent">archive</span>
+            {archiveNameLead && <span className="text-foreground">{archiveNameLead} </span>}
+            <span className="text-accent">{archiveNameAccent}</span>
           </div>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-end">

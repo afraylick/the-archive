@@ -9,6 +9,7 @@ const CLEAN_INSTRUMENTS = ['Guitar', 'Vocals', 'Bass', 'Drums', 'Synth'];
 export interface ArchiveSettings {
   version: 1;
   legacyDefaults: boolean;
+  archiveName: string;
   defaultInstruments: string[];
   defaultVibes: string[];
 }
@@ -24,6 +25,7 @@ const createInitialSettings = (): ArchiveSettings => {
   return {
     version: 1,
     legacyDefaults,
+    archiveName: legacyDefaults ? "Adam's Archive" : 'the archive',
     defaultInstruments: legacyDefaults ? LEGACY_INSTRUMENTS : CLEAN_INSTRUMENTS,
     defaultVibes: legacyDefaults ? LEGACY_VIBES : [],
   };
@@ -35,9 +37,11 @@ export const getArchiveSettings = (): ArchiveSettings => {
   try {
     if (fs.existsSync(settingsFile)) {
       const stored = JSON.parse(fs.readFileSync(settingsFile, 'utf8')) as Partial<ArchiveSettings>;
+      const legacyDefaults = Boolean(stored.legacyDefaults);
       return {
         version: 1,
-        legacyDefaults: Boolean(stored.legacyDefaults),
+        legacyDefaults,
+        archiveName: stored.archiveName?.trim() || (legacyDefaults ? "Adam's Archive" : 'the archive'),
         defaultInstruments: cleanStringArray(stored.defaultInstruments),
         defaultVibes: cleanStringArray(stored.defaultVibes),
       };

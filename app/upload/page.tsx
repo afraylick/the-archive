@@ -754,7 +754,7 @@ export default function UploadPage() {
               role="switch"
               aria-checked={useFinderColorRating}
               onClick={() => setUseFinderColorRating(enabled => !enabled)}
-              className={`rounded border px-4 py-3 text-sm transition sm:py-2 ${
+              className={`rounded border px-3 py-2 text-xs transition ${
                 useFinderColorRating
                   ? 'border-accent bg-accent text-accent-foreground'
                   : 'border-border bg-background text-muted-foreground hover:border-accent hover:text-foreground'
@@ -770,7 +770,7 @@ export default function UploadPage() {
             )}
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            Color tags are always imported. Rating rules are only applied when the toggle is on before choosing or dropping the JSON.
+            Color tags are always imported. With rating logic on: Yellow = 2, Green = 3, Blue = 5, Yellow + Green = 2, Blue + Green = 4, and 4+ colors = 5. Other matches keep the fallback rating.
           </p>
         </div>
         <div className="mb-4 rounded border border-border bg-muted p-4">
