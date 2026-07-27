@@ -8,6 +8,9 @@ interface AudioFileRecord {
   id: string;
   projectId?: string;
   defaultVersionId?: string;
+  variationType?: 'linked';
+  linkedAt?: string;
+  linkedBy?: string;
   uploads?: unknown;
   name?: string;
   originalName?: string;

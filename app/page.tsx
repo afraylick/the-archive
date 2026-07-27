@@ -9,6 +9,9 @@ interface AudioFile {
   id: string;
   projectId?: string;
   defaultVersionId?: string;
+  variationType?: 'linked';
+  linkedAt?: string;
+  linkedBy?: string;
   uploadedBy?: string;
   uploadedByName?: string;
   interactionUserIds?: string[];
@@ -75,6 +78,7 @@ interface AudioCardProps {
   instrumentOptions: string[];
   vibeOptions: string[];
   collectionOptions: string[];
+  linkableSongs: AudioFile[];
   shouldPreloadPlayback: boolean;
   onReady: (file: AudioFile, cardElement: HTMLDivElement, wavesurfer: WaveSurfer) => void;
   onPlay: (file: AudioFile, cardElement: HTMLDivElement, wavesurfer: WaveSurfer) => void;
@@ -92,6 +96,18 @@ interface ActivityEntry {
   rating?: number;
   createdAt?: string;
   sortTime: number;
+}
+
+interface InboxMessage {
+  id: string;
+  recipientUserId: string;
+  songId: string;
+  songName: string;
+  note: string;
+  senderUserId: string;
+  senderName: string;
+  sentAt: string;
+  readAt?: string;
 }
 
 type EndMode = 'repeat' | 'next' | 'stop';
@@ -187,6 +203,12 @@ const isCommonVersionAudioFile = (file: File) => {
 };
 const getAdamRating = (file: AudioFile) => file.ratings?.adam || file.myRating || 0;
 const getProjectId = (file: AudioFile) => file.projectId || file.id;
+const findProjectForFileId = (projects: AudioFile[], fileId: string) => (
+  projects.find(project => (
+    project.id === fileId
+    || project.uploads?.some(upload => upload.id === fileId)
+  ))
+);
 
 const getInteractionUserIds = (project: AudioFile) => {
   const userIds = new Set<string>(Array.isArray(project.interactionUserIds) ? project.interactionUserIds : []);
@@ -513,6 +535,7 @@ const AudioCard = memo(function AudioCard({
   instrumentOptions,
   vibeOptions,
   collectionOptions,
+  linkableSongs,
   shouldPreloadPlayback,
   onReady,
   onPlay,
@@ -539,6 +562,16 @@ const AudioCard = memo(function AudioCard({
   const [showComments, setShowComments] = useState(false);
   const [showCollections, setShowCollections] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
+  const [showLinkSearch, setShowLinkSearch] = useState(false);
+  const [linkSearchQuery, setLinkSearchQuery] = useState('');
+  const [linkError, setLinkError] = useState('');
+  const [isLinkingSong, setIsLinkingSong] = useState(false);
+  const [showSendPanel, setShowSendPanel] = useState(false);
+  const [selectedRecipientId, setSelectedRecipientId] = useState('');
+  const [sendNote, setSendNote] = useState('');
+  const [sendError, setSendError] = useState('');
+  const [sendSuccess, setSendSuccess] = useState('');
+  const [isSendingSong, setIsSendingSong] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadNotes, setUploadNotes] = useState('');
   const [isUploading, setIsUploading] = useState(false);
@@ -571,6 +604,15 @@ const AudioCard = memo(function AudioCard({
   useEffect(() => {
     latestFileRef.current = file;
   }, [file]);
+
+  useEffect(() => {
+    if (showLinkSearch) {
+      const desktopInput = document.getElementById(`link-song-desktop-${project.id}`) as HTMLInputElement | null;
+      const mobileInput = document.getElementById(`link-song-mobile-${project.id}`) as HTMLInputElement | null;
+      const visibleInput = desktopInput?.offsetParent ? desktopInput : mobileInput;
+      visibleInput?.focus();
+    }
+  }, [project.id, showLinkSearch]);
 
   useEffect(() => {
     durationRef.current = duration;
@@ -1163,6 +1205,88 @@ const AudioCard = memo(function AudioCard({
     }
   };
 
+  const linkSearchResults = useMemo(() => {
+    const query = linkSearchQuery.trim().toLowerCase();
+    if (!query) return [];
+
+    return linkableSongs
+      .filter(song => song.id !== project.id)
+      .filter(song => (
+        song.name.toLowerCase().includes(query)
+        || song.originalName?.toLowerCase().includes(query)
+      ))
+      .sort(compareByName)
+      .slice(0, 8);
+  }, [linkSearchQuery, linkableSongs, project.id]);
+
+  const recipientUsers = useMemo(() => (
+    accountUsers
+      .filter(user => !user.isAdmin)
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+  ), [accountUsers]);
+
+  const linkSongToProject = async (targetProject: AudioFile) => {
+    if (isLinkingSong) return;
+
+    setIsLinkingSong(true);
+    setLinkError('');
+    try {
+      const res = await fetch(`/api/files/${encodeURIComponent(project.id)}/link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetProjectId: targetProject.id }),
+      });
+      const data = await res.json() as { error?: string };
+      if (!res.ok) {
+        setLinkError(data.error || 'Failed to link song');
+        return;
+      }
+
+      const filesRes = await fetch('/api/files');
+      if (!filesRes.ok) throw new Error('Failed to reload songs');
+      setFiles(await filesRes.json() as AudioFile[]);
+      setShowLinkSearch(false);
+      setLinkSearchQuery('');
+    } catch {
+      setLinkError('Failed to link song. Please try again.');
+    } finally {
+      setIsLinkingSong(false);
+    }
+  };
+
+  const sendSongToInbox = async () => {
+    if (!selectedRecipientId || isSendingSong) return;
+
+    setIsSendingSong(true);
+    setSendError('');
+    setSendSuccess('');
+    try {
+      const res = await fetch('/api/inbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipientUserId: selectedRecipientId,
+          songId: project.id,
+          note: sendNote,
+        }),
+      });
+      const data = await res.json() as { error?: string };
+      if (!res.ok) {
+        setSendError(data.error || 'Failed to send song');
+        return;
+      }
+
+      const recipientName = recipientUsers.find(user => user.id === selectedRecipientId)?.name || 'user';
+      setSendSuccess(`Sent to ${recipientName}`);
+      setSelectedRecipientId('');
+      setSendNote('');
+    } catch {
+      setSendError('Failed to send song. Please try again.');
+    } finally {
+      setIsSendingSong(false);
+    }
+  };
+
   const ensureGainNode = async () => {
     if (gainNodeRef.current) return gainNodeRef.current;
     if (!wavesurferRef.current) return null;
@@ -1272,10 +1396,13 @@ const AudioCard = memo(function AudioCard({
   const collections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
   const uploads = Array.isArray(project.uploads) ? project.uploads : [];
   const selectedUploadDate = formatShortDate(file.uploadedAt);
+  const selectedLinkedDate = formatShortDate(file.linkedAt);
   const adminName = accountUsers.find(user => user.id === 'adam')?.name || 'Admin';
   const accountNamesById = new Map(accountUsers.map(user => [user.id, user.name]));
   const selectedVersionMetadata = file.projectId
-    ? `Uploaded by ${(file.uploadedBy ? accountNamesById.get(file.uploadedBy) : '') || file.uploadedByName || file.uploadedBy || 'Unknown'}${selectedUploadDate ? ` on ${selectedUploadDate}` : ''}`
+    ? file.variationType === 'linked'
+      ? `Linked variation: ${file.name}${selectedLinkedDate ? ` · added ${selectedLinkedDate}` : ''}`
+      : `Uploaded by ${(file.uploadedBy ? accountNamesById.get(file.uploadedBy) : '') || file.uploadedByName || file.uploadedBy || 'Unknown'}${selectedUploadDate ? ` on ${selectedUploadDate}` : ''}`
     : '';
   const adamRating = file.ratings?.adam || file.myRating || 0;
   const displayedAdamRating = hoveredAdamRating || adamRating;
@@ -1312,8 +1439,118 @@ const AudioCard = memo(function AudioCard({
     return closestComment ? closestComment.id : null;
   }, [comments, currentTime]);
 
+  const renderLinkSearchPanel = (
+    responsiveClassName: string,
+    inputId: string,
+  ) => (
+    <div className={`absolute z-[180] w-[min(22rem,calc(100vw-2rem))] rounded-md border border-border/80 bg-[#0d1419]/[0.99] p-2 shadow-2xl shadow-black/55 backdrop-blur ${responsiveClassName}`}>
+      <label className="sr-only" htmlFor={inputId}>Find a song to link to</label>
+      <input
+        id={inputId}
+        type="search"
+        value={linkSearchQuery}
+        onChange={(event) => {
+          setLinkSearchQuery(event.target.value);
+          setLinkError('');
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            setShowLinkSearch(false);
+            setLinkSearchQuery('');
+            setLinkError('');
+          }
+        }}
+        placeholder="Find the main song…"
+        className="w-full rounded border border-border/75 bg-background/85 px-2.5 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground/65 focus:border-accent/55"
+      />
+      {linkSearchQuery.trim() && (
+        <div className="mt-1 max-h-60 overflow-y-auto">
+          {linkSearchResults.length > 0 ? linkSearchResults.map(song => (
+            <button
+              key={song.id}
+              type="button"
+              disabled={isLinkingSong}
+              onClick={() => void linkSongToProject(song)}
+              className="flex w-full items-center justify-between gap-3 rounded px-2.5 py-2 text-left transition hover:bg-muted/45 disabled:opacity-50"
+            >
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium text-foreground">{song.name}</span>
+                <span className="block text-xs text-muted-foreground">
+                  {song.uploads?.length ? `${song.uploads.length + 1} variations` : 'Main song'}
+                </span>
+              </span>
+              <svg className="h-3.5 w-3.5 shrink-0 text-accent/80" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1m3.1 5.8a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20l1.1-1.1" />
+              </svg>
+            </button>
+          )) : (
+            <p className="px-2.5 py-3 text-sm text-muted-foreground">No matching songs</p>
+          )}
+        </div>
+      )}
+      {linkError && <p className="mt-1 px-1 text-xs text-red-300">{linkError}</p>}
+    </div>
+  );
+
+  const renderSendPanel = (responsiveClassName: string) => (
+    <div className={`absolute z-[180] w-[min(22rem,calc(100vw-2rem))] rounded-md border border-border/80 bg-[#0d1419]/[0.99] p-2 shadow-2xl shadow-black/55 backdrop-blur ${responsiveClassName}`}>
+      <p className="px-1 pb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">Send to inbox</p>
+      <div className="max-h-40 space-y-1 overflow-y-auto">
+        {recipientUsers.length > 0 ? recipientUsers.map(user => (
+          <button
+            key={user.id}
+            type="button"
+            onClick={() => {
+              setSelectedRecipientId(user.id);
+              setSendError('');
+              setSendSuccess('');
+            }}
+            className={`flex w-full items-center justify-between rounded border px-2.5 py-2 text-left text-sm transition ${
+              selectedRecipientId === user.id
+                ? 'border-accent/55 bg-accent/10 text-foreground'
+                : 'border-transparent text-muted-foreground hover:bg-muted/45 hover:text-foreground'
+            }`}
+            aria-pressed={selectedRecipientId === user.id}
+          >
+            <span className="truncate">{user.name}</span>
+            <span className={`h-2 w-2 shrink-0 rounded-full ${selectedRecipientId === user.id ? 'bg-accent' : 'bg-border'}`} />
+          </button>
+        )) : (
+          <p className="px-2.5 py-3 text-sm text-muted-foreground">No users available</p>
+        )}
+      </div>
+      <label className="mt-2 block text-xs text-muted-foreground">
+        Note <span className="text-muted-foreground/60">(optional)</span>
+        <textarea
+          value={sendNote}
+          onChange={(event) => {
+            setSendNote(event.target.value.slice(0, 2000));
+            setSendError('');
+            setSendSuccess('');
+          }}
+          rows={3}
+          placeholder="Add a note for this song…"
+          className="mt-1 w-full resize-none rounded border border-border/75 bg-background/85 px-2.5 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground/65 focus:border-accent/55"
+        />
+      </label>
+      <div className="mt-2 flex items-center justify-between gap-3">
+        <span className={`min-w-0 truncate text-xs ${sendError ? 'text-red-300' : 'text-accent'}`}>
+          {sendError || sendSuccess}
+        </span>
+        <button
+          type="button"
+          onClick={() => void sendSongToInbox()}
+          disabled={!selectedRecipientId || isSendingSong}
+          className="shrink-0 rounded bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          {isSendingSong ? 'Sending…' : 'Send'}
+        </button>
+      </div>
+    </div>
+  );
+
   return (
-    <div ref={cardRef} className={`audio-card relative overflow-visible border-b border-border/70 bg-[#10181e]/92 px-3 py-3 scroll-mt-24 transition hover:bg-[#11191f] sm:px-4 md:px-6 ${showVersions ? 'z-[100]' : 'z-0'}`}>
+    <div ref={cardRef} className={`audio-card relative overflow-visible border-b border-border/70 bg-[#10181e]/92 px-3 py-3 scroll-mt-24 transition hover:bg-[#11191f] sm:px-4 md:px-6 ${showVersions || showLinkSearch || showSendPanel ? 'z-[100]' : 'z-0'}`}>
       <div className="grid gap-3 md:grid-cols-[2.75rem_minmax(0,1fr)] md:items-start md:gap-3">
         <div className="relative z-40 order-1 flex items-center justify-between gap-3 md:hidden">
           <span className="truncate text-[11px] font-light text-muted-foreground opacity-75 md:hidden" title={file.projectId ? selectedVersionMetadata : `Recorded ${formatCreatedDate(file)}`}>
@@ -1395,7 +1632,7 @@ const AudioCard = memo(function AudioCard({
                       aria-expanded={showVersions}
                       aria-label={`Choose a version of ${project.name}`}
                     >
-                      <h2 className="min-w-0 truncate text-xl font-semibold leading-8 text-foreground md:text-2xl">
+                      <h2 className="min-w-0 truncate text-xl font-semibold leading-8 text-foreground underline decoration-accent/55 decoration-1 underline-offset-4 md:text-2xl">
                         {project.name}
                       </h2>
                       <svg className={`h-4 w-4 shrink-0 text-muted-foreground/70 transition ${showVersions ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -1461,6 +1698,7 @@ const AudioCard = memo(function AudioCard({
                       </button>
                       {uploads.map(upload => {
                         const uploadDate = formatShortDate(upload.uploadedAt);
+                        const isLinkedVariation = upload.variationType === 'linked';
                         return (
                           <button
                             key={upload.id}
@@ -1472,10 +1710,18 @@ const AudioCard = memo(function AudioCard({
                             className={`flex w-full items-center justify-between gap-3 border-t border-border/45 px-3 py-2 text-left transition hover:bg-muted/45 ${file.id === upload.id ? 'bg-accent/10' : ''}`}
                           >
                             <span className="min-w-0">
-                              <span className="block truncate text-sm font-medium text-foreground">{upload.originalName || 'Uploaded version'}</span>
-                              <span className="block truncate text-xs text-muted-foreground">Uploaded by {(upload.uploadedBy ? accountNamesById.get(upload.uploadedBy) : '') || upload.uploadedByName || upload.uploadedBy || 'Unknown'}</span>
+                              <span className="block truncate text-sm font-medium text-foreground">
+                                {isLinkedVariation ? upload.name : upload.originalName || 'Uploaded version'}
+                              </span>
+                              <span className="block truncate text-xs text-muted-foreground">
+                                {isLinkedVariation
+                                  ? `Linked variation${upload.year ? ` · recorded ${upload.year}` : ''}`
+                                  : `Uploaded by ${(upload.uploadedBy ? accountNamesById.get(upload.uploadedBy) : '') || upload.uploadedByName || upload.uploadedBy || 'Unknown'}`}
+                              </span>
                             </span>
-                            <span className="shrink-0 text-[11px] text-muted-foreground/70">{uploadDate}</span>
+                            <span className={`shrink-0 text-[11px] ${isLinkedVariation ? 'rounded-full bg-accent/10 px-1.5 py-0.5 text-accent/80' : 'text-muted-foreground/70'}`}>
+                              {isLinkedVariation ? 'Linked' : uploadDate}
+                            </span>
                           </button>
                         );
                       })}
@@ -1525,7 +1771,52 @@ const AudioCard = memo(function AudioCard({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v11m0 0 4-4m-4 4-4-4M5 19h14" />
               </svg>
             </a>
+            {currentUser.isAdmin && (
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLinkSearch(prev => !prev);
+                  setShowSendPanel(false);
+                  setLinkSearchQuery('');
+                  setLinkError('');
+                }}
+                className={`inline-flex h-8 w-9 items-center justify-center border-l border-border/70 transition ${showLinkSearch ? 'bg-accent/10 text-accent' : 'text-muted-foreground hover:text-foreground'}`}
+                title={`Link ${project.name} to another song`}
+                aria-label={`Link ${project.name} to another song`}
+                aria-expanded={showLinkSearch}
+              >
+                <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1m3.1 5.8a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20l1.1-1.1" />
+                </svg>
+              </button>
+            )}
+            {currentUser.isAdmin && (
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSendPanel(prev => !prev);
+                  setShowLinkSearch(false);
+                  setSelectedRecipientId('');
+                  setSendNote('');
+                  setSendError('');
+                  setSendSuccess('');
+                }}
+                className={`inline-flex h-8 w-9 items-center justify-center border-l border-border/70 transition ${showSendPanel ? 'bg-accent/10 text-accent' : 'text-muted-foreground hover:text-foreground'}`}
+                title={`Send ${project.name} to a user`}
+                aria-label={`Send ${project.name} to a user`}
+                aria-expanded={showSendPanel}
+              >
+                <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5h16v14H4zM4 7l8 6 8-6" />
+                </svg>
+              </button>
+            )}
           </div>
+          {currentUser.isAdmin && showLinkSearch && renderLinkSearchPanel(
+            'right-52 top-10 hidden md:block',
+            `link-song-desktop-${project.id}`,
+          )}
+          {currentUser.isAdmin && showSendPanel && renderSendPanel('right-52 top-10 hidden md:block')}
 
           <div className="relative mt-1 min-h-40 min-w-0 sm:min-h-36 md:-ml-[3.25rem] md:-mt-5 md:w-[calc(100%+3.25rem)] md:min-h-[118px]">
             <div className="hidden absolute right-0 top-0 z-10 overflow-hidden rounded border border-border/70 bg-[#0f171c]/80 opacity-70 shadow-sm backdrop-blur transition hover:opacity-90">
@@ -1568,7 +1859,52 @@ const AudioCard = memo(function AudioCard({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v11m0 0 4-4m-4 4-4-4M5 19h14" />
                 </svg>
               </a>
+              {currentUser.isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowLinkSearch(prev => !prev);
+                    setShowSendPanel(false);
+                    setLinkSearchQuery('');
+                    setLinkError('');
+                  }}
+                  className={`inline-flex h-8 w-9 items-center justify-center border-l border-border/70 transition ${showLinkSearch ? 'bg-accent/10 text-accent' : 'text-muted-foreground hover:text-foreground'}`}
+                  title={`Link ${project.name} to another song`}
+                  aria-label={`Link ${project.name} to another song`}
+                  aria-expanded={showLinkSearch}
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1m3.1 5.8a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20l1.1-1.1" />
+                  </svg>
+                </button>
+              )}
+              {currentUser.isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSendPanel(prev => !prev);
+                    setShowLinkSearch(false);
+                    setSelectedRecipientId('');
+                    setSendNote('');
+                    setSendError('');
+                    setSendSuccess('');
+                  }}
+                  className={`inline-flex h-8 w-9 items-center justify-center border-l border-border/70 transition ${showSendPanel ? 'bg-accent/10 text-accent' : 'text-muted-foreground hover:text-foreground'}`}
+                  title={`Send ${project.name} to a user`}
+                  aria-label={`Send ${project.name} to a user`}
+                  aria-expanded={showSendPanel}
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5h16v14H4zM4 7l8 6 8-6" />
+                  </svg>
+                </button>
+              )}
             </div>
+            {currentUser.isAdmin && showLinkSearch && renderLinkSearchPanel(
+              'right-0 top-10 md:hidden',
+              `link-song-mobile-${project.id}`,
+            )}
+            {currentUser.isAdmin && showSendPanel && renderSendPanel('right-0 top-10 md:hidden')}
             <div 
               ref={waveformRef} 
               className="min-h-40 w-full cursor-pointer pt-8 sm:min-h-36 md:min-h-[118px] md:pt-2"
@@ -2226,6 +2562,8 @@ export default function Home() {
   const [likedOnly, setLikedOnly] = useState(false);
   const [untaggedOnly, setUntaggedOnly] = useState(false);
   const [showActivity, setShowActivity] = useState(false);
+  const [showInbox, setShowInbox] = useState(true);
+  const [inboxMessages, setInboxMessages] = useState<InboxMessage[]>([]);
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchNotes, setSearchNotes] = useState(false);
@@ -2287,6 +2625,25 @@ export default function Home() {
         setInstrumentOptions(prev => Array.from(new Set([...prev, ...normalizedFiles.flatMap(file => getTags(file, 'instruments', 'instrument'))])));
         setVibeOptions(prev => Array.from(new Set([...prev, ...normalizedFiles.flatMap(file => getTags(file, 'vibes', 'vibe'))])));
       });
+
+  }, []);
+
+  useEffect(() => {
+    const loadInbox = () => {
+      fetch('/api/inbox')
+        .then(res => res.ok ? res.json() : { inbox: [] })
+        .then((data: { inbox?: InboxMessage[] }) => {
+          setInboxMessages(Array.isArray(data.inbox) ? data.inbox : []);
+        });
+    };
+
+    loadInbox();
+    window.addEventListener('focus', loadInbox);
+    const intervalId = window.setInterval(loadInbox, 60000);
+    return () => {
+      window.removeEventListener('focus', loadInbox);
+      window.clearInterval(intervalId);
+    };
   }, []);
 
   const logout = async () => {
@@ -2516,13 +2873,30 @@ export default function Home() {
   const visibleFileIds = useMemo(() => new Set(filteredFiles.map(file => file.id)), [filteredFiles]);
 
   const renderedFiles = useMemo(() => {
-    if (!activeTrack || visibleFileIds.has(getProjectId(activeTrack))) {
-      return filteredFiles;
+    const additionalFiles: AudioFile[] = [];
+    const additionalIds = new Set<string>();
+    const addFile = (file: AudioFile | undefined) => {
+      if (!file || visibleFileIds.has(file.id) || additionalIds.has(file.id)) return;
+      additionalIds.add(file.id);
+      additionalFiles.push(file);
+    };
+
+    if (activeTrack) {
+      addFile(files.find(file => file.id === getProjectId(activeTrack)) || activeTrack);
+    }
+    if (targetTrackId) {
+      addFile(files.find(file => file.id === targetTrackId));
     }
 
-    const activeFile = files.find(file => file.id === getProjectId(activeTrack)) || activeTrack;
-    return [...filteredFiles, activeFile].sort(compareFiles);
-  }, [activeTrack, compareFiles, files, filteredFiles, visibleFileIds]);
+    return additionalFiles.length > 0
+      ? [...filteredFiles, ...additionalFiles].sort(compareFiles)
+      : filteredFiles;
+  }, [activeTrack, compareFiles, files, filteredFiles, targetTrackId, visibleFileIds]);
+
+  const unreadInboxCount = useMemo(
+    () => inboxMessages.filter(message => !message.readAt).length,
+    [inboxMessages]
+  );
 
   const targetTrackIndex = targetTrackId ? renderedFiles.findIndex(file => file.id === targetTrackId) : -1;
   const effectiveRenderLimit = targetTrackIndex >= renderLimit
@@ -3051,6 +3425,32 @@ export default function Home() {
     setActivityTargetTrackId(file.id);
     setRenderWindow(prev => ({ ...prev, key: '', limit: INITIAL_RENDER_LIMIT }));
   }, []);
+
+  const markInboxMessageRead = useCallback(async (message: InboxMessage) => {
+    if (message.readAt) return;
+
+    const readAt = new Date().toISOString();
+    setInboxMessages(prev => prev.map(existing => (
+      existing.id === message.id ? { ...existing, readAt } : existing
+    )));
+
+    const res = await fetch(`/api/inbox/${encodeURIComponent(message.id)}`, {
+      method: 'PUT',
+    });
+    if (!res.ok) {
+      setInboxMessages(prev => prev.map(existing => (
+        existing.id === message.id ? { ...existing, readAt: undefined } : existing
+      )));
+    }
+  }, []);
+
+  const showInboxTrack = useCallback((message: InboxMessage) => {
+    void markInboxMessageRead(message);
+    const song = findProjectForFileId(files, message.songId);
+    if (song) {
+      showActivityTrack(song);
+    }
+  }, [files, markInboxMessageRead, showActivityTrack]);
 
   const randomIncludeVoiceMemos = (
     !excludedFinishes.includes('Voice Memo')
@@ -3722,6 +4122,83 @@ export default function Home() {
           </div>
         </div>
         <div className="flex-1 md:pl-4">
+          {currentUser && !currentUser.isAdmin && (
+            <div className="mb-4 rounded border border-border/60 bg-muted/25 p-3">
+              <button
+                type="button"
+                onClick={() => setShowInbox(prev => !prev)}
+                className="flex w-full items-center justify-between gap-3 text-left"
+                aria-expanded={showInbox}
+              >
+                <span className="flex items-center gap-2">
+                  <h2 className="text-sm font-medium text-foreground">Inbox</h2>
+                  {unreadInboxCount > 0 && (
+                    <span className="rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold text-accent-foreground">
+                      {unreadInboxCount} new
+                    </span>
+                  )}
+                </span>
+                <span className="flex items-center gap-3 text-xs text-muted-foreground">
+                  {inboxMessages.length} item{inboxMessages.length === 1 ? '' : 's'}
+                  <span>{showInbox ? '-' : '+'}</span>
+                </span>
+              </button>
+              {showInbox && inboxMessages.length > 0 && (
+                <div className="mt-3 max-h-[22rem] divide-y divide-border/50 overflow-y-auto border-y border-border/50">
+                  {inboxMessages.map(message => {
+                    const songAvailable = Boolean(findProjectForFileId(files, message.songId));
+                    return (
+                      <div
+                        key={message.id}
+                        className={`flex items-stretch transition ${
+                          message.readAt ? 'bg-transparent' : 'bg-accent/[0.07]'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => showInboxTrack(message)}
+                          className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left transition hover:bg-background/60"
+                        >
+                          <span className={`w-20 shrink-0 text-[10px] font-medium uppercase tracking-wide ${message.readAt ? 'text-muted-foreground/70' : 'text-accent'}`}>
+                            {message.readAt ? 'Message' : 'New message'}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className={`truncate text-sm ${message.readAt ? 'text-foreground/80' : 'font-medium text-foreground'}`}>
+                              {message.songName}
+                              {!songAvailable && <span className="ml-1 text-xs font-normal text-muted-foreground">(song unavailable)</span>}
+                            </p>
+                            <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                              <span>From {message.senderName}</span>
+                              {message.note && <span className="break-words text-foreground/75">{message.note}</span>}
+                            </div>
+                          </div>
+                          <span className="shrink-0 text-[10px] text-muted-foreground/75">
+                            {formatActivityTime(message.sentAt)}
+                          </span>
+                        </button>
+                        {!message.readAt && (
+                          <button
+                            type="button"
+                            onClick={() => void markInboxMessageRead(message)}
+                            className="flex w-12 shrink-0 items-center justify-center border-l border-border/45 text-muted-foreground transition hover:bg-background/60 hover:text-accent"
+                            title="Mark as read"
+                            aria-label={`Mark ${message.songName} message as read`}
+                          >
+                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m5 12 4 4L19 6" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {showInbox && inboxMessages.length === 0 && (
+                <p className="mt-3 text-sm text-muted-foreground">No songs have been sent to you yet.</p>
+              )}
+            </div>
+          )}
           {currentUser?.isAdmin && (
             <div className="mb-4 rounded border border-border/60 bg-muted/25 p-3">
               <button
@@ -3854,7 +4331,7 @@ export default function Home() {
                     if (!element || file.id !== targetTrackId) return;
                     window.setTimeout(() => {
                       element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                      if (activityTargetTrackId === file.id) {
+                      if (activityTargetTrackId === file.id && visibleFileIds.has(file.id)) {
                         setActivityTargetTrackId(null);
                       }
                     }, 100);
@@ -3869,6 +4346,7 @@ export default function Home() {
                     instrumentOptions={instrumentOptions}
                     vibeOptions={vibeOptions}
                     collectionOptions={collectionOptions}
+                    linkableSongs={files}
                     shouldPreloadPlayback={playbackPreloadFileIds.has(file.id)}
                     onReady={handleCardReady}
                     onPlay={handleCardPlay}
