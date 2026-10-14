@@ -1,3 +1,4 @@
+import { writeJsonAtomic } from '@/lib/json-storage';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
@@ -54,7 +55,7 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: 'Collection not found' }, { status: 404 });
     }
 
-    fs.writeFileSync(dataFile, JSON.stringify(nextFiles, null, 2));
+    writeJsonAtomic(dataFile, nextFiles);
     return NextResponse.json({ collection: name, filesUpdated });
   } catch {
     return NextResponse.json({ error: 'Collection rename failed' }, { status: 500 });
@@ -88,7 +89,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: 'Collection not found' }, { status: 404 });
     }
 
-    fs.writeFileSync(dataFile, JSON.stringify(nextFiles, null, 2));
+    writeJsonAtomic(dataFile, nextFiles);
     return NextResponse.json({ filesUpdated });
   } catch {
     return NextResponse.json({ error: 'Collection deletion failed' }, { status: 500 });

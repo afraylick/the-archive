@@ -1,3 +1,4 @@
+import { writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser, getUserById, type UserId } from '@/lib/auth';
 import fs from 'fs';
@@ -43,7 +44,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     updatedFile.userRating = ratingUserId === 'adam' ? 0 : normalizedRating;
     data[index] = updatedFile;
 
-    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+    writeJsonAtomic(dataFile, data);
 
     return NextResponse.json({
       ratings: user.isAdmin

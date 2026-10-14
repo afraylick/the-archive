@@ -1,3 +1,4 @@
+import { updateArchive } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
 import { getDataFilePath, getUploadPath, isSafeStorageId } from '@/lib/storage';
@@ -37,15 +38,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
 
     const generated = await generateServerWaveform(filePath);
-    const updatedFile = {
-      ...file,
-      waveformPeaks: generated.waveformPeaks,
-      waveformDuration: generated.waveformDuration,
-      waveformCacheVersion: WAVEFORM_CACHE_VERSION,
-    };
-
-    data[index] = updatedFile;
-    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+    let found = false;
+    updateArchive<AudioFileRecord>(current => {
+      const currentFile = current.find(item => item.id === id);
+      if (!currentFile || !fs.existsSync(filePath)) return undefined;
+      found = true;
+      return current.map(item => item.id === id ? {
+        ...item,
+        waveformPeaks: generated.waveformPeaks,
+        waveformDuration: generated.waveformDuration,
+        waveformCacheVersion: WAVEFORM_CACHE_VERSION,
+      } : item);
+    });
+    if (!found) {
+      return NextResponse.json({ error: 'File was deleted during generation' }, { status: 404 });
+    }
 
     return NextResponse.json({
       waveformPeaks: generated.waveformPeaks,

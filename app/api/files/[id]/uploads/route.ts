@@ -1,3 +1,4 @@
+import { updateArchive } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
@@ -192,8 +193,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       waveformCacheVersion: generatedWaveform ? WAVEFORM_CACHE_VERSION : undefined,
     };
 
-    data.push(upload);
-    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+    let parentExists = false;
+    updateArchive<AudioFileRecord>(current => {
+      parentExists = current.some(item => item.id === projectId && !item.projectId);
+      return parentExists ? [...current, upload] : undefined;
+    });
+    if (!parentExists) {
+      fs.unlinkSync(filePath);
+      return NextResponse.json({ error: 'Song project was deleted during upload' }, { status: 404 });
+    }
     return NextResponse.json({ upload }, { status: 201 });
   } catch (error) {
     console.error(error);

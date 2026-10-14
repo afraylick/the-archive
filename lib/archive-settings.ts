@@ -1,3 +1,4 @@
+import { writeJsonAtomic } from '@/lib/json-storage';
 import fs from 'fs';
 import path from 'path';
 import { ensureDir, getDataFilePath, getStorageRoot } from './storage';
@@ -52,6 +53,6 @@ export const getArchiveSettings = (): ArchiveSettings => {
 
   const settings = createInitialSettings();
   ensureDir(getStorageRoot());
-  fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
+  writeJsonAtomic(settingsFile, settings);
   return settings;
 };

@@ -1,3 +1,4 @@
+import { writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser, type UserId } from '@/lib/auth';
 import fs from 'fs';
@@ -68,7 +69,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           waveformDuration: updatedFile.waveformDuration,
           waveformCacheVersion: updatedFile.waveformCacheVersion,
         };
-        fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+        writeJsonAtomic(dataFile, data);
         return NextResponse.json({ message: 'Waveform updated successfully' });
       }
 
@@ -111,7 +112,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       likedBy: data[index].likedBy,
       ratingUpdatedAt: updatedFile.ratingUpdatedAt || data[index].ratingUpdatedAt,
     };
-    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+    writeJsonAtomic(dataFile, data);
     return NextResponse.json({ message: 'Updated successfully' });
   } catch {
     return NextResponse.json({ error: 'Update failed' }, { status: 500 });
@@ -161,7 +162,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
         ? { ...record, defaultVersionId: record.id }
         : record
       );
-    fs.writeFileSync(dataFile, JSON.stringify(remainingData, null, 2));
+    writeJsonAtomic(dataFile, remainingData);
     return NextResponse.json({ message: 'Deleted successfully' });
   } catch {
     return NextResponse.json({ error: 'Delete failed' }, { status: 500 });

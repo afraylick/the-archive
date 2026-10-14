@@ -1,3 +1,4 @@
+import { writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser, type UserId } from '@/lib/auth';
 import fs from 'fs';
@@ -135,7 +136,7 @@ export async function POST(req: NextRequest) {
       updated += 1;
     }
 
-    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+    writeJsonAtomic(dataFile, data);
 
     return NextResponse.json({
       message: 'Finder tags imported',

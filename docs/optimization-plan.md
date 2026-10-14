@@ -4,7 +4,7 @@ This plan addresses the October 13, 2026 audit in independently reviewable stage
 
 ## Stage 1 Protect persisted archive data
 
-Status: Planned.
+Status: Complete locally; not deployed.
 
 - Replace direct metadata truncation with atomic JSON replacement so interrupted writes leave the previous file intact.
 - Make library GET read-only; temporarily missing audio must not erase stored metadata.
@@ -14,6 +14,10 @@ Status: Planned.
 - Preserve the documented single-process deployment constraint. This stage does not introduce multi-process transactions or fix stale browser whole-record edits.
 
 Acceptance: regression suite, lint, and production build pass; no production data migration is required.
+
+Implemented atomic replacement for archive, account, password, settings, inbox, and throttle JSON writes. Library reads no longer persist normalization or prune missing-file metadata. Legacy comment IDs remain stable and editable, and legacy notes survive comment mutations. Uploads and waveform generation commit against the latest metadata; missing parents/records abort their commits. Stems buffering now finishes before reading the metadata snapshot.
+
+Validation: `npm test` passes 10 focused regression cases (11 reported tests including the parent group); `npm run lint` and `npm run build` pass. The existing broad file-tracing warning remains for Stage 5. Tests exercise route handlers directly with deferred generation and injected disk failures, using disposable storage. Atomic replacement protects against partial writes but is not a multi-file transaction or a guarantee against filesystem/power-loss failures. Stale browser edits and attachment cleanup ordering remain Stage 2 work.
 
 ## Stage 2 Make edits and attachment changes safe
 

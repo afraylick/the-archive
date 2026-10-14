@@ -1,3 +1,4 @@
+import { writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
 import fs from 'fs';
@@ -38,7 +39,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
     data[index] = { ...data[index], collections: nextCollections };
-    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+    writeJsonAtomic(dataFile, data);
 
     return NextResponse.json({ collections: nextCollections });
   } catch {

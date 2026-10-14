@@ -1,3 +1,4 @@
+import { getLegacyCommentId } from '@/lib/comment-id';
 import { NextResponse } from 'next/server';
 import { getSessionUser, type UserId } from '@/lib/auth';
 import fs from 'fs';
@@ -165,11 +166,11 @@ export async function GET(req: NextRequest) {
         file.notes = file.comments?.filter(comment => !comment.userId).map(comment => comment.text).join('\n') || '';
       }
       file.comments = Array.isArray(file.comments)
-        ? file.comments.filter(comment => comment.userId && comment.text).map(comment => ({
+        ? file.comments.filter(comment => comment.userId && comment.text).map((comment, index) => ({
             ...comment,
-            id: comment.id || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+            id: comment.id || getLegacyCommentId(file.id, index, comment),
             userName: comment.userName || comment.userId || 'Unknown',
-            createdAt: comment.createdAt || new Date().toISOString(),
+            createdAt: comment.createdAt || file.uploadedAt || file.createdAt || new Date(0).toISOString(),
           }))
         : [];
       if (!file.createdAt) {
@@ -187,8 +188,8 @@ export async function GET(req: NextRequest) {
       return file;
     }).filter((file) => isSafeStorageId(file.id) && fs.existsSync(getUploadPath(file.id)));
 
-    // Save migrated data
-    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+    // Normalize legacy records for this response only. Missing audio must never
+    // remove persisted records merely because someone browses the library.
 
     const projects = data.filter(file => !file.projectId);
     return NextResponse.json(projects.map(project => {

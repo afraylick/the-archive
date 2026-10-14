@@ -1,3 +1,4 @@
+import { writeJsonAtomic } from '@/lib/json-storage';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
@@ -71,7 +72,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return record;
     });
 
-    fs.writeFileSync(dataFile, JSON.stringify(updatedData, null, 2));
+    writeJsonAtomic(dataFile, updatedData);
     return NextResponse.json({ sourceId, targetProjectId, movedIds });
   } catch (error) {
     console.error('Failed to link song variation', error);

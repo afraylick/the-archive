@@ -1,3 +1,4 @@
+import { writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import {
   createUser,
@@ -36,7 +37,7 @@ const readFiles = () => {
 
 const writeFiles = (files: AudioFileRecord[]) => {
   const dataFile = getDataFilePath();
-  fs.writeFileSync(dataFile, JSON.stringify(files, null, 2));
+  writeJsonAtomic(dataFile, files);
 };
 
 export async function GET(req: NextRequest) {

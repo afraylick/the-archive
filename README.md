@@ -463,6 +463,7 @@ npm run dev                 # Next.js development server using webpack
 npm run build               # Production build and TypeScript validation
 npm run start               # Start the built application
 npm run lint                # ESLint
+npm test                    # Isolated storage and route regression tests
 npm run export:finder-tags  # macOS Finder metadata exporter
 ```
 
@@ -482,6 +483,7 @@ The main source areas are:
 Before committing changes, run:
 
 ```bash
+npm test
 npm run lint
 npm run build
 ```
@@ -490,7 +492,7 @@ npm run build
 
 - The application is built with Next.js 16, React 19, TypeScript, Tailwind CSS 4, and WaveSurfer.js.
 - It expects a Node.js server runtime with a writable local filesystem. It is not designed for a static export.
-- Metadata is stored in one JSON file and updated with synchronous read/modify/write operations.
+- Metadata is stored in one JSON file. Writes use synchronous read/modify/write operations with atomic file replacement; uploads and waveform generation re-read the latest metadata before committing. Library reads do not rewrite the archive or delete metadata for missing audio.
 - Run one application process against a storage directory. Multiple replicas or concurrent writers can overwrite one another because there is no database transaction or distributed lock layer.
 - This architecture is best suited to a personal archive or a small trusted group, not an untrusted public upload service or a horizontally scaled deployment.
 - All library pages and file endpoints require authentication; there is no anonymous public-sharing mode.

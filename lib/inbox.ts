@@ -1,3 +1,4 @@
+import { writeJsonAtomic } from '@/lib/json-storage';
 import fs from 'fs';
 import path from 'path';
 import { ensureStorageDirs, getStorageRoot } from './storage';
@@ -30,5 +31,5 @@ export const readInboxMessages = () => {
 
 export const writeInboxMessages = (messages: InboxMessage[]) => {
   ensureStorageDirs();
-  fs.writeFileSync(getInboxFilePath(), JSON.stringify(messages, null, 2));
+  writeJsonAtomic(getInboxFilePath(), messages);
 };

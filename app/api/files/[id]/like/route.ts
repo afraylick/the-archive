@@ -1,3 +1,4 @@
+import { writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
 import fs from 'fs';
@@ -36,7 +37,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     const nextLikedBy = Array.from(likedBy);
     data[index] = { ...data[index], likedBy: nextLikedBy };
-    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+    writeJsonAtomic(dataFile, data);
 
     return NextResponse.json({
       liked: nextLikedBy.includes(user.id),

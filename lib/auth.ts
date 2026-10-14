@@ -1,3 +1,4 @@
+import { writeJsonAtomic } from '@/lib/json-storage';
 import { createHmac, timingSafeEqual } from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -108,7 +109,7 @@ const writeCustomUsers = (users: ArchiveUser[]) => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  fs.writeFileSync(accountsFile, JSON.stringify(users, null, 2));
+  writeJsonAtomic(accountsFile, users);
 };
 
 const getAllUsers = () => {
@@ -171,7 +172,7 @@ const writePasswordHashes = (hashes: Partial<Record<UserId, string>>) => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  fs.writeFileSync(usersFile, JSON.stringify(hashes, null, 2));
+  writeJsonAtomic(usersFile, hashes);
 };
 
 const upgradeStoredPasscodeHash = (userId: UserId, passcode: string) => {
@@ -273,7 +274,7 @@ export const deleteUser = (userId: UserId) => {
   if (!fs.existsSync(path.dirname(usersFile))) {
     fs.mkdirSync(path.dirname(usersFile), { recursive: true });
   }
-  fs.writeFileSync(usersFile, JSON.stringify(hashes, null, 2));
+  writeJsonAtomic(usersFile, hashes);
 };
 
 const signUserId = (userId: string) => (

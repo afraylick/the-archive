@@ -1,3 +1,4 @@
+import { writeJsonAtomic } from '@/lib/json-storage';
 import { createHmac } from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -52,7 +53,7 @@ const writeAttempts = (attempts: LoginAttemptData) => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  fs.writeFileSync(attemptsFile, JSON.stringify(attempts, null, 2));
+  writeJsonAtomic(attemptsFile, attempts);
 };
 
 const pruneExpiredAttempts = (attempts: LoginAttemptData, now: number) => {

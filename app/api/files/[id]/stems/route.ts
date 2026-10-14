@@ -1,3 +1,4 @@
+import { writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
 import fs from 'fs';
@@ -35,6 +36,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'ZIP file is too large' }, { status: 413 });
     }
 
+    const buffer = Buffer.from(await zipFile.arrayBuffer());
     const dataFile = getDataFilePath();
     const data: AudioFileRecord[] = fs.existsSync(dataFile)
       ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
@@ -54,7 +56,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
 
     const stemId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}.zip`;
-    fs.writeFileSync(getStemPath(stemId), Buffer.from(await zipFile.arrayBuffer()));
+    fs.writeFileSync(getStemPath(stemId), buffer);
 
     const stems = {
       id: stemId,
@@ -62,7 +64,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       uploadedAt: new Date().toISOString(),
     };
     data[index] = { ...data[index], stems };
-    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+    writeJsonAtomic(dataFile, data);
 
     return NextResponse.json({ stems });
   } catch {
@@ -97,7 +99,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     }
 
     data[index] = { ...data[index], stems: undefined };
-    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+    writeJsonAtomic(dataFile, data);
 
     return NextResponse.json({ stems: null });
   } catch {

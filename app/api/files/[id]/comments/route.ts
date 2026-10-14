@@ -1,3 +1,5 @@
+import { getLegacyCommentId } from '@/lib/comment-id';
+import { writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
 import fs from 'fs';
@@ -15,14 +17,27 @@ interface AudioComment {
 interface AudioFileRecord {
   id: string;
   comments?: AudioComment[];
+  notes?: string;
 }
 
 const MAX_COMMENT_LENGTH = 4000;
 const MAX_COMMENTS_PER_FILE = 1000;
 
-const readData = (dataFile: string): AudioFileRecord[] => (
-  fs.existsSync(dataFile) ? JSON.parse(fs.readFileSync(dataFile, 'utf8')) : []
-);
+const readData = (dataFile: string): AudioFileRecord[] => {
+  const records: AudioFileRecord[] = fs.existsSync(dataFile)
+    ? JSON.parse(fs.readFileSync(dataFile, 'utf8')) : [];
+  return records.map(file => ({
+    ...file,
+    notes: file.notes ?? (Array.isArray(file.comments) ? file.comments : [])
+      .filter(comment => !comment.userId).map(comment => comment.text).join('\n'),
+    comments: (Array.isArray(file.comments) ? file.comments : [])
+      .filter(comment => comment.userId && comment.text)
+      .map((comment, index) => ({
+        ...comment,
+        id: comment.id || getLegacyCommentId(file.id, index, comment),
+      })),
+  }));
+};
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -61,7 +76,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     };
 
     data[index] = { ...data[index], comments: [...comments, nextComment] };
-    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+    writeJsonAtomic(dataFile, data);
 
     return NextResponse.json({ comments: data[index].comments });
   } catch {
@@ -99,7 +114,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
       ...data[index],
       comments: comments.filter(existingComment => existingComment.id !== commentId),
     };
-    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+    writeJsonAtomic(dataFile, data);
 
     return NextResponse.json({ comments: data[index].comments });
   } catch {

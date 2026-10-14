@@ -1,10 +1,11 @@
+import { updateArchive } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser, type UserId } from '@/lib/auth';
 import path from 'path';
 import fs from 'fs';
 import { getCreatedAtWithYear, getRecordedDateFromFilename } from '@/lib/recorded-date';
 import { generateServerWaveform } from '@/lib/server-waveform';
-import { ensureStorageDirs, getDataFilePath, getUploadsDir } from '@/lib/storage';
+import { ensureStorageDirs, getUploadsDir } from '@/lib/storage';
 import { WAVEFORM_CACHE_VERSION } from '@/lib/waveform';
 
 interface UploadMetadata {
@@ -102,14 +103,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Upload is too large' }, { status: 413 });
     }
 
-    const dataFile = getDataFilePath();
     const uploadsDir = getUploadsDir();
     ensureStorageDirs();
 
-    let data: AudioFileRecord[] = [];
-    if (fs.existsSync(dataFile)) {
-      data = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
-    }
+    const additions: AudioFileRecord[] = [];
 
     const results: { id: string; name: string }[] = [];
     for (let i = 0; i < files.length; i++) {
@@ -176,11 +173,11 @@ export async function POST(req: NextRequest) {
         comments: [],
         uploadedAt: new Date().toISOString(),
       };
-      data.push(newEntry);
+      additions.push(newEntry);
       results.push({ id: filename, name: file.name });
     }
 
-    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+    updateArchive<AudioFileRecord>(current => [...current, ...additions]);
 
     return NextResponse.json({ message: 'Files uploaded successfully', results });
   } catch (error) {
