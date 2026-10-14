@@ -144,7 +144,7 @@ The Admin account cannot be deleted. Deleting a custom member also removes that 
 
 ## Requirements
 
-- Node.js 20.9 or newer.
+- Node.js 24 LTS (the supported production major; `.nvmrc` selects 24).
 - npm and the checked-in `package-lock.json`.
 - A persistent, writable local filesystem directory for metadata and audio.
 - Enough free disk space for original audio, stems, waveform metadata, and mobile transcodes.
@@ -446,7 +446,7 @@ The `transcoded/` directory is a cache and can be regenerated, but restoring the
 1. Back up `ARCHIVE_STORAGE_DIR`.
 2. Pull or otherwise deploy the new source code.
 3. Run `npm ci` so installed packages match `package-lock.json`.
-4. Run `npm run build`.
+4. Run `npm run build`. This runs the supported Webpack builder and rejects deployment traces containing archive data or credential files. Do not bypass it with a bare `next build`.
 5. Restart the application using the same environment and persistent storage directory.
 6. Sign in and verify the archive before discarding the backup.
 
@@ -467,7 +467,7 @@ Available scripts:
 
 ```bash
 npm run dev                 # Next.js development server using webpack
-npm run build               # Production build and TypeScript validation
+npm run build               # Webpack production build, TypeScript, and artifact safety check
 npm run start               # Start the built application
 npm run lint                # ESLint
 npm test                    # Isolated storage and route regression tests
@@ -514,3 +514,12 @@ npm run build
 ## License
 
 This repository does not currently include a license file. Add an appropriate open-source license before distributing the project for reuse.
+
+
+### Stage 5 deployment artifacts
+
+Use Node 24 LTS, `npm ci`, and `npm run build`. The build uses Webpack because the tested Turbopack build retained local archive files in its proxy trace even with route exclusions. `npm run check:artifacts` is also available separately. It checks all production route/proxy/server traces, server/static/standalone output paths, and `public` for archive storage, known credential filenames, environment files, private keys, and audio/ZIP assets. It fails when no completed production build or traces exist. It checks paths and symlink targets, not arbitrary secret strings embedded in JavaScript; never expose secrets through `NEXT_PUBLIC_*` or Next config `env`.
+
+Keep `ARCHIVE_STORAGE_DIR` and `ARCHIVE_AUTH_SECRET` in runtime configuration. Storage remains external and writable; excluding it from deployment traces does not delete it or change its runtime path. If building with a custom storage location, supply the same `ARCHIVE_STORAGE_DIR` to the build/check so that location is explicitly excluded and checked. Deploy code/build output with your existing persistent storage mounted separately. Do not package `.next/cache`, `.next/dev`, repository `data/`, `.env*`, or whole working-directory snapshots. Rebuild older artifacts before packaging; previous traces may include private archive paths.
+
+Next.js and `eslint-config-next` are aligned at 16.4.0. Unused Multer packages and the old PostCSS override were removed; the lockfile now resolves patched compatible PostCSS versions without overrides. See `SECURITY.md` for the dated dependency audit and remaining development-tool advisory.

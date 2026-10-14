@@ -78,7 +78,7 @@ Validation: 47 reported tests pass, including timeline disagreement/seeking, old
 
 ## Stage 5 Update dependencies and isolate deployment artifacts
 
-Status: Planned.
+Status: Complete locally; not deployed.
 
 - Upgrade vulnerable production and development dependencies after checking current advisories and installed Next.js guidance.
 - Remove unused Multer and review the PostCSS override.
@@ -86,6 +86,12 @@ Status: Planned.
 - Add an artifact check for private files and document the supported runtime.
 
 Acceptance: review remaining npm audit findings for actual applicability, build without the broad tracing warning, and verify traces exclude private storage and secrets.
+
+Implemented Next.js/ESLint config 16.4.0 alignment, compatible lockfile updates, removal of unused Multer/types and the obsolete PostCSS override, and Node 24 LTS runtime documentation. Production audit is clean; the five remaining full-audit entries are one unpatched development-only braces advisory propagated through the lint dependency chain. `SECURITY.md` records applicability and upstream follow-up; no forced downgrade or incompatible override was applied.
+
+Production builds now use Webpack, matching development. The tested Turbopack output retained archive files in the proxy trace despite route exclusions; Webpack honors the private-storage exclusions and builds without the broad tracing warning. `npm run build` automatically checks all deployment traces plus production/public output paths for archive data, credentials, environment files, private keys, and media/ZIP files. The guard also checks configured external storage and symlink targets, rejects missing/malformed build traces, and has regression tests. It is a path check, not arbitrary secret-content detection. Runtime storage paths and data access remain unchanged.
+
+Validation on Node 24.21.0: all 49 reported tests pass; lint has zero errors and four warnings from a new Next navigation rule on existing full-page redirects. Production build passes without tracing warnings; artifact guard passes 30 traces. Disposable production-server smoke passes login, proxy authorization, external runtime storage, library access, suffix audio ranges, and waveform generation. `npm audit --omit=dev` reports zero vulnerabilities; full audit retains five documented development entries. Existing recordings, credentials, metadata, and the untracked context file were untouched. No push or deployment was performed.
 
 ## Stage 6 Reduce memory network and disk costs
 

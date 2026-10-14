@@ -1,12 +1,19 @@
 import type { NextConfig } from "next";
+import path from "node:path";
+
+const runtimeStorage = process.env.ARCHIVE_STORAGE_DIR;
+const storagePattern = runtimeStorage
+  ? path.relative(process.cwd(), path.resolve(runtimeStorage)).split(path.sep).join('/').replace(/[!()*?\[\]{}]/g, '\\$&')
+  : 'data';
+const privateFiles = ['./data/**/*', './.env*', './.git/**/*', './SONGIE_CHATGPT_CONTEXT.md', `${storagePattern}/**/*`];
 
 const nextConfig: NextConfig = {
-  turbopack: {
-    root: process.cwd(),
-  },
+  turbopack: { root: process.cwd() },
+  // Runtime storage is mounted on the server, never copied from build traces.
+  // Use the supported Webpack build: Turbopack currently retains storage in proxy traces.
   outputFileTracingExcludes: {
-    '/api/files/*/audio': ['./next.config.ts'],
-    '/api/files/*/waveform': ['./next.config.ts'],
+    '/*': privateFiles,
+    'middleware': privateFiles,
   },
 };
 
