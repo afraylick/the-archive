@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { spawn } from 'child_process';
+import { runAudioJob, runFfmpeg } from '@/lib/audio-processing';
 import { getSessionUser } from '@/lib/auth';
 import { ensureDir, getAudioContentType, getDataFilePath, getSafeDownloadName, getTranscodedDir, getUploadPath, isSafeStorageId } from '@/lib/storage';
 import fs from 'fs';
@@ -14,7 +14,6 @@ interface AudioFileRecord {
 
 const AUDIO_CACHE_CONTROL = 'private, max-age=86400, stale-while-revalidate=604800';
 const MOBILE_AUDIO_CACHE_CONTROL = 'private, max-age=604800, stale-while-revalidate=2592000';
-const getCommand = (envName: string, fallback: string) => process.env[envName] || fallback;
 
 const readRange = (rangeHeader: string | null, fileSize: number) => {
   if (!rangeHeader) return null;
@@ -88,39 +87,11 @@ const transcodeToMp3 = async (sourcePath: string, outputPath: string) => {
   const tempPath = `${outputPath}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
 
   try {
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(getCommand('ARCHIVE_FFMPEG_PATH', 'ffmpeg'), [
-        '-hide_banner',
-        '-v',
-        'error',
-        '-y',
-        '-i',
-        /* turbopackIgnore: true */ sourcePath,
-        '-vn',
-        '-map_metadata',
-        '-1',
-        '-codec:a',
-        'libmp3lame',
-        '-b:a',
-        '192k',
-        '-f',
-        'mp3',
-        /* turbopackIgnore: true */ tempPath,
-      ], { stdio: ['ignore', 'ignore', 'pipe'] });
-
-      const stderr: Buffer[] = [];
-      child.stderr.on('data', chunk => stderr.push(Buffer.from(chunk)));
-      child.on('error', reject);
-      child.on('close', code => {
-        if (code === 0) {
-          resolve();
-          return;
-        }
-
-        const message = Buffer.concat(stderr).toString('utf8').trim() || `ffmpeg exited with code ${code}`;
-        reject(new Error(message));
-      });
-    });
+    await runAudioJob(() => runFfmpeg([
+      '-y', '-protocol_whitelist', 'file,pipe', '-i', /* turbopackIgnore: true */ sourcePath,
+      '-vn', '-map_metadata', '-1', '-codec:a', 'libmp3lame', '-threads', '1', '-b:a', '192k',
+      '-f', 'mp3', /* turbopackIgnore: true */ tempPath,
+    ]));
 
     fs.renameSync(tempPath, outputPath);
   } catch (error) {

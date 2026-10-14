@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { MAX_AUDIO_SECONDS, runAudioJob, runFfmpeg } from './audio-processing';
 import fs from 'fs';
 import path from 'path';
 import { roundWaveformPeak, WAVEFORM_GENERATION_SAMPLE_RATE, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
@@ -23,7 +23,6 @@ export interface GeneratedWaveform {
   generator: 'ffmpeg' | 'wav-parser';
 }
 
-const getCommand = (envName: string, fallback: string) => process.env[envName] || fallback;
 const FFMPEG_PEAK_BLOCK_SIZE = 64;
 
 const resampleBlockPeaks = (blockPeaks: number[], blockSize: number, totalSamples: number) => {
@@ -51,71 +50,42 @@ const generateWithFfmpeg = async (filePath: string): Promise<GeneratedWaveform> 
   const blockPeaks: number[] = [];
   let totalSamples = 0;
 
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(getCommand('ARCHIVE_FFMPEG_PATH', 'ffmpeg'), [
-      '-hide_banner',
-      '-v',
-      'error',
-      '-i',
-      /* turbopackIgnore: true */ filePath,
-      '-vn',
-      '-ac',
-      '1',
-      '-ar',
-      String(WAVEFORM_GENERATION_SAMPLE_RATE),
-      '-f',
-      'f32le',
-      'pipe:1',
-    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let leftover = Buffer.alloc(0);
+  let blockPeak = 0;
+  let blockSampleCount = 0;
 
-    const stderr: Buffer[] = [];
-    let leftover = Buffer.alloc(0);
-    let blockPeak = 0;
-    let blockSampleCount = 0;
+  const pushBlockPeak = () => {
+    blockPeaks.push(blockPeak);
+    blockPeak = 0;
+    blockSampleCount = 0;
+  };
 
-    const pushBlockPeak = () => {
-      blockPeaks.push(blockPeak);
-      blockPeak = 0;
-      blockSampleCount = 0;
-    };
+  await runFfmpeg([
+    '-protocol_whitelist', 'file,pipe', '-i', /* turbopackIgnore: true */ filePath,
+    '-vn', '-ac', '1', '-ar', String(WAVEFORM_GENERATION_SAMPLE_RATE), '-f', 'f32le', 'pipe:1',
+  ], chunk => {
+    const buffer = leftover.length ? Buffer.concat([leftover, Buffer.from(chunk)]) : Buffer.from(chunk);
+    const sampleBytes = buffer.length - (buffer.length % 4);
 
-    child.stdout.on('data', chunk => {
-      const buffer = leftover.length ? Buffer.concat([leftover, Buffer.from(chunk)]) : Buffer.from(chunk);
-      const sampleBytes = buffer.length - (buffer.length % 4);
-
-      for (let offset = 0; offset < sampleBytes; offset += 4) {
-        const sample = buffer.readFloatLE(offset);
-        const amplitude = Math.abs(Number.isFinite(sample) ? sample : 0);
-        if (amplitude > Math.abs(blockPeak)) {
-          blockPeak = Number.isFinite(sample) ? sample : 0;
-        }
-        blockSampleCount++;
-        totalSamples++;
-
-        if (blockSampleCount >= FFMPEG_PEAK_BLOCK_SIZE) {
-          pushBlockPeak();
-        }
+    for (let offset = 0; offset < sampleBytes; offset += 4) {
+      const sample = buffer.readFloatLE(offset);
+      const amplitude = Math.abs(Number.isFinite(sample) ? sample : 0);
+      if (amplitude > Math.abs(blockPeak)) {
+        blockPeak = Number.isFinite(sample) ? sample : 0;
       }
+      blockSampleCount++;
+      totalSamples++;
 
-      leftover = sampleBytes < buffer.length ? buffer.subarray(sampleBytes) : Buffer.alloc(0);
-    });
-
-    child.stderr.on('data', chunk => stderr.push(Buffer.from(chunk)));
-    child.on('error', reject);
-    child.on('close', code => {
-      if (blockSampleCount > 0) {
+      if (blockSampleCount >= FFMPEG_PEAK_BLOCK_SIZE) {
         pushBlockPeak();
       }
+    }
 
-      if (code === 0 && totalSamples > 0) {
-        resolve();
-        return;
-      }
-
-      const message = Buffer.concat(stderr).toString('utf8').trim() || `ffmpeg exited with code ${code}`;
-      reject(new Error(message));
-    });
+    leftover = sampleBytes < buffer.length ? buffer.subarray(sampleBytes) : Buffer.alloc(0);
   });
+
+  if (blockSampleCount > 0) pushBlockPeak();
+  if (totalSamples <= 0 || leftover.length) throw new Error('Invalid decoded audio');
 
   const duration = totalSamples / WAVEFORM_GENERATION_SAMPLE_RATE;
   return {
@@ -147,22 +117,26 @@ const readWaveMetadata = (filePath: string) => {
     }
 
     const stat = fs.fstatSync(fd);
+    const riffEnd = header.readUInt32LE(4) + 8;
+    if (riffEnd < 12 || riffEnd > stat.size) throw new Error('Truncated WAV container');
     let position = 12;
     let format: WaveFormat | null = null;
     let dataChunk: WaveDataChunk | null = null;
 
-    while (position + 8 <= stat.size) {
+    while (position + 8 <= riffEnd) {
       const chunk = readChunkHeader(fd, position);
       if (!chunk) break;
 
       const chunkDataOffset = position + 8;
+      if (chunkDataOffset + chunk.size > riffEnd) throw new Error('Truncated WAV chunk');
       if (chunk.id === 'fmt ') {
         const fmt = Buffer.alloc(Math.min(chunk.size, 40));
-        fs.readSync(fd, fmt, 0, fmt.length, chunkDataOffset);
+        if (fs.readSync(fd, fmt, 0, fmt.length, chunkDataOffset) !== fmt.length) throw new Error('Truncated WAV format');
         if (fmt.length < 16) {
           throw new Error('Invalid WAV fmt chunk');
         }
         const declaredFormat = fmt.readUInt16LE(0);
+        if (declaredFormat === 0xfffe && (fmt.length < 40 || fmt.readUInt16LE(16) < 22 || fmt.subarray(26, 40).toString('hex') !== '000000001000800000aa00389b71')) throw new Error('Invalid extensible WAV format');
         const extensibleFormat = declaredFormat === 0xfffe && fmt.length >= 40
           ? fmt.readUInt16LE(24)
           : declaredFormat;
@@ -186,7 +160,9 @@ const readWaveMetadata = (filePath: string) => {
 
     if (!format || !dataChunk) throw new Error('WAV format/data chunk not found');
     if (![1, 3].includes(format.audioFormat)) throw new Error('Only PCM and float WAV files are supported without ffmpeg');
-    if (format.channels < 1 || format.sampleRate <= 0 || format.blockAlign <= 0) throw new Error('Invalid WAV format');
+    const allowedBits = format.audioFormat === 3 ? [32, 64] : [8, 16, 24, 32];
+    if (format.channels < 1 || format.channels > 32 || format.sampleRate < 1 || format.sampleRate > 768000 || !allowedBits.includes(format.bitsPerSample) || format.blockAlign !== format.channels * (format.bitsPerSample / 8) || format.validBitsPerSample < 1 || format.validBitsPerSample > format.bitsPerSample) throw new Error('Invalid WAV format');
+    if (!dataChunk.size || dataChunk.size % format.blockAlign || dataChunk.size / format.blockAlign / format.sampleRate > MAX_AUDIO_SECONDS) throw new Error('Invalid WAV data size or duration');
 
     return { format, dataChunk };
   } finally {
@@ -228,34 +204,40 @@ const generateWithWaveParser = async (filePath: string): Promise<GeneratedWavefo
     let leftover = Buffer.alloc(0);
     let frameIndex = 0;
 
+    const timer = setTimeout(() => stream.destroy(new Error('WAV processing timed out')), 120000);
+    stream.on('close', () => clearTimeout(timer));
     stream.on('data', chunk => {
-      const buffer = leftover.length ? Buffer.concat([leftover, Buffer.from(chunk)]) : Buffer.from(chunk);
-      const frameBytes = buffer.length - (buffer.length % format.blockAlign);
+      try {
+        const buffer = leftover.length ? Buffer.concat([leftover, Buffer.from(chunk)]) : Buffer.from(chunk);
+        const frameBytes = buffer.length - (buffer.length % format.blockAlign);
 
-      for (let offset = 0; offset < frameBytes; offset += format.blockAlign) {
-        let peak = 0;
-        for (let channel = 0; channel < format.channels; channel++) {
-          const sampleOffset = offset + channel * sampleBytes;
-          const sample = format.audioFormat === 3
-            ? readFloatSample(buffer, sampleOffset, format.bitsPerSample)
-            : readPcmSample(buffer, sampleOffset, format.bitsPerSample);
-          if (Math.abs(sample) > Math.abs(peak)) peak = sample;
+        for (let offset = 0; offset < frameBytes; offset += format.blockAlign) {
+          let peak = 0;
+          for (let channel = 0; channel < format.channels; channel++) {
+            const sampleOffset = offset + channel * sampleBytes;
+            const sample = format.audioFormat === 3
+              ? readFloatSample(buffer, sampleOffset, format.bitsPerSample)
+              : readPcmSample(buffer, sampleOffset, format.bitsPerSample);
+            if (Math.abs(sample) > Math.abs(peak)) peak = sample;
+          }
+
+          const bucket = Math.min(WAVEFORM_PEAK_LENGTH - 1, Math.floor((frameIndex / totalFrames) * WAVEFORM_PEAK_LENGTH));
+          if (Math.abs(peak) > Math.abs(peaks[bucket])) {
+            peaks[bucket] = peak;
+          }
+          frameIndex++;
         }
 
-        const bucket = Math.min(WAVEFORM_PEAK_LENGTH - 1, Math.floor((frameIndex / totalFrames) * WAVEFORM_PEAK_LENGTH));
-        if (Math.abs(peak) > Math.abs(peaks[bucket])) {
-          peaks[bucket] = peak;
-        }
-        frameIndex++;
+        leftover = frameBytes < buffer.length ? buffer.subarray(frameBytes) : Buffer.alloc(0);
+      } catch (error) {
+        stream.destroy(error instanceof Error ? error : new Error('Invalid WAV samples'));
       }
-
-      leftover = frameBytes < buffer.length ? buffer.subarray(frameBytes) : Buffer.alloc(0);
     });
 
     stream.on('error', reject);
     stream.on('end', () => {
-      if (frameIndex <= 0) {
-        reject(new Error('No WAV frames read'));
+      if (frameIndex !== totalFrames || leftover.length) {
+        reject(new Error('Incomplete WAV frames'));
         return;
       }
       resolve();
@@ -269,7 +251,7 @@ const generateWithWaveParser = async (filePath: string): Promise<GeneratedWavefo
   };
 };
 
-export const generateServerWaveform = async (filePath: string): Promise<GeneratedWaveform> => {
+export const generateServerWaveform = (filePath: string): Promise<GeneratedWaveform> => runAudioJob(async () => {
   try {
     return await generateWithFfmpeg(filePath);
   } catch (ffmpegError) {
@@ -279,4 +261,4 @@ export const generateServerWaveform = async (filePath: string): Promise<Generate
       throw new Error(`Waveform generation failed. ffmpeg: ${(ffmpegError as Error).message}; wav parser: ${(waveError as Error).message}`);
     }
   }
-};
+});

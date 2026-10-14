@@ -38,9 +38,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const loginUser = passcode ? getUserByPasscode(passcode) : undefined;
+    // Reserve an attempt before asynchronous password work so parallel requests
+    // cannot all pass the limit check before any failure is recorded.
+    const failedStatus = recordFailedLogin(req, undefined);
+    const loginUser = typeof passcode === 'string' && passcode.length <= 1024 ? await getUserByPasscode(passcode) : undefined;
     if (!passcode || !loginUser) {
-      const failedStatus = recordFailedLogin(req, undefined);
       return NextResponse.json(
         { error: failedStatus.locked ? 'Too many login attempts. Try again later.' : 'Invalid login' },
         {

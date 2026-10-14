@@ -1,5 +1,6 @@
+import { getTaskLimiter } from './task-limiter';
 import { writeJsonAtomic } from '@/lib/json-storage';
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createHmac, timingSafeEqual, randomBytes, scrypt } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import type { NextRequest } from 'next/server';
@@ -30,14 +31,6 @@ const CLEAN_USERS: ArchiveUser[] = [
   { id: 'adam', name: 'Admin', isAdmin: true },
 ];
 
-const LEGACY_CODES: Record<UserId, string> = {
-  adam: 'adam',
-  maurer: 'maurer',
-  wills: 'wills',
-  jordi: 'jordi',
-  roland: 'roland',
-};
-
 const isProduction = () => process.env.NODE_ENV === 'production';
 
 const getSecret = () => {
@@ -48,18 +41,46 @@ const getSecret = () => {
   }
   return DEFAULT_DEV_SECRET;
 };
+const getCredentialMarker = () => path.join(getStorageRoot(), 'credentials-initialized.json');
 const getUsersFile = () => path.join(getStorageRoot(), 'users.json');
 const getAccountsFile = () => path.join(getStorageRoot(), 'accounts.json');
 const getLegacyUsersFile = () => path.join(process.cwd(), 'data/users.json');
 const getLegacyAccountsFile = () => path.join(process.cwd(), 'data/accounts.json');
 
+// Existing credential/account files must never silently become empty stores.
 const readJsonFile = <T,>(filePath: string, fallback: T): T => {
   try {
-    if (!fs.existsSync(filePath)) return fallback;
     return JSON.parse(fs.readFileSync(filePath, 'utf8')) as T;
-  } catch {
-    return fallback;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return fallback;
+    throw new Error('Account storage is unreadable; restore it from backup');
   }
+};
+
+const authLimiter = () => getTaskLimiter('auth', 1, 16);
+const validHash = (value: unknown): value is string => typeof value === 'string' && (
+  /^[A-Za-z0-9_-]{43}$/.test(value) || /^scrypt-v1\$[a-f0-9]{32}\$[a-f0-9]{128}$/.test(value)
+);
+const derivePassword = (passcode: string, salt: string) => new Promise<Buffer>((resolve, reject) => {
+  scrypt(passcode, Buffer.from(salt, 'hex'), 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (error, key) => {
+    if (error) reject(error);
+    else resolve(key);
+  });
+});
+export const hashPasscode = async (passcode: string) => {
+  const salt = randomBytes(16).toString('hex');
+  return `scrypt-v1$${salt}$${(await derivePassword(passcode, salt)).toString('hex')}`;
+};
+const hashPasscodeWithSecret = (passcode: string, secret: string) => (
+  createHmac('sha256', secret).update(passcode).digest('base64url')
+);
+const matchesHash = async (stored: string, passcode: string) => {
+  if (stored.startsWith('scrypt-v1$')) {
+    const [, salt, key] = stored.split('$');
+    return timingSafeEqual(Buffer.from(key, 'hex'), await derivePassword(passcode, salt));
+  }
+  return timingSafeEqualText(stored, hashPasscodeWithSecret(passcode, getSecret())) ||
+    timingSafeEqualText(stored, hashPasscodeWithSecret(passcode, DEFAULT_DEV_SECRET));
 };
 
 const timingSafeEqualText = (a: string, b: string) => {
@@ -69,6 +90,7 @@ const timingSafeEqualText = (a: string, b: string) => {
 };
 
 const validatePasscode = (passcode: string) => {
+  if (typeof passcode !== 'string' || passcode.length > 1024) throw new Error('Invalid password');
   const cleanPasscode = passcode.trim();
   if (!cleanPasscode) throw new Error('Password is required');
   if (isProduction() && cleanPasscode.length < 8) {
@@ -77,14 +99,11 @@ const validatePasscode = (passcode: string) => {
   return cleanPasscode;
 };
 
-const parseConfiguredCodes = () => {
+const parseConfiguredCodes = (): Partial<Record<UserId, string>> => {
   if (!process.env.ARCHIVE_ACCOUNT_CODES) return {};
-
-  try {
-    return JSON.parse(process.env.ARCHIVE_ACCOUNT_CODES) as Partial<Record<UserId, string>>;
-  } catch {
-    return {};
-  }
+  const codes = JSON.parse(process.env.ARCHIVE_ACCOUNT_CODES);
+  if (!codes || typeof codes !== 'object' || Array.isArray(codes) || Object.values(codes).some(code => typeof code !== 'string' || !code || code.length > 1024)) throw new Error('Invalid account configuration');
+  return codes;
 };
 
 export const getUserById = (id: string | undefined) => (
@@ -95,6 +114,8 @@ const readCustomUsers = () => {
   const legacyUsers = readJsonFile<ArchiveUser[]>(getLegacyAccountsFile(), []);
   const storageUsers = readJsonFile<ArchiveUser[]>(getAccountsFile(), []);
   const usersById = new Map<string, ArchiveUser>();
+
+  if (![legacyUsers, storageUsers].every(users => Array.isArray(users) && users.every(user => user && typeof user.id === 'string' && typeof user.name === 'string' && typeof user.isAdmin === 'boolean'))) throw new Error('Invalid account storage');
 
   [...legacyUsers, ...storageUsers]
     .filter(user => user.id && user.name)
@@ -128,84 +149,84 @@ export const getPublicUsers = () => getAllUsers().map(user => ({
   isAdmin: user.isAdmin,
 }));
 
-export const verifyPasscode = (userId: string, passcode: string) => {
-  const user = getUserById(userId);
-  if (!user) return false;
-
-  const configuredCodes = parseConfiguredCodes();
-  const storedHash = getStoredPasswordHash(user.id);
-  if (storedHash) {
-    return timingSafeEqualText(storedHash, hashPasscode(passcode)) ||
-      timingSafeEqualText(storedHash, hashPasscodeWithSecret(passcode, DEFAULT_DEV_SECRET));
-  }
-
-  const configuredCode = configuredCodes[user.id];
-  const settings = getArchiveSettings();
-  const expectedCode = configuredCode || (settings.legacyDefaults ? LEGACY_CODES[user.id] : user.id === 'adam' ? 'admin' : undefined);
-  if (!expectedCode) return false;
-  if (isProduction() && !configuredCode && (settings.legacyDefaults || user.id !== 'adam')) return false;
-  return timingSafeEqualText(passcode, expectedCode);
-};
-
-export const hashPasscode = (passcode: string) => (
-  hashPasscodeWithSecret(passcode, getSecret())
-);
-
-const hashPasscodeWithSecret = (passcode: string, secret: string) => (
-  createHmac('sha256', secret).update(passcode).digest('base64url')
-);
-
 const readPasswordHashes = () => {
-  const legacyHashes = readJsonFile<Partial<Record<UserId, string>>>(getLegacyUsersFile(), {});
-  const storageHashes = readJsonFile<Partial<Record<UserId, string>>>(getUsersFile(), {});
-  return { ...legacyHashes, ...storageHashes };
+  const read = (file: string) => {
+    const value = readJsonFile<Partial<Record<UserId, string>>>(file, {});
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.values(value).some(hash => !validHash(hash))) throw new Error('Invalid password storage');
+    return value;
+  };
+  const marker = readJsonFile<{ version?: number } | null>(getCredentialMarker(), null);
+  const hasMarker = fs.existsSync(getCredentialMarker());
+  if (hasMarker && (!marker || marker.version !== 1)) throw new Error('Invalid credential marker');
+  if (hasMarker && !fs.existsSync(getUsersFile())) throw new Error('Password storage is missing; restore it from backup');
+  const primary = read(getUsersFile());
+  if (!hasMarker && fs.existsSync(getUsersFile())) writeJsonAtomic(getCredentialMarker(), { version: 1 });
+  // Primary values override legacy hashes. Never fall back on an unreadable primary.
+  return { ...read(getLegacyUsersFile()), ...primary };
 };
-
 const getStoredPasswordHash = (userId: UserId) => readPasswordHashes()[userId];
-const getPrimaryStoredPasswordHash = (userId: UserId) => (
-  readJsonFile<Partial<Record<UserId, string>>>(getUsersFile(), {})[userId]
-);
-
 const writePasswordHashes = (hashes: Partial<Record<UserId, string>>) => {
-  const usersFile = getUsersFile();
-  const dir = path.dirname(usersFile);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  writeJsonAtomic(usersFile, hashes);
+  // Write the marker first: interrupted initialization must fail closed.
+  if (!fs.existsSync(getCredentialMarker())) writeJsonAtomic(getCredentialMarker(), { version: 1 });
+  writeJsonAtomic(getUsersFile(), hashes);
 };
 
-const upgradeStoredPasscodeHash = (userId: UserId, passcode: string) => {
+const configuredPasscode = (id: string, hashes: Partial<Record<UserId, string>>) => {
+  if (hashes[id]) return undefined;
+  // Explicit operator configuration supports installations that previously used codes.
+  // Missing/corrupt files can never reactivate the publicly known admin password.
+  return parseConfiguredCodes()[id];
+};
+const verify = async (id: string, passcode: string, hashes = readPasswordHashes()) => {
+  if (typeof passcode !== 'string' || !passcode || passcode.length > 1024) return false;
+  const stored = hashes[id];
+  if (stored) return matchesHash(stored, passcode);
+  const configured = configuredPasscode(id, hashes);
+  return Boolean(configured && timingSafeEqualText(passcode, configured));
+};
+export const verifyPasscode = (userId: string, passcode: string) => authLimiter().run(async () => (
+  Boolean(getUserById(userId)) && await verify(userId, passcode)
+));
+
+export const getUserByPasscode = (passcode: string) => authLimiter().run(async () => {
+  if (typeof passcode !== 'string' || !passcode || passcode.length > 1024) return undefined;
   const hashes = readPasswordHashes();
-  hashes[userId] = hashPasscode(passcode);
-  writePasswordHashes(hashes);
-};
-
-export const getUserByPasscode = (passcode: string) => {
-  const user = getAllUsers().find(candidate => verifyPasscode(candidate.id, passcode));
-  if (!user) return undefined;
-
-  const storedHash = getStoredPasswordHash(user.id);
-  const primaryHash = getPrimaryStoredPasswordHash(user.id);
-  const currentHash = hashPasscode(passcode);
-  const isLegacyDevHash = storedHash && timingSafeEqualText(storedHash, hashPasscodeWithSecret(passcode, DEFAULT_DEV_SECRET));
-  if (storedHash && (!primaryHash || isLegacyDevHash || !timingSafeEqualText(storedHash, currentHash))) {
-    upgradeStoredPasscodeHash(user.id, passcode);
+  for (const user of getAllUsers()) {
+    if (!await verify(user.id, passcode, hashes)) continue;
+    const stored = hashes[user.id];
+    if (!stored?.startsWith('scrypt-v1$')) {
+      const upgraded = await hashPasscode(passcode);
+      const latest = readPasswordHashes();
+      if (latest[user.id] !== stored || !getUserById(user.id)) return undefined;
+      latest[user.id] = upgraded;
+      writePasswordHashes(latest);
+    }
+    if (!getUserById(user.id)) return undefined;
+    if (stored?.startsWith('scrypt-v1$') && getStoredPasswordHash(user.id) !== stored) return undefined;
+    return user;
   }
+  return undefined;
+});
 
-  return user;
+const passcodeInUse = async (passcode: string, exceptUserId?: string) => {
+  const hashes = readPasswordHashes();
+  for (const user of getAllUsers()) {
+    if (user.id !== exceptUserId && await verify(user.id, passcode, hashes)) return true;
+  }
+  return false;
 };
+export const isPasscodeInUse = (passcode: string, exceptUserId?: string) => authLimiter().run(() => passcodeInUse(passcode, exceptUserId));
 
-export const isPasscodeInUse = (passcode: string, exceptUserId?: string) => (
-  getAllUsers().some(user => user.id !== exceptUserId && verifyPasscode(user.id, passcode))
-);
-
-export const setUserPasscode = (userId: UserId, passcode: string) => {
+export const setUserPasscode = (userId: UserId, passcode: string) => authLimiter().run(async () => {
   const cleanPasscode = validatePasscode(passcode);
+  if (!getUserById(userId)) throw new Error('User not found');
+  if (await passcodeInUse(cleanPasscode, userId)) throw new Error('Password is already in use');
+  const hashed = await hashPasscode(cleanPasscode);
+  if (!getUserById(userId)) throw new Error('User not found');
   const hashes = readPasswordHashes();
-  hashes[userId] = hashPasscode(cleanPasscode);
+  hashes[userId] = hashed;
   writePasswordHashes(hashes);
-};
+});
 
 const getUserIdFromName = (name: string) => {
   const baseId = name
@@ -224,21 +245,19 @@ const getUserIdFromName = (name: string) => {
   return id;
 };
 
-export const createUser = (name: string, passcode: string) => {
+export const createUser = (name: string, passcode: string) => authLimiter().run(async () => {
   const cleanName = name.trim();
   if (!cleanName) throw new Error('User name is required');
   const cleanPasscode = validatePasscode(passcode);
-  if (isPasscodeInUse(cleanPasscode)) throw new Error('Password is already in use');
-
-  const user: ArchiveUser = {
-    id: getUserIdFromName(cleanName),
-    name: cleanName,
-    isAdmin: false,
-  };
+  if (await passcodeInUse(cleanPasscode)) throw new Error('Password is already in use');
+  const hashed = await hashPasscode(cleanPasscode);
+  const user: ArchiveUser = { id: getUserIdFromName(cleanName), name: cleanName, isAdmin: false };
+  const hashes = readPasswordHashes();
+  hashes[user.id] = hashed;
+  writePasswordHashes(hashes);
   writeCustomUsers([...readCustomUsers(), user]);
-  setUserPasscode(user.id, cleanPasscode);
   return user;
-};
+});
 
 export const renameUser = (userId: UserId, name: string) => {
   const cleanName = name.trim();
@@ -277,39 +296,32 @@ export const deleteUser = (userId: UserId) => {
   writeJsonAtomic(usersFile, hashes);
 };
 
-const signUserId = (userId: string) => (
-  createHmac('sha256', getSecret()).update(userId).digest('base64url')
-);
-
-const signSession = (userId: string, expiresAt: number) => (
-  createHmac('sha256', getSecret()).update(`${userId}.${expiresAt}`).digest('base64url')
+const signSession = (userId: string, expiresAt: number, hash: string) => (
+  createHmac('sha256', getSecret()).update(JSON.stringify(['v3', userId, expiresAt, hash])).digest('base64url')
 );
 
 export const createSessionToken = (userId: UserId) => {
+  const hash = getStoredPasswordHash(userId);
+  if (!hash || !getUserById(userId)) throw new Error('Account has no stored credential');
   const expiresAt = Date.now() + SESSION_TTL_MS;
-  return `v2.${userId}.${expiresAt}.${signSession(userId, expiresAt)}`;
+  return `v3.${userId}.${expiresAt}.${signSession(userId, expiresAt, hash)}`;
 };
 
 export const getUserFromSessionToken = (token: string | undefined) => {
   if (!token) return null;
-
-  const tokenParts = token.split('.');
-  if (tokenParts[0] === 'v2') {
-    const [, userId, expiresAtText, signature] = tokenParts;
-    const expiresAt = Number(expiresAtText);
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 4 || parts[0] !== 'v3') return null;
+    const [, userId, expiry, signature] = parts;
+    const expiresAt = Number(expiry);
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + SESSION_TTL_MS) return null;
     const user = getUserById(userId);
-    if (!user || !signature || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
-
-    const expectedSignature = signSession(user.id, expiresAt);
-    return timingSafeEqualText(signature, expectedSignature) ? user : null;
+    const hash = getStoredPasswordHash(userId);
+    if (!user || !hash) return null;
+    return timingSafeEqualText(signature, signSession(userId, expiresAt, hash)) ? user : null;
+  } catch {
+    return null; // Unreadable credentials invalidate sessions as well as logins.
   }
-
-  const [userId, signature] = tokenParts;
-  const user = getUserById(userId);
-  if (!user || !signature) return null;
-
-  const expectedSignature = signUserId(user.id);
-  return timingSafeEqualText(signature, expectedSignature) ? user : null;
 };
 
 export const getSessionUser = (req: NextRequest) => (

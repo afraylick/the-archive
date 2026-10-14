@@ -39,7 +39,7 @@ Validation: `npm test` passes 24 focused cases (26 reported tests including two 
 
 ## Stage 3 Harden authentication and audio processing
 
-Status: Planned.
+Status: Complete locally; not deployed.
 
 - Fail closed on unreadable credentials; separate initial administrator setup from normal login.
 - Migrate password hashes to a salted password KDF with an explicit compatibility strategy.
@@ -49,6 +49,12 @@ Status: Planned.
 - Bound FFmpeg duration/concurrency and capture bounded diagnostics.
 
 Acceptance: corruption never enables a default password, reset invalidates old sessions, untrusted headers cannot bypass configured throttling, and malformed audio fails safely.
+
+Implemented salted scrypt credentials with login-time upgrades of stored legacy hashes, credential-bound v3 sessions, reset revocation, explicit initial account configuration, and strict credential-file validation. Public built-in passwords and older session formats are retired. Existing stored passwords remain usable; users must sign in again. A persistent initialization marker detects missing primary credentials after initialization. Keep backups of credentials and the original signing secret; older code cannot read upgraded hashes. See `SECURITY.md` for rollout and rollback details.
+
+Login attempts are reserved before asynchronous verification and stored under the configured root. Forwarding headers are ignored by default; explicit trusted-proxy configuration accepts only one valid IP. Password work is serialized and audio work shares a bounded queue. ffmpeg has time/output/diagnostic limits; the WAV fallback validates formats, frame alignment, chunk bounds, and duration, and converts stream callback exceptions into rejected jobs.
+
+Validation: `npm test` passes 37 focused cases (42 reported tests including parent groups), covering migration preservation/failure, corrupt or missing credentials, session revocation, concurrent duplicate passwords/logins, proxy spoofing, bounded queue/process failures, malformed WAV data, and injected sample exceptions, plus all earlier-stage cases. Lint and production build pass. The build required network access for Google Fonts; the existing broad tracing warning remains Stage 5 work. All runtime tests use disposable storage. No production data was changed or deployed. Waveform timeline correction remains Stage 4.
 
 ## Stage 4 Repair waveform and playback synchronization
 

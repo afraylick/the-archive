@@ -96,11 +96,11 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ message: 'User name updated', user: renamedUser });
     }
     if (passcode?.trim()) {
-      if (isPasscodeInUse(passcode.trim(), userId)) {
+      if (await isPasscodeInUse(passcode.trim(), userId)) {
         return NextResponse.json({ error: 'Password is already in use' }, { status: 409 });
       }
 
-      setUserPasscode(userId, passcode.trim());
+      await setUserPasscode(userId, passcode.trim());
       return NextResponse.json({ message: 'Password updated' });
     }
 
@@ -121,7 +121,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const { name, passcode } = await req.json() as { name?: string; passcode?: string };
-    const createdUser = createUser(name || '', passcode || '');
+    const createdUser = await createUser(name || '', passcode || '');
     return NextResponse.json({ user: createdUser }, { status: 201 });
   } catch (error) {
     return NextResponse.json(

@@ -177,11 +177,12 @@ These steps describe the application setup itself and are independent of any par
    openssl rand -base64 48
    ```
 
-4. Copy `.env.example` to the environment file used by your runtime and set both required values:
+4. Copy `.env.example` to the environment file used by your runtime and set the storage, secret, and explicit initial Admin password:
 
    ```dotenv
    ARCHIVE_AUTH_SECRET="replace-with-the-generated-secret"
    ARCHIVE_STORAGE_DIR="/absolute/path/to/persistent/archive-data"
+   ARCHIVE_ACCOUNT_CODES='{"adam":"choose-a-long-unique-password"}'
    ```
 
 5. Ensure the account running the application can create files and directories under `ARCHIVE_STORAGE_DIR`. Begin with an empty storage directory for a clean installation.
@@ -193,9 +194,9 @@ These steps describe the application setup itself and are independent of any par
    npm run start
    ```
 
-7. Open the application and sign in with the initial password `admin`.
+7. Open the application and sign in with the password you configured for `adam`. The first successful login saves a salted password hash.
 
-8. Open **Users** and immediately replace the Admin password. Passwords created or changed while running in production must contain at least eight characters.
+8. Remove `ARCHIVE_ACCOUNT_CODES` from the runtime environment and restart after the first successful login. Manage subsequent passwords in **Users**. Passwords created or changed in production must contain at least eight characters.
 
 9. Open **Upload** to add the first recordings.
 
@@ -203,7 +204,7 @@ A fresh archive is initialized with:
 
 - Archive title: `the archive`
 - Account: `Admin`
-- Initial password: `admin`
+- Initial password: explicitly configured by the operator; there is no built-in password
 - Instrument choices: Guitar, Vocals, Bass, Drums, and Synth
 - Vibe choices: none
 - Finish filtering: no automatic selection, so all recordings are shown
@@ -216,10 +217,11 @@ The default Admin's stable internal ID is `adam` for data-schema compatibility. 
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `ARCHIVE_AUTH_SECRET` | Production | Signs sessions and protects stored password hashes. Use a long random value and preserve it with deployment secrets. |
+| `ARCHIVE_AUTH_SECRET` | Production | Signs sessions and verifies legacy password hashes. Use a long random value and preserve it with deployment secrets. |
 | `ARCHIVE_STORAGE_DIR` | Strongly recommended | Absolute path to the persistent archive directory. Defaults to `./data` for local development. |
 | `ARCHIVE_FFMPEG_PATH` | Optional | Absolute path or command name for `ffmpeg` when it is not available as `ffmpeg` on `PATH`. |
-| `ARCHIVE_ACCOUNT_CODES` | Optional | JSON object mapping internal user IDs to initial passwords for accounts that do not yet have a stored password hash. Prefer managing passwords in the Users page after setup. |
+| `ARCHIVE_TRUSTED_IP_HEADER` | Optional | A proxy-overwritten single IP header: `x-real-ip`, `cf-connecting-ip`, or `x-forwarded-for`. Requires blocked direct origin access. Unset uses one shared login throttle bucket. |
+| `ARCHIVE_ACCOUNT_CODES` | Initial setup if no stored credentials | JSON object mapping internal user IDs to initial passwords for accounts that do not yet have a stored password hash. Prefer managing passwords in the Users page after setup. |
 
 Example optional account-code configuration:
 
@@ -227,7 +229,7 @@ Example optional account-code configuration:
 ARCHIVE_ACCOUNT_CODES='{"adam":"use-a-long-unique-password"}'
 ```
 
-Do not change `ARCHIVE_AUTH_SECRET` casually. Existing password hashes use that secret, and changing it invalidates active sessions and can prevent stored passwords from matching. Treat the secret and the storage directory as two parts of the same installation.
+Do not change `ARCHIVE_AUTH_SECRET` casually. Legacy password hashes use that secret until upgraded on successful login, and changing it invalidates active sessions and can prevent stored passwords from matching. Treat the secret and the storage directory as two parts of the same installation.
 
 ### Installation settings
 
@@ -499,7 +501,7 @@ npm run build
 - This architecture is best suited to a personal archive or a small trusted group, not an untrusted public upload service or a horizontally scaled deployment.
 - All library pages and file endpoints require authentication; there is no anonymous public-sharing mode.
 - There is no self-registration, email recovery, or automatic password-reset flow. The Admin manages accounts directly.
-- The initial `admin` password is publicly known and must be changed immediately.
+- Fresh installations require an explicitly configured initial password; there is no built-in `admin` password.
 - Account deletion removes that member's interaction history. File and project deletion removes audio from disk and is not recoverable without a backup.
 - Large uploads are read and processed by the Node.js application, so memory, request limits, proxy timeouts, and available disk space must be sized accordingly.
 - Review [SECURITY.md](SECURITY.md) before exposing an archive to the internet.

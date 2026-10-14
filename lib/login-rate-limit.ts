@@ -1,3 +1,5 @@
+import { getStorageRoot } from './storage';
+import { isIP } from 'net';
 import { writeJsonAtomic } from '@/lib/json-storage';
 import { createHmac } from 'crypto';
 import fs from 'fs';
@@ -17,16 +19,16 @@ interface LoginAttemptRecord {
 type LoginAttemptData = Record<string, LoginAttemptRecord>;
 
 const getSecret = () => process.env.ARCHIVE_AUTH_SECRET || 'songie-local-dev-secret';
-const getAttemptsFile = () => path.join(process.cwd(), 'data/login-attempts.json');
+const getAttemptsFile = () => path.join(getStorageRoot(), 'login-attempts.json');
 
 const getClientAddress = (req: NextRequest) => {
-  const forwardedFor = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
-  return (
-    req.headers.get('cf-connecting-ip') ||
-    req.headers.get('x-real-ip') ||
-    forwardedFor ||
-    'unknown'
-  );
+  // NextRequest does not provide a trustworthy socket address. Only opt into
+  // a header when the network proxy overwrites it and direct origin access is blocked.
+  const header = process.env.ARCHIVE_TRUSTED_IP_HEADER?.toLowerCase();
+  if (!header) return 'shared';
+  if (!['x-real-ip', 'cf-connecting-ip', 'x-forwarded-for'].includes(header)) throw new Error('Invalid trusted IP header');
+  const address = req.headers.get(header)?.trim();
+  return address && isIP(address) ? address.toLowerCase() : 'shared';
 };
 
 const getRateLimitKey = (req: NextRequest, userId: string | undefined) => {
@@ -37,14 +39,19 @@ const getRateLimitKey = (req: NextRequest, userId: string | undefined) => {
   return `${account}:${clientHash}`;
 };
 
-const readAttempts = () => {
+const readAttempts = (): LoginAttemptData => {
+  let value: unknown;
   try {
-    const attemptsFile = getAttemptsFile();
-    if (!fs.existsSync(attemptsFile)) return {};
-    return JSON.parse(fs.readFileSync(attemptsFile, 'utf8')) as LoginAttemptData;
-  } catch {
-    return {};
+    value = JSON.parse(fs.readFileSync(getAttemptsFile(), 'utf8'));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw new Error('Login limiter storage unavailable');
   }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid login limiter storage');
+  for (const record of Object.values(value)) {
+    if (!record || !Number.isInteger(record.count) || record.count < 0 || !Number.isFinite(record.firstAttemptAt) || (record.lockedUntil !== undefined && !Number.isFinite(record.lockedUntil))) throw new Error('Invalid login limiter record');
+  }
+  return value as LoginAttemptData;
 };
 
 const writeAttempts = (attempts: LoginAttemptData) => {
@@ -89,6 +96,7 @@ export const recordFailedLogin = (req: NextRequest, userId: string | undefined) 
   pruneExpiredAttempts(attempts, now);
   const key = getRateLimitKey(req, userId);
   const existing = attempts[key];
+  if (!existing && Object.keys(attempts).length >= 10000) throw new Error('Login limiter capacity reached');
   const record = existing && existing.firstAttemptAt + ATTEMPT_WINDOW_MS > now
     ? existing
     : { count: 0, firstAttemptAt: now };

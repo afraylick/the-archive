@@ -47,10 +47,11 @@ const request = (url, method = 'GET', body, userId = 'adam') => new NextRequest(
   headers: { cookie: `archive_session=${auth.createSessionToken(userId)}`, ...(body && !(body instanceof FormData) ? { 'content-type': 'application/json' } : {}) },
   ...(body ? { body: body instanceof FormData ? body : JSON.stringify(body) } : {}),
 });
-const setup = () => {
+const setup = async () => {
   process.env.ARCHIVE_STORAGE_DIR = fs.mkdtempSync(path.join(scratch, 'archive-'));
   storage.ensureStorageDirs();
   auth.getPublicUsers(); // Initialize clean settings before creating data.json.
+  await auth.setUserPasscode('adam', 'fixture-admin-password');
   fs.writeFileSync(storage.getUploadPath(fixture.id), Buffer.alloc(100));
   save([fixture]);
 };
@@ -79,7 +80,7 @@ const form = (field = 'files') => {
 
 test('archive persistence regressions', async t => {
   await t.test('library GET preserves missing records and leaves bytes unchanged', async () => {
-    setup();
+    await setup();
     save([{ ...fixture, comments: [{ userId: 'adam', text: 'Legacy comment' }] }, { ...fixture, id: 'missing.wav' }]);
     const before = fs.readFileSync(storage.getDataFilePath(), 'utf8');
     const first = await (await libraryRoute.GET(request('/api/files'))).json();
@@ -89,7 +90,7 @@ test('archive persistence regressions', async t => {
     assert.equal(first[0].comments[0].id, second[0].comments[0].id);
   });
   await t.test('legacy comments retain usable IDs after read-only normalization', async () => {
-    setup();
+    await setup();
     save([{ ...fixture, comments: [{ text: 'old note' }, { userId: 'adam', text: 'Legacy comment' }] }]);
     const files = await (await libraryRoute.GET(request('/api/files'))).json();
     const commentId = files[0].comments[0].id;
@@ -101,8 +102,8 @@ test('archive persistence regressions', async t => {
     assert.equal(read()[0].comments.length, 1);
     assert.equal(read()[0].comments[0].text, 'Concurrent comment');
   });
-  await t.test('partial temporary writes cannot truncate the committed file', t => {
-    setup(); const before = fs.readFileSync(storage.getDataFilePath(), 'utf8');
+  await t.test('partial temporary writes cannot truncate the committed file', async t => {
+    await setup(); const before = fs.readFileSync(storage.getDataFilePath(), 'utf8');
     const originalWrite = fs.writeFileSync;
     t.mock.method(fs, 'writeFileSync', (target, content, options) => {
       if (typeof target === 'number') {
@@ -116,7 +117,7 @@ test('archive persistence regressions', async t => {
     assert.equal(fs.readdirSync(storage.getStorageRoot()).some(name => name.endsWith('.tmp')), false);
   });
   await t.test('generation preserves comments committed while processing', async t => {
-    setup(); const gate = pauseGeneration(t);
+    await setup(); const gate = pauseGeneration(t);
     const processing = waveformRoute.POST(request('/waveform', 'POST'), context);
     await gate.waitFor(1); await addComment(); gate.finish();
     assert.equal((await processing).status, 200);
@@ -124,14 +125,14 @@ test('archive persistence regressions', async t => {
     assert.equal(read()[0].waveformDuration, 10);
   });
   await t.test('generation does not resurrect deleted records', async t => {
-    setup(); const gate = pauseGeneration(t);
+    await setup(); const gate = pauseGeneration(t);
     const processing = waveformRoute.POST(request('/waveform', 'POST'), context);
     await gate.waitFor(1);
     assert.equal((await deleteRoute.DELETE(request('/fixture', 'DELETE'), context)).status, 200);
     gate.finish(); assert.equal((await processing).status, 404); assert.deepEqual(read(), []);
   });
   await t.test('simultaneous batches preserve each other and concurrent comments', async t => {
-    setup(); const gate = pauseGeneration(t);
+    await setup(); const gate = pauseGeneration(t);
     const first = uploadRoute.POST(request('/api/upload', 'POST', form()));
     const second = uploadRoute.POST(request('/api/upload', 'POST', form()));
     await gate.waitFor(2); await addComment(); gate.finish(1); gate.finish(0);
@@ -139,29 +140,29 @@ test('archive persistence regressions', async t => {
     assert.equal(read().length, 3); assert.equal(read()[0].comments.length, 1);
   });
   await t.test('version upload preserves concurrent comments', async t => {
-    setup(); const gate = pauseGeneration(t);
+    await setup(); const gate = pauseGeneration(t);
     const processing = versionRoute.POST(request('/uploads', 'POST', form('file')), context);
     await gate.waitFor(1); await addComment(); gate.finish();
     assert.equal((await processing).status, 201);
     assert.equal(read().length, 2); assert.equal(read()[0].comments.length, 1);
   });
   await t.test('version upload checks the parent at commit time and cleans its file', async t => {
-    setup(); const gate = pauseGeneration(t);
+    await setup(); const gate = pauseGeneration(t);
     const processing = versionRoute.POST(request('/uploads', 'POST', form('file')), context);
     await gate.waitFor(1);
     await deleteRoute.DELETE(request('/fixture', 'DELETE'), context);
     gate.finish(); assert.equal((await processing).status, 404);
     assert.deepEqual(read(), []); assert.deepEqual(fs.readdirSync(storage.getUploadsDir()), []);
   });
-  await t.test('a failed atomic replacement preserves the original and removes temporary files', t => {
-    setup(); const before = fs.readFileSync(storage.getDataFilePath(), 'utf8');
+  await t.test('a failed atomic replacement preserves the original and removes temporary files', async t => {
+    await setup(); const before = fs.readFileSync(storage.getDataFilePath(), 'utf8');
     t.mock.method(fs, 'renameSync', () => { throw new Error('simulated failed commit'); });
     assert.throws(() => save([]), /simulated failed commit/);
     assert.equal(fs.readFileSync(storage.getDataFilePath(), 'utf8'), before);
     assert.equal(fs.readdirSync(storage.getStorageRoot()).some(name => name.endsWith('.tmp')), false);
   });
-  await t.test('malformed metadata is not silently replaced', () => {
-    setup(); fs.writeFileSync(storage.getDataFilePath(), '{broken');
+  await t.test('malformed metadata is not silently replaced', async () => {
+    await setup(); fs.writeFileSync(storage.getDataFilePath(), '{broken');
     assert.throws(() => json.updateArchive(current => [...current, fixture]));
     assert.equal(fs.readFileSync(storage.getDataFilePath(), 'utf8'), '{broken');
   });
@@ -175,15 +176,15 @@ const stemForm = () => {
   body.append('file', new File(['new zip'], 'new.zip', { type: 'application/zip' }));
   return body;
 };
-const setupStem = () => {
-  setup();
+const setupStem = async () => {
+  await setup();
   save([{ ...fixture, stems: { id: 'old.zip', name: 'old.zip', uploadedAt: '2020-01-01' } }]);
   fs.writeFileSync(storage.getStemPath('old.zip'), 'original zip');
 };
 
 test('targeted edits and attachment lifecycle', async t => {
   await t.test('unrelated edits preserve server-owned fields and concurrent interactions', async () => {
-    setup();
+    await setup();
     const original = { ...fixture, originalName: 'original.wav', ratings: { adam: 4, member: 5 }, ratingUpdatedAt: { member: 'recent' }, likedBy: ['member'], collections: ['New collection'], notes: 'original', waveformPeaks: generated.waveformPeaks, waveformDuration: 10, waveformCacheVersion: 5, stems: { id: 'new.zip' } };
     save([original]);
     await addComment();
@@ -193,19 +194,19 @@ test('targeted edits and attachment lifecycle', async t => {
     assert.equal(read()[0].comments.length, 1);
   });
   await t.test('legacy whole-record PUT is rejected without changing data', async () => {
-    setup(); await addComment(); const before = read();
+    await setup(); await addComment(); const before = read();
     const response = await deleteRoute.PUT(request('/api/files/fixture.wav', 'PUT', { ...fixture, name: 'Stale' }), context);
     assert.equal(response.status, 409); assert.deepEqual(read(), before);
   });
   await t.test('invalid or protected metadata fields are rejected atomically', async () => {
-    setup(); const before = read();
+    await setup(); const before = read();
     for (const changes of [{ id: 'other.wav' }, { projectId: 'other.wav' }, { comments: [] }, { ratings: {} }, { stems: null }, { waveformPeaks: [] }, { likedBy: [] }, { collections: [] }, { name: '' }, { notes: 'x'.repeat(10001) }, { year: 1800 }, { year: 2020.5 }, { vibes: [123] }, { defaultVersionId: 'unrelated.wav' }]) {
       assert.equal((await patch({ operation: 'metadata', changes: { name: 'Must not apply', ...changes } })).status, 400);
       assert.deepEqual(read(), before);
     }
   });
   await t.test('metadata aliases and year derive from the latest persisted record', async () => {
-    setup(); save([{ ...fixture, createdAt: '2020-05-06T12:00:00.000Z' }]);
+    await setup(); save([{ ...fixture, createdAt: '2020-05-06T12:00:00.000Z' }]);
     const response = await patch({ operation: 'metadata', changes: { instruments: ['Guitar'], year: 2024, name: 'Renamed' } });
     assert.equal(response.status, 200);
     assert.equal(read()[0].instrument, 'Guitar');
@@ -213,7 +214,7 @@ test('targeted edits and attachment lifecycle', async t => {
     assert.equal(read()[0].createdAt, '2024-05-06T12:00:00.000Z');
   });
   await t.test('waveform removal and rating reset are explicit and preserve unrelated data', async () => {
-    setup(); save([{ ...fixture, ...generated, waveformCacheVersion: 5, ratings: { adam: 4, member: 5 }, ratingUpdatedAt: { adam: 'keep', member: 'remove' }, notes: 'keep me' }]);
+    await setup(); save([{ ...fixture, ...generated, waveformCacheVersion: 5, ratings: { adam: 4, member: 5 }, ratingUpdatedAt: { adam: 'keep', member: 'remove' }, notes: 'keep me' }]);
     assert.equal((await patch({ operation: 'reset-member-ratings' })).status, 200);
     assert.deepEqual(read()[0].ratings, { adam: 4 }); assert.deepEqual(read()[0].ratingUpdatedAt, { adam: 'keep' });
     assert.equal(read()[0].waveformDuration, 10);
@@ -224,7 +225,7 @@ test('targeted edits and attachment lifecycle', async t => {
     assert.equal(read()[0].notes, 'keep me'); assert.deepEqual(read()[0].ratings, { adam: 4 });
   });
   await t.test('rating reset preserves legacy administrator ratings', async () => {
-    setup(); save([{ id: fixture.id, name: fixture.name, rating: 5 }]);
+    await setup(); save([{ id: fixture.id, name: fixture.name, rating: 5 }]);
     assert.equal((await patch({ operation: 'reset-member-ratings' })).status, 200);
     assert.equal(read()[0].ratings.adam, 5);
     save([{ ...fixture, myRating: 5, ratings: { adam: 0, member: 3 } }]);
@@ -232,7 +233,7 @@ test('targeted edits and attachment lifecycle', async t => {
     assert.equal(read()[0].ratings.adam, 0);
   });
   await t.test('deleting a default variation preserves its parent and other recordings', async () => {
-    setup();
+    await setup();
     const variant = { ...fixture, id: 'variation.wav', projectId: fixture.id };
     save([{ ...fixture, defaultVersionId: variant.id, notes: 'keep' }, variant]);
     fs.writeFileSync(storage.getUploadPath(variant.id), 'audio');
@@ -245,7 +246,7 @@ test('targeted edits and attachment lifecycle', async t => {
     assert.equal(fs.existsSync(storage.getUploadPath(variant.id)), false);
   });
   await t.test('members can cache waveforms but cannot edit metadata reset ratings or cull', async () => {
-    setup(); const member = auth.createUser('Member', 'member-password');
+    await setup(); const member = await auth.createUser('Member', 'member-password');
     for (const mutation of [{ operation: 'metadata', changes: { notes: 'no' } }, { operation: 'reset-member-ratings' }, { operation: 'waveform', waveform: null }]) {
       assert.equal((await patch(mutation, member.id)).status, 403);
     }
@@ -256,7 +257,7 @@ test('targeted edits and attachment lifecycle', async t => {
     assert.equal((await deleteRoute.PATCH(anonymous, context)).status, 401);
   });
   await t.test('proxy allows own-comment deletion and the route rejects other owners', async () => {
-    setup(); const member = auth.createUser('Member', 'member-password');
+    await setup(); const member = await auth.createUser('Member', 'member-password');
     await addComment();
     const adminComment = read()[0].comments[0].id;
     const posted = await commentsRoute.POST(request('/api/files/fixture.wav/comments', 'POST', { text: 'Member comment' }, member.id), context);
@@ -269,7 +270,7 @@ test('targeted edits and attachment lifecycle', async t => {
     assert.equal((await deleteRoute.DELETE(request('/api/files/fixture.wav', 'DELETE', undefined, member.id), context)).status, 403);
   });
   await t.test('failed new attachment write preserves the original attachment', async t => {
-    setupStem(); const before = read(); const original = fs.writeFileSync;
+    await setupStem(); const before = read(); const original = fs.writeFileSync;
     t.mock.method(fs, 'writeFileSync', (target, ...args) => {
       if (typeof target === 'string' && target.startsWith(storage.getStemsDir())) {
         original(target, 'partial'); throw new Error('Disk full');
@@ -281,13 +282,13 @@ test('targeted edits and attachment lifecycle', async t => {
     assert.equal(fs.readFileSync(storage.getStemPath('old.zip'), 'utf8'), 'original zip');
   });
   await t.test('failed metadata commit rolls back only the new attachment', async t => {
-    setupStem(); const before = read();
+    await setupStem(); const before = read();
     t.mock.method(json, 'writeJsonAtomic', () => { throw new Error('Commit failed'); });
     assert.equal((await stemsRoute.POST(request('/stems', 'POST', stemForm()), context)).status, 500);
     assert.deepEqual(read(), before); assert.deepEqual(fs.readdirSync(storage.getStemsDir()), ['old.zip']);
   });
   await t.test('replacement commits the new reference before cleaning the old file', async t => {
-    setupStem(); const original = fs.rmSync;
+    await setupStem(); const original = fs.rmSync;
     t.mock.method(fs, 'rmSync', (target, options) => {
       if (target === storage.getStemPath('old.zip')) {
         assert.notEqual(read()[0].stems.id, 'old.zip');
@@ -299,7 +300,7 @@ test('targeted edits and attachment lifecycle', async t => {
     assert.equal(fs.existsSync(storage.getStemPath('old.zip')), false);
   });
   await t.test('failed deletion commits leave original stems and project files intact', async t => {
-    setupStem(); const before = read();
+    await setupStem(); const before = read();
     t.mock.method(json, 'writeJsonAtomic', () => { throw new Error('Commit failed'); });
     assert.equal((await stemsRoute.DELETE(request('/stems', 'DELETE'), context)).status, 500);
     assert.equal((await deleteRoute.DELETE(request('/fixture', 'DELETE'), context)).status, 500);
@@ -308,7 +309,7 @@ test('targeted edits and attachment lifecycle', async t => {
     assert.equal(fs.existsSync(storage.getUploadPath(fixture.id)), true);
   });
   await t.test('cleanup failure cannot undo or misreport a committed project deletion', async t => {
-    setupStem();
+    await setupStem();
     t.mock.method(console, 'error', () => {});
     t.mock.method(fs, 'rmSync', () => { assert.deepEqual(read(), []); throw new Error('Cleanup unavailable'); });
     assert.equal((await deleteRoute.DELETE(request('/fixture', 'DELETE'), context)).status, 200);

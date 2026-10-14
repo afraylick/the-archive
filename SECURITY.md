@@ -5,10 +5,10 @@ Do not copy a development `data` directory over the production storage directory
 
 ## Required production environment
 
-- `ARCHIVE_AUTH_SECRET`: long random secret used to sign sessions and password hashes. Set this before starting the app in production.
+- `ARCHIVE_AUTH_SECRET`: long random secret used to sign sessions and verify legacy password hashes. Set this before starting the app in production.
 - `ARCHIVE_STORAGE_DIR`: absolute path to the production storage directory that contains `data.json`, `uploads`, `stems`, `users.json`, and `accounts.json`.
 
-New archives initially accept the password `admin` for the Admin account. Change it immediately from the Manage Users page. User passwords created or changed in production must be at least eight characters.
+New archives have no default password. Set `ARCHIVE_ACCOUNT_CODES='{"adam":"choose-a-long-unique-password"}'` explicitly for initial setup. The first successful login persists a salted scrypt hash; then remove this setting and restart. User passwords created or changed in production must be at least eight characters.
 
 Generate a secret with:
 
@@ -25,3 +25,20 @@ cp -a "$ARCHIVE_STORAGE_DIR" "$ARCHIVE_STORAGE_DIR.backup.$(date +%F-%H%M)"
 ```
 
 Then pull/build/restart the app. Git should only update code, not the storage directory.
+
+
+## Stage 3 upgrade and rollback
+
+Keep the existing storage path and signing secret. Existing stored passwords and account IDs remain valid. Successful login upgrades legacy HMAC hashes to salted scrypt hashes in `users.json`; recordings and their metadata are not migrated. Accounts still relying on old built-in passwords (`admin` or a legacy account name) need an explicit operator-configured password before rollout; those public defaults are intentionally retired. Older sessions are rejected once this release is installed, so everyone must sign in again. Password resets invalidate that account's existing sessions, including resets to the same password.
+
+Back up the complete storage directory with the app stopped before upgrading, including any legacy `./data/users.json` and `./data/accounts.json` when those differ from the configured storage root. The new `credentials-initialized.json` marker must stay with `users.json`: missing credentials after initialization or corrupt credentials fail closed. Restore missing/corrupt files from backup; do not remove the marker to bypass the check.
+
+Old releases cannot verify the new scrypt hashes. A rollback therefore needs the matching pre-upgrade credential/account files as well as the old code and original secret. Account/password changes made since that backup must be reconciled before rollback; do not overwrite newer recordings or archive metadata with an old storage snapshot.
+
+## Proxy and processing limits
+
+Login throttling is stored under `ARCHIVE_STORAGE_DIR`. By default all clients share a bucket, locked for 15 minutes after seven failed attempts. Forwarding headers are ignored unless `ARCHIVE_TRUSTED_IP_HEADER` explicitly names `x-real-ip`, `cf-connecting-ip`, or `x-forwarded-for`. Only enable this when your proxy overwrites that header with one IP and direct origin access is blocked. Missing, invalid, or multi-address values use the shared bucket. Corrupt limiter storage denies login until repaired.
+
+Password operations are serialized with at most 16 waiting jobs. Audio generation/transcoding shares two active jobs and eight waiting jobs per process. Queued jobs time out after 30 seconds. Each ffmpeg invocation times out after two minutes, limits stderr to 64 KiB, and limits decoded waveform output to four hours at 8 kHz. The WAV fallback independently validates format/frame/chunk boundaries, limits duration to four hours, and times out after two minutes. An ffmpeg failure can be followed by a WAV fallback, so the overall operation can take longer than two minutes.
+
+These limits and JSON transactions assume one application process per storage root. Multiple workers or replicas require shared locking/transactional storage before deployment.
