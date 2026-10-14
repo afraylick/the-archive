@@ -21,7 +21,7 @@ Validation: `npm test` passes 10 focused regression cases (11 reported tests inc
 
 ## Stage 2 Make edits and attachment changes safe
 
-Status: Planned.
+Status: Complete locally; not deployed.
 
 - Replace browser whole-record PUTs with validated field-specific operations across library, management, and focused player screens.
 - Preserve unrelated comments, ratings, collections, waveform data, and server-owned identifiers when an older browser edits metadata.
@@ -30,6 +30,12 @@ Status: Planned.
 - Correct member comment deletion authorization and the focused player's legacy comment submission.
 
 Acceptance: two stale clients can edit unrelated fields without losing changes; failed attachment replacement preserves the original; route authorization tests pass.
+
+Implemented explicit PATCH operations for metadata, waveform replacement/removal, and member-rating reset. All three screens send only their intended changes and merge committed fields into current state; server waveform regeneration no longer triggers a redundant whole-record save. The retired whole-record PUT returns 409 so previously open clients cannot overwrite current records. Reload open pages after rollout. Separate edits to the same field remain last-write-wins; unrelated fields are preserved.
+
+Stems replacement writes the new ZIP first, commits its metadata, then removes the old ZIP. Failed writes/commits preserve the original and attempt to remove the uncommitted new file. Stems and project deletion commit metadata before disk cleanup. Cleanup failures are logged and may leave orphan files; they do not invalidate live references or report an already-committed operation as failed. Member comment deletion now reaches the ownership check, and the focused player submits attributed comments through the comments endpoint.
+
+Validation: `npm test` passes 24 focused cases (26 reported tests including two parent groups), including stale edits, protected-field validation, authorization, legacy ratings, variant deletion, and attachment write/commit/cleanup failures. Lint and production build pass; the existing tracing warning remains Stage 5 work. Tests use isolated storage; no production migration or deployment was performed.
 
 ## Stage 3 Harden authentication and audio processing
 

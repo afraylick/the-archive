@@ -1,9 +1,10 @@
 'use client';
 
+import { mutateRecording, type RecordingMutation, type MetadataChanges } from '@/lib/recording-mutations';
+
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
-import { getCreatedAtWithYear } from '@/lib/recorded-date';
 
 interface AudioFile {
   id: string;
@@ -121,14 +122,14 @@ const findManagedFile = (projects: AudioFile[], id: string) => (
   getAllManagedFiles(projects).find(file => file.id === id)
 );
 
-const replaceManagedFile = (projects: AudioFile[], updatedFile: AudioFile) => projects.map(project => {
+const replaceManagedFile = (projects: AudioFile[], updatedFile: Partial<AudioFile> & { id: string }) => projects.map(project => {
   if (project.id === updatedFile.id) {
-    return { ...updatedFile, uploads: project.uploads };
+    return { ...project, ...updatedFile, uploads: project.uploads };
   }
   if (!project.uploads?.some(upload => upload.id === updatedFile.id)) return project;
   return {
     ...project,
-    uploads: project.uploads.map(upload => upload.id === updatedFile.id ? updatedFile : upload),
+    uploads: project.uploads.map(upload => upload.id === updatedFile.id ? { ...upload, ...updatedFile } : upload),
   };
 });
 
@@ -412,52 +413,26 @@ export default function ManagePage() {
 
   const resetFriendRatings = async (id: string) => {
     try {
-      const file = findManagedFile(files, id);
-      if (!file) return;
-      const updatedFile = {
-        ...file,
-        userRating: 0,
-        ratings: { adam: file.ratings?.adam || file.myRating || 0 },
-      };
-      const res = await fetch(`/api/files/${encodeURIComponent(id)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedFile),
-      });
-      if (res.ok) {
-        setFiles(prev => replaceManagedFile(prev, updatedFile));
-      } else {
-        alert('Failed to reset ratings');
-      }
+      await saveFile(id, { operation: 'reset-member-ratings' }, 'Failed to reset ratings');
     } catch {
       alert('Error resetting ratings');
     }
   };
 
-  const saveFile = async (updatedFile: AudioFile, errorMessage: string) => {
-    const persistedFile = { ...updatedFile };
-    delete persistedFile.uploads;
-    const res = await fetch(`/api/files/${encodeURIComponent(updatedFile.id)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(persistedFile),
-    });
-
-    if (!res.ok) {
+  const saveFile = async (id: string, mutation: RecordingMutation, errorMessage: string) => {
+    try {
+      const changes = await mutateRecording<AudioFile>(id, mutation);
+      setFiles(prev => replaceManagedFile(prev, { id, ...changes }));
+    } catch {
       throw new Error(errorMessage);
     }
-
-    setFiles(prev => replaceManagedFile(prev, updatedFile));
   };
 
   const refreshWaveformFromPreview = async (file: AudioFile, waveformPeaks: number[][], waveformDuration: number) => {
     await saveFile(
-      {
-        ...file,
-        waveformPeaks,
-        waveformDuration,
-        waveformCacheVersion: WAVEFORM_CACHE_VERSION,
-      },
+      file.id, { operation: 'waveform', waveform: {
+        waveformPeaks, waveformDuration, waveformCacheVersion: WAVEFORM_CACHE_VERSION,
+      } },
       'Failed to save refreshed waveform'
     );
   };
@@ -466,7 +441,7 @@ export default function ManagePage() {
     setWaveformProcessingId(file.id);
     try {
       await saveFile(
-        { ...file, waveformPeaks: undefined, waveformDuration: undefined, waveformCacheVersion: undefined },
+        file.id, { operation: 'waveform', waveform: null },
         'Failed to cull waveform'
       );
     } catch {
@@ -485,15 +460,10 @@ export default function ManagePage() {
 
       if (serverRes.ok) {
         const waveformData = await serverRes.json() as WaveformGenerationResponse;
-        await saveFile(
-          {
-            ...file,
-            waveformPeaks: waveformData.waveformPeaks,
-            waveformDuration: waveformData.waveformDuration,
-            waveformCacheVersion: waveformData.waveformCacheVersion,
-          },
-          'Failed to save waveform'
-        );
+        setFiles(prev => replaceManagedFile(prev, {
+          id: file.id, waveformPeaks: waveformData.waveformPeaks,
+          waveformDuration: waveformData.waveformDuration, waveformCacheVersion: waveformData.waveformCacheVersion,
+        }));
         return;
       }
 
@@ -507,12 +477,11 @@ export default function ManagePage() {
 
       const audioBuffer = await audioContext.decodeAudioData(await res.arrayBuffer());
       await saveFile(
-        {
-          ...file,
+        file.id, { operation: 'waveform', waveform: {
           waveformPeaks: createWaveformPeaks(audioBuffer),
           waveformDuration: audioBuffer.duration,
           waveformCacheVersion: WAVEFORM_CACHE_VERSION,
-        },
+        } },
         'Failed to save waveform'
       );
     } catch (error) {
@@ -530,7 +499,7 @@ export default function ManagePage() {
       setWaveformBulkStatus(`Culled 0/${managedFiles.length}`);
       for (let i = 0; i < managedFiles.length; i++) {
         await saveFile(
-          { ...managedFiles[i], waveformPeaks: undefined, waveformDuration: undefined, waveformCacheVersion: undefined },
+          managedFiles[i].id, { operation: 'waveform', waveform: null },
           'Failed to cull waveform'
         );
         setWaveformBulkStatus(`Culled ${i + 1}/${managedFiles.length}`);
@@ -566,7 +535,7 @@ export default function ManagePage() {
       });
       if (res.ok) {
         const ratingData = await res.json() as Pick<AudioFile, 'ratings' | 'myRating' | 'userRating'>;
-        const updatedFile = { ...file, ...ratingData };
+        const updatedFile = { id: file.id, ...ratingData };
         setFiles(prev => replaceManagedFile(prev, updatedFile));
       } else {
         alert('Failed to update rating');
@@ -578,7 +547,7 @@ export default function ManagePage() {
 
   const updateFinish = async (file: AudioFile, finish: string) => {
     try {
-      await saveFile({ ...file, finish: file.finish === finish ? '' : finish }, 'Failed to update finish');
+      await saveFile(file.id, { operation: 'metadata', changes: { finish: file.finish === finish ? '' : finish } }, 'Failed to update finish');
     } catch {
       alert('Failed to update finish');
     }
@@ -595,11 +564,7 @@ export default function ManagePage() {
 
     try {
       await saveFile(
-        {
-          ...file,
-          year,
-          createdAt: getCreatedAtWithYear(file.createdAt, year),
-        },
+        file.id, { operation: 'metadata', changes: { year } },
         'Failed to update year'
       );
     } catch {
@@ -628,7 +593,7 @@ export default function ManagePage() {
         throw new Error(errorData?.error || 'Upload failed');
       }
       const data = await res.json() as { stems: StemAttachment };
-      setFiles(prev => replaceManagedFile(prev, { ...file, stems: data.stems }));
+      setFiles(prev => replaceManagedFile(prev, { id: file.id, stems: data.stems }));
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Failed to upload stems ZIP');
     } finally {
@@ -649,7 +614,7 @@ export default function ManagePage() {
         const errorData = await res.json().catch(() => null) as { error?: string } | null;
         throw new Error(errorData?.error || 'Stem deletion failed');
       }
-      setFiles(prev => replaceManagedFile(prev, { ...file, stems: undefined }));
+      setFiles(prev => replaceManagedFile(prev, { id: file.id, stems: undefined }));
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Failed to delete stems ZIP');
     } finally {
@@ -1002,7 +967,7 @@ export default function ManagePage() {
                         value={file.defaultVersionId || file.id}
                         onChange={async (event) => {
                           try {
-                            await saveFile({ ...file, defaultVersionId: event.target.value }, 'Failed to update default version');
+                            await saveFile(file.id, { operation: 'metadata', changes: { defaultVersionId: event.target.value } }, 'Failed to update default version');
                           } catch {
                             alert('Failed to update default version');
                           }
@@ -1159,11 +1124,12 @@ export default function ManagePage() {
                               event.preventDefault();
                               const formData = new FormData(event.currentTarget);
                               try {
-                                await saveFile({
-                                  ...variation,
-                                  originalName: String(formData.get('originalName') || '').trim() || variation.originalName,
-                                  notes: String(formData.get('notes') || ''),
-                                }, 'Failed to save variation');
+                                const changes: MetadataChanges = {};
+                                const originalName = String(formData.get('originalName') || '').trim() || variation.originalName;
+                                const notes = String(formData.get('notes') || '');
+                                if (originalName !== variation.originalName) changes.originalName = originalName;
+                                if (notes !== (variation.notes || '')) changes.notes = notes;
+                                if (Object.keys(changes).length) await saveFile(variation.id, { operation: 'metadata', changes }, 'Failed to save variation');
                               } catch {
                                 alert('Failed to save variation');
                               }

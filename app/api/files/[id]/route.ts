@@ -1,9 +1,10 @@
-import { writeJsonAtomic } from '@/lib/json-storage';
+import { getCreatedAtWithYear } from '@/lib/recorded-date';
+import { readArchive, writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser, type UserId } from '@/lib/auth';
 import fs from 'fs';
-import { getDataFilePath, getStemPath, getUploadPath, isSafeStorageId } from '@/lib/storage';
-import { isValidWaveformCache } from '@/lib/waveform';
+import { cleanupStorageFile, getDataFilePath, getStemPath, getUploadPath, isSafeStorageId } from '@/lib/storage';
+import { isValidWaveformCache, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
 
 interface AudioFileRecord {
   id: string;
@@ -27,6 +28,7 @@ interface AudioFileRecord {
   waveformCacheVersion?: number;
   year?: number;
   createdAt?: string;
+  rating?: number;
   myRating?: number;
   userRating?: number;
   ratings?: Partial<Record<UserId, number>>;
@@ -39,81 +41,79 @@ interface AudioFileRecord {
   };
 }
 
-export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+// Older clients must reload rather than replacing records from stale snapshots.
+export async function PUT(req: NextRequest) {
+  if (!getSessionUser(req)) return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+  return NextResponse.json({ error: 'Please reload the page before editing this recording' }, { status: 409 });
+}
+
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
     const user = getSessionUser(req);
-    if (!user) {
-      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    if (!user) return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return NextResponse.json({ error: 'Invalid mutation' }, { status: 400 });
     }
-
-    const updatedFile = await req.json() as AudioFileRecord;
-    delete updatedFile.uploads;
-    const dataFile = getDataFilePath();
-    let data: AudioFileRecord[] = [];
-    if (fs.existsSync(dataFile)) {
-      data = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
-    }
-    const index = data.findIndex((f) => f.id === id);
-    if (index === -1) {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
-    }
-    if (!user.isAdmin) {
-      if (updatedFile.waveformPeaks || updatedFile.waveformDuration) {
-        if (!isValidWaveformCache(updatedFile.waveformPeaks, updatedFile.waveformDuration, updatedFile.waveformCacheVersion)) {
-          return NextResponse.json({ error: 'Invalid waveform cache' }, { status: 400 });
-        }
-        data[index] = {
-          ...data[index],
-          waveformPeaks: updatedFile.waveformPeaks,
-          waveformDuration: updatedFile.waveformDuration,
-          waveformCacheVersion: updatedFile.waveformCacheVersion,
-        };
-        writeJsonAtomic(dataFile, data);
-        return NextResponse.json({ message: 'Waveform updated successfully' });
-      }
-
+    if (!user.isAdmin && (body.operation !== 'waveform' || body.waveform === null)) {
       return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
     }
-
-    if (Array.isArray(updatedFile.instruments)) {
-      updatedFile.instrument = updatedFile.instruments[0] || '';
-    }
-    if (Array.isArray(updatedFile.vibes)) {
-      updatedFile.vibe = updatedFile.vibes[0] || '';
-    }
-    updatedFile.collections = Array.isArray(updatedFile.collections)
-      ? Array.from(new Set(updatedFile.collections.filter(Boolean)))
-      : [];
-    if (updatedFile.year !== undefined && (!Number.isInteger(updatedFile.year) || updatedFile.year < 1900 || updatedFile.year > 2100)) {
-      updatedFile.year = data[index].year;
-      updatedFile.createdAt = data[index].createdAt;
-    }
-    updatedFile.ratings = updatedFile.ratings || {};
-    updatedFile.ratings.adam = updatedFile.ratings.adam || updatedFile.myRating || 0;
-    updatedFile.myRating = updatedFile.ratings.adam || 0;
-    if (updatedFile.waveformPeaks || updatedFile.waveformDuration) {
-      if (!isValidWaveformCache(updatedFile.waveformPeaks, updatedFile.waveformDuration, updatedFile.waveformCacheVersion)) {
-        delete updatedFile.waveformPeaks;
-        delete updatedFile.waveformDuration;
-        delete updatedFile.waveformCacheVersion;
+    const data = readArchive<AudioFileRecord>();
+    const index = data.findIndex(file => file.id === id);
+    if (index < 0) return NextResponse.json({ error: 'File not found' }, { status: 404 });
+    const current = data[index];
+    const changes: Record<string, unknown> = {};
+    const invalid = () => NextResponse.json({ error: 'Invalid mutation fields' }, { status: 400 });
+    if (body.operation === 'metadata') {
+      const input = body.changes;
+      if (!input || typeof input !== 'object' || Array.isArray(input) || !Object.keys(input).length) return invalid();
+      for (const [key, value] of Object.entries(input)) {
+        if (['name', 'originalName', 'notes', 'finish'].includes(key)) {
+          const limit = key === 'notes' ? 10000 : key === 'finish' ? 80 : 255;
+          if (typeof value !== 'string' || value.length > limit || (['name', 'originalName'].includes(key) && !value.trim())) return invalid();
+          changes[key] = value;
+        } else if (key === 'instruments' || key === 'vibes') {
+          if (!Array.isArray(value) || value.length > 25 || value.some(tag => typeof tag !== 'string' || !tag.trim() || tag.length > 80)) return invalid();
+          changes[key] = Array.from(new Set(value.map(tag => tag.trim())));
+          changes[key === 'instruments' ? 'instrument' : 'vibe'] = (changes[key] as string[])[0] || '';
+        } else if (key === 'year') {
+          if (typeof value !== 'number' || !Number.isInteger(value) || value < 1900 || value > 2100) return invalid();
+          changes.year = value;
+          changes.createdAt = getCreatedAtWithYear(current.createdAt, value);
+        } else if (key === 'defaultVersionId') {
+          if (current.projectId || typeof value !== 'string' || !(value === id || data.some(file => file.id === value && file.projectId === id))) return invalid();
+          changes.defaultVersionId = value;
+        } else return invalid();
       }
-    }
-    if (!data[index].projectId) {
-      if (updatedFile.defaultVersionId === undefined && data[index].defaultVersionId) {
-        updatedFile.defaultVersionId = data[index].defaultVersionId;
+      if ('name' in changes && !current.originalName && !('originalName' in changes)) changes.originalName = current.name;
+    } else if (body.operation === 'waveform') {
+      const waveform = body.waveform;
+      if (waveform === null) {
+        changes.waveformPeaks = null;
+        changes.waveformDuration = null;
+        changes.waveformCacheVersion = null;
+      } else {
+        if (!waveform || !isValidWaveformCache(waveform.waveformPeaks, waveform.waveformDuration, waveform.waveformCacheVersion) || waveform.waveformPeaks.length !== 1 || waveform.waveformPeaks[0].length > WAVEFORM_PEAK_LENGTH) return invalid();
+        changes.waveformPeaks = waveform.waveformPeaks;
+        changes.waveformDuration = waveform.waveformDuration;
+        changes.waveformCacheVersion = waveform.waveformCacheVersion;
       }
-      const requestedDefaultId = updatedFile.defaultVersionId || id;
-      const validDefault = requestedDefaultId === id || data.some(file => file.id === requestedDefaultId && file.projectId === id);
-      updatedFile.defaultVersionId = validDefault ? requestedDefaultId : id;
+    } else if (body.operation === 'reset-member-ratings') {
+      const adminRating = current.ratings?.adam ?? current.myRating ?? current.rating ?? 0;
+      changes.ratings = { adam: adminRating };
+      changes.myRating = adminRating;
+      changes.userRating = 0;
+      changes.ratingUpdatedAt = current.ratingUpdatedAt?.adam ? { adam: current.ratingUpdatedAt.adam } : {};
+    } else return invalid();
+    data[index] = { ...current, ...changes };
+    if (body.operation === 'waveform' && body.waveform === null) {
+      delete data[index].waveformPeaks;
+      delete data[index].waveformDuration;
+      delete data[index].waveformCacheVersion;
     }
-    data[index] = {
-      ...updatedFile,
-      likedBy: data[index].likedBy,
-      ratingUpdatedAt: updatedFile.ratingUpdatedAt || data[index].ratingUpdatedAt,
-    };
-    writeJsonAtomic(dataFile, data);
-    return NextResponse.json({ message: 'Updated successfully' });
+    writeJsonAtomic(getDataFilePath(), data);
+    return NextResponse.json({ changes });
   } catch {
     return NextResponse.json({ error: 'Update failed' }, { status: 500 });
   }
@@ -141,20 +141,6 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     }
     const recordToDelete = data[index];
     const recordsToDelete = data.filter(file => file.id === id || file.projectId === id);
-    for (const record of recordsToDelete) {
-      if (isSafeStorageId(record.id)) {
-        const filePath = getUploadPath(record.id);
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
-        }
-      }
-      if (record.stems?.id && isSafeStorageId(record.stems.id)) {
-        const stemPath = getStemPath(record.stems.id);
-        if (fs.existsSync(stemPath)) {
-          fs.unlinkSync(stemPath);
-        }
-      }
-    }
     const deletedIds = new Set(recordsToDelete.map(record => record.id));
     const remainingData = data
       .filter(record => !deletedIds.has(record.id))
@@ -163,6 +149,10 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
         : record
       );
     writeJsonAtomic(dataFile, remainingData);
+    for (const record of recordsToDelete) {
+      if (isSafeStorageId(record.id)) cleanupStorageFile(getUploadPath(record.id));
+      if (record.stems?.id && isSafeStorageId(record.stems.id)) cleanupStorageFile(getStemPath(record.stems.id));
+    }
     return NextResponse.json({ message: 'Deleted successfully' });
   } catch {
     return NextResponse.json({ error: 'Delete failed' }, { status: 500 });

@@ -493,6 +493,8 @@ npm run build
 - The application is built with Next.js 16, React 19, TypeScript, Tailwind CSS 4, and WaveSurfer.js.
 - It expects a Node.js server runtime with a writable local filesystem. It is not designed for a static export.
 - Metadata is stored in one JSON file. Writes use synchronous read/modify/write operations with atomic file replacement; uploads and waveform generation re-read the latest metadata before committing. Library reads do not rewrite the archive or delete metadata for missing audio.
+- Recording edits update only explicitly submitted fields. Older open pages using the retired whole-record save must be reloaded after updating the application.
+- Attachment replacement and deletion commit metadata before cleaning up old files; cleanup failures are logged and may leave unreferenced files on disk.
 - Run one application process against a storage directory. Multiple replicas or concurrent writers can overwrite one another because there is no database transaction or distributed lock layer.
 - This architecture is best suited to a personal archive or a small trusted group, not an untrusted public upload service or a horizontally scaled deployment.
 - All library pages and file endpoints require authentication; there is no anonymous public-sharing mode.

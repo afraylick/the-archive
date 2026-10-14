@@ -1,9 +1,10 @@
+import { randomUUID } from 'crypto';
 import { writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
 import fs from 'fs';
 import { Readable } from 'stream';
-import { ensureStorageDirs, getDataFilePath, getSafeDownloadName, getStemPath, isSafeStorageId } from '@/lib/storage';
+import { cleanupStorageFile, ensureStorageDirs, getDataFilePath, getSafeDownloadName, getStemPath, isSafeStorageId } from '@/lib/storage';
 
 interface StemAttachment {
   id: string;
@@ -28,8 +29,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
 
     const formData = await req.formData();
-    const zipFile = formData.get('file') as File | null;
-    if (!zipFile || !zipFile.name.toLowerCase().endsWith('.zip')) {
+    const zipFile = formData.get('file');
+    if (!(zipFile instanceof File) || !zipFile.name.toLowerCase().endsWith('.zip')) {
       return NextResponse.json({ error: 'A ZIP file is required' }, { status: 400 });
     }
     if (zipFile.size > MAX_STEMS_ZIP_BYTES) {
@@ -48,15 +49,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     ensureStorageDirs();
 
-    if (data[index].stems?.id && isSafeStorageId(data[index].stems.id)) {
-      const oldPath = getStemPath(data[index].stems.id);
-      if (fs.existsSync(oldPath)) {
-        fs.unlinkSync(oldPath);
-      }
-    }
+    const previousStemId = data[index].stems?.id;
 
-    const stemId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}.zip`;
-    fs.writeFileSync(getStemPath(stemId), buffer);
+    const stemId = `${randomUUID()}.zip`;
+    const newStemPath = getStemPath(stemId);
+    try {
+      fs.writeFileSync(newStemPath, buffer, { flag: 'wx' });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') cleanupStorageFile(newStemPath);
+      throw error;
+    }
 
     const stems = {
       id: stemId,
@@ -64,7 +66,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       uploadedAt: new Date().toISOString(),
     };
     data[index] = { ...data[index], stems };
-    writeJsonAtomic(dataFile, data);
+    try {
+      writeJsonAtomic(dataFile, data);
+    } catch (error) {
+      cleanupStorageFile(newStemPath);
+      throw error;
+    }
+    if (previousStemId && isSafeStorageId(previousStemId)) cleanupStorageFile(getStemPath(previousStemId));
 
     return NextResponse.json({ stems });
   } catch {
@@ -91,15 +99,10 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     }
 
     const stemId = data[index].stems?.id;
-    if (stemId && isSafeStorageId(stemId)) {
-      const stemPath = getStemPath(stemId);
-      if (fs.existsSync(stemPath)) {
-        fs.unlinkSync(stemPath);
-      }
-    }
-
     data[index] = { ...data[index], stems: undefined };
     writeJsonAtomic(dataFile, data);
+
+    if (stemId && isSafeStorageId(stemId)) cleanupStorageFile(getStemPath(stemId));
 
     return NextResponse.json({ stems: null });
   } catch {

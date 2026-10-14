@@ -51,3 +51,12 @@ export const getAudioContentType = (filename: string) => {
 export const getSafeDownloadName = (filename: string) => (
   filename.replace(/[\r\n"]/g, '').replace(/[\\/]/g, '-')
 );
+
+/** Cleanup happens after metadata commits. Failure leaves an orphan, never a broken live reference. */
+export const cleanupStorageFile = (filePath: string) => {
+  try {
+    fs.rmSync(filePath, { force: true });
+  } catch (error) {
+    console.error('Storage cleanup failed', filePath, error);
+  }
+};

@@ -1,5 +1,7 @@
 'use client';
 
+import { mutateRecording, type MetadataChanges } from '@/lib/recording-mutations';
+
 import { useEffect, useRef, useState, use } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 import { isValidWaveformCache } from '@/lib/waveform';
@@ -140,17 +142,18 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
 
   const handleUpdate = async () => {
     if (!file) return;
-    const updatedFile: AudioFile = {
-      ...file,
-      instrument: editInstruments[0] || '',
-      vibe: editVibes[0] || '',
-      instruments: editInstruments,
-      vibes: editVibes,
-      myRating: editMyRating,
-      ratings: { ...(file.ratings || {}), adam: editMyRating },
-    };
-    await updateFile(updatedFile);
-    setFile(updatedFile);
+    try {
+      const changes: MetadataChanges = {};
+      if (JSON.stringify(editInstruments) !== JSON.stringify(getTags(file, 'instruments', 'instrument'))) changes.instruments = editInstruments;
+      if (JSON.stringify(editVibes) !== JSON.stringify(getTags(file, 'vibes', 'vibe'))) changes.vibes = editVibes;
+      if (Object.keys(changes).length) {
+        const committed = await mutateRecording<AudioFile>(id, { operation: 'metadata', changes });
+        setFile(prev => prev ? { ...prev, ...committed } : prev);
+      }
+      if (editMyRating !== (file.ratings?.adam ?? file.myRating)) await updateRating('adam', editMyRating);
+    } catch {
+      alert('Failed to update recording');
+    }
   };
 
   useEffect(() => {
@@ -182,7 +185,7 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
   // Global spacebar to pause/resume current audio
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
+      if (e.code === 'Space' && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || (e.target instanceof HTMLElement && e.target.isContentEditable))) {
         e.preventDefault();
         if (globalThis.currentActiveWaveSurfer) {
           if (globalThis.currentActiveWaveSurfer.isPlaying()) {
@@ -264,19 +267,19 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
   }, [file]);
 
   const handleAddComment = async () => {
-    if (!file || !newComment) return;
-    const updatedComments = [...file.comments, { text: newComment }];
-    await updateFile({ ...file, comments: updatedComments });
-    setFile({ ...file, comments: updatedComments });
-    setNewComment('');
-  };
-
-  const updateFile = async (updatedFile: AudioFile) => {
-    await fetch(`/api/files/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updatedFile),
-    });
+    if (!file || !newComment.trim()) return;
+    try {
+      const response = await fetch(`/api/files/${encodeURIComponent(id)}/comments`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: newComment.trim() }),
+      });
+      if (!response.ok) throw new Error('Comment failed');
+      const data = await response.json();
+      setFile(prev => prev ? { ...prev, comments: data.comments } : prev);
+      setNewComment('');
+    } catch {
+      alert('Failed to add comment');
+    }
   };
 
   const updateRating = async (userId: string, rating: number) => {
@@ -285,9 +288,10 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, rating }),
     });
-    if (!res.ok || !file) return;
+    if (!res.ok) throw new Error('Rating update failed');
+    if (!file) return;
     const ratingData = await res.json() as Pick<AudioFile, 'ratings' | 'myRating' | 'userRating'>;
-    setFile({ ...file, ...ratingData });
+    setFile(prev => prev ? { ...prev, ...ratingData } : prev);
   };
 
   if (!file) return <div className="bg-background text-foreground min-h-screen flex items-center justify-center">Loading...</div>;
@@ -364,7 +368,7 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
           {accountUsers.filter(user => user.id !== 'adam' && (file.ratings?.[user.id] || 0) > 0).map(user => (
             <div key={user.id}>
               <label className="block text-sm font-medium mb-2 text-foreground">{user.name}</label>
-              <RatingInput value={file.ratings?.[user.id] || 0} onChange={(rating) => updateRating(user.id, rating)} />
+              <RatingInput value={file.ratings?.[user.id] || 0} onChange={(rating) => { void updateRating(user.id, rating).catch(() => alert('Failed to update rating')); }} />
             </div>
           ))}
         </div>
@@ -375,10 +379,10 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
       {currentUser && !currentUser.isAdmin && (
         <div className="mb-4">
           <label className="block text-sm font-medium mb-2 text-foreground">Your Rating</label>
-          <RatingInput value={file.ratings?.[currentUser.id] || file.userRating} onChange={(rating) => updateRating(currentUser.id, rating)} />
+          <RatingInput value={file.ratings?.[currentUser.id] || file.userRating} onChange={(rating) => { void updateRating(currentUser.id, rating).catch(() => alert('Failed to update rating')); }} />
         </div>
       )}
-      {currentUser?.isAdmin && <div className="mb-4">
+      {currentUser && <div className="mb-4">
         <h2 className="text-lg font-semibold text-foreground">Comments</h2>
         {file.comments.map((c, i) => (
           <p key={i} className="text-muted-foreground">{c.text}</p>

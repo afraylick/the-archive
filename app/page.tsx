@@ -1,5 +1,7 @@
 'use client';
 
+import { mutateRecording, type MetadataChanges } from '@/lib/recording-mutations';
+
 import { Fragment, memo, type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import WaveSurfer from 'wavesurfer.js';
@@ -329,14 +331,14 @@ const formatShortDate = (value: string | undefined) => {
   }).format(date);
 };
 
-const replaceFileVersion = (projects: AudioFile[], updatedFile: AudioFile) => projects.map(project => {
+const replaceFileVersion = (projects: AudioFile[], updatedFile: Partial<AudioFile> & { id: string }) => projects.map(project => {
   if (project.id === updatedFile.id) {
-    return { ...updatedFile, uploads: project.uploads };
+    return { ...project, ...updatedFile, uploads: project.uploads };
   }
   if (!project.uploads?.some(upload => upload.id === updatedFile.id)) return project;
   return {
     ...project,
-    uploads: project.uploads.map(upload => upload.id === updatedFile.id ? updatedFile : upload),
+    uploads: project.uploads.map(upload => upload.id === updatedFile.id ? { ...upload, ...updatedFile } : upload),
   };
 });
 
@@ -858,23 +860,12 @@ const AudioCard = memo(function AudioCard({
       const waveformPeaks = createWaveformPeaks(decodedData);
       if (!waveformPeaks[0]?.length) return;
 
-      const updatedFile = {
-        ...latestFile,
-        waveformPeaks,
-        waveformDuration: duration,
-        waveformCacheVersion: WAVEFORM_CACHE_VERSION,
-      };
-
       try {
-        const res = await fetch(`/api/files/${encodeURIComponent(latestFile.id)}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updatedFile),
+        const changes = await mutateRecording<AudioFile>(latestFile.id, {
+          operation: 'waveform',
+          waveform: { waveformPeaks, waveformDuration: duration, waveformCacheVersion: WAVEFORM_CACHE_VERSION },
         });
-
-        if (res.ok) {
-          setFiles(prev => replaceFileVersion(prev, updatedFile));
-        }
+        setFiles(prev => replaceFileVersion(prev, { id: latestFile.id, ...changes }));
       } catch (error) {
         console.error('Failed to cache waveform for', latestFile.id, error);
       }
@@ -972,7 +963,7 @@ const AudioCard = memo(function AudioCard({
     if (!res.ok) return;
 
     const ratingData = await res.json() as Pick<AudioFile, 'ratings' | 'myRating' | 'userRating' | 'ratingUpdatedAt'>;
-    const updatedFile = { ...file, ...ratingData };
+    const updatedFile = { id: file.id, ...ratingData };
     setFiles(prev => replaceFileVersion(prev, updatedFile));
   };
 
@@ -986,19 +977,12 @@ const AudioCard = memo(function AudioCard({
     if (!res.ok) return;
 
     const data = await res.json() as { liked: boolean; likedBy: string[] };
-    setFiles(prev => replaceFileVersion(prev, { ...file, ...data }));
+    setFiles(prev => replaceFileVersion(prev, { id: file.id, ...data }));
   };
 
-  const updateFile = async (updatedFile: AudioFile) => {
-    const persistedFile = { ...updatedFile };
-    delete persistedFile.uploads;
-    const res = await fetch(`/api/files/${encodeURIComponent(updatedFile.id)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(persistedFile),
-    });
-    if (!res.ok) throw new Error('Update failed');
-    setFiles(prev => replaceFileVersion(prev, updatedFile));
+  const updateFile = async (id: string, changes: MetadataChanges) => {
+    const committed = await mutateRecording<AudioFile>(id, { operation: 'metadata', changes });
+    setFiles(prev => replaceFileVersion(prev, { id, ...committed }));
   };
 
   const saveRename = async () => {
@@ -1009,14 +993,8 @@ const AudioCard = memo(function AudioCard({
       return;
     }
 
-    const updatedFile = {
-      ...project,
-      name: nextName,
-      originalName: project.originalName || project.name,
-    };
-
     try {
-      await updateFile(updatedFile);
+      await updateFile(project.id, { name: nextName });
       setRenameDraft(nextName);
       setIsRenaming(false);
     } catch {
@@ -1037,14 +1015,7 @@ const AudioCard = memo(function AudioCard({
         ? vibes.filter(vibe => vibe !== tag)
         : [...vibes, tag]
       : vibes;
-    const updatedFile = {
-      ...file,
-      instrument: nextInstruments[0] || '',
-      vibe: nextVibes[0] || '',
-      instruments: nextInstruments,
-      vibes: nextVibes,
-    };
-    await updateFile(updatedFile);
+    await updateFile(file.id, category === 'instruments' ? { instruments: nextInstruments } : { vibes: nextVibes });
   };
 
   const toggleCollection = async (collection: string) => {
@@ -1081,17 +1052,13 @@ const AudioCard = memo(function AudioCard({
     if (!res.ok) return;
 
     const data = await res.json() as { collections: string[] };
-    const updatedFile = { ...file, collections: data.collections };
+    const updatedFile = { id: file.id, collections: data.collections };
     setFiles(prev => replaceFileVersion(prev, updatedFile));
   };
 
   const saveNotes = async () => {
     const trimmedNote = noteText.trim();
-    const updatedFile = {
-      ...file,
-      notes: trimmedNote ? noteText : '',
-    };
-    await updateFile(updatedFile);
+    await updateFile(file.id, { notes: trimmedNote ? noteText : '' });
   };
 
   const seekAndPlayComment = (timestamp: number) => {
@@ -1143,7 +1110,7 @@ const AudioCard = memo(function AudioCard({
     if (!res.ok) return;
 
     const data = await res.json() as { comments: AudioComment[] };
-    setFiles(prev => replaceFileVersion(prev, { ...file, comments: data.comments }));
+    setFiles(prev => replaceFileVersion(prev, { id: file.id, comments: data.comments }));
     setNewComment('');
   };
 
@@ -1157,7 +1124,7 @@ const AudioCard = memo(function AudioCard({
     if (!res.ok) return;
 
     const data = await res.json() as { comments: AudioComment[] };
-    setFiles(prev => replaceFileVersion(prev, { ...file, comments: data.comments }));
+    setFiles(prev => replaceFileVersion(prev, { id: file.id, comments: data.comments }));
   };
 
   const uploadVersion = async () => {
@@ -1339,7 +1306,7 @@ const AudioCard = memo(function AudioCard({
       if (serverRes.ok) {
         const waveformData = await serverRes.json() as WaveformGenerationResponse;
         const updatedFile = {
-          ...latestFile,
+          id: latestFile.id,
           waveformPeaks: waveformData.waveformPeaks,
           waveformDuration: waveformData.waveformDuration,
           waveformCacheVersion: waveformData.waveformCacheVersion,
@@ -1363,23 +1330,14 @@ const AudioCard = memo(function AudioCard({
 
       const audioBuffer = await audioContext.decodeAudioData(await res.arrayBuffer());
       const waveformPeaks = createWaveformPeaks(audioBuffer);
-      const updatedFile = {
-        ...latestFile,
-        waveformPeaks,
-        waveformDuration: audioBuffer.duration,
-        waveformCacheVersion: WAVEFORM_CACHE_VERSION,
-      };
-
-      const saveRes = await fetch(`/api/files/${encodeURIComponent(latestFile.id)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedFile),
+      const changes = await mutateRecording<AudioFile>(latestFile.id, {
+        operation: 'waveform',
+        waveform: { waveformPeaks, waveformDuration: audioBuffer.duration, waveformCacheVersion: WAVEFORM_CACHE_VERSION },
       });
-      if (!saveRes.ok) throw new Error('Failed to save waveform');
 
       setDuration(audioBuffer.duration);
       setCurrentTime(0);
-      setFiles(prev => replaceFileVersion(prev, updatedFile));
+      setFiles(prev => replaceFileVersion(prev, { id: latestFile.id, ...changes }));
       setShouldMountWaveform(true);
       setWaveformRefreshKey(prev => prev + 1);
     } catch (error) {

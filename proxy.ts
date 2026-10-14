@@ -24,7 +24,7 @@ const isPublicPath = (pathname: string) => (
 
 const isAdminPath = (pathname: string, method: string) => (
   ADMIN_PATHS.some(path => pathname === path || pathname.startsWith(`${path}/`)) ||
-  (pathname.startsWith('/api/files/') && method === 'DELETE')
+  (pathname.startsWith('/api/files/') && method === 'DELETE' && !/^\/api\/files\/[^/]+\/comments$/.test(pathname))
 );
 
 export function proxy(request: NextRequest) {
