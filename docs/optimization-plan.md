@@ -95,7 +95,7 @@ Validation on Node 24.21.0: all 49 reported tests pass; lint has zero errors and
 
 ## Stage 6 Reduce memory network and disk costs
 
-Status: Planned.
+Status: Implementation complete locally; deployment/device smoke checks remain.
 
 - Separate waveform payloads from metadata and fetch peaks on demand.
 - Remove full-library parsing from audio range requests; evaluate indexed storage or SQLite using measured library sizes.
@@ -104,6 +104,10 @@ Status: Planned.
 - Add recoverable loading/error states, operational diagnostics, and backup/restore validation.
 
 Acceptance: compare 100, 1000, and larger synthetic libraries; report response size, server latency, memory, browser responsiveness, and concurrent playback/upload behavior against the audit baseline (1000 records: roughly 30 MB uncompressed response and 251 ms route execution on the audit machine).
+
+Implemented metadata-only client responses, on-demand waveform GETs, stat-invalidated ID indexing with bounded waveform storage, streaming multipart uploads, shared mobile transcodes, viewport player disposal/preload control, recoverable loading, admin diagnostics and backup verification. No archive migration or production writes were performed.
+
+Validation: 53 tests, TypeScript, lint (four existing warnings), production build and 31-trace artifact guard pass. Production audit is clean. At 1,000 synthetic recordings, payload fell from 29.90 MB to 448.8 KB and warm route time from 260.39 ms to 6.75 ms. Disposable production API and desktop playback smoke checks passed. See [Stage 6 results and operations](stage-6-results.md) for the 100/1,000/5,000 benchmark, memory limitations, SQLite decision, backup/restore procedure and remaining rollout checks. Cold JSON parsing/writing and physical-mobile verification remain explicit limitations.
 
 ## Delivery rules
 

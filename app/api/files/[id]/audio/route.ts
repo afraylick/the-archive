@@ -1,8 +1,9 @@
+import { getArchiveIndex } from '@/lib/archive-index';
 import { readAudioRange } from '@/lib/audio-range';
 import { NextRequest, NextResponse } from 'next/server';
 import { runAudioJob, runFfmpeg } from '@/lib/audio-processing';
 import { getSessionUser } from '@/lib/auth';
-import { ensureDir, getAudioContentType, getDataFilePath, getSafeDownloadName, getTranscodedDir, getUploadPath, isSafeStorageId } from '@/lib/storage';
+import { ensureDir, getAudioContentType, getSafeDownloadName, getTranscodedDir, getUploadPath, isSafeStorageId } from '@/lib/storage';
 import fs from 'fs';
 import path from 'path';
 import { Readable } from 'stream';
@@ -89,6 +90,8 @@ const transcodeToMp3 = async (sourcePath: string, outputPath: string) => {
   }
 };
 
+const transcodes = (globalThis as typeof globalThis & { archiveTranscodes?: Map<string, Promise<void>> });
+transcodes.archiveTranscodes ??= new Map();
 const getMobileAudioPath = async (sourcePath: string, id: string) => {
   if (path.extname(id).toLowerCase() !== '.wav') return null;
 
@@ -97,7 +100,12 @@ const getMobileAudioPath = async (sourcePath: string, id: string) => {
   const outputStat = fs.existsSync(outputPath) ? fs.statSync(outputPath) : null;
 
   if (!outputStat || outputStat.mtimeMs < sourceStat.mtimeMs || outputStat.size === 0) {
-    await transcodeToMp3(sourcePath, outputPath);
+    let pending = transcodes.archiveTranscodes!.get(outputPath);
+    if (!pending) {
+      pending = transcodeToMp3(sourcePath, outputPath).finally(() => transcodes.archiveTranscodes!.delete(outputPath));
+      transcodes.archiveTranscodes!.set(outputPath, pending);
+    }
+    await pending;
   }
 
   return outputPath;
@@ -112,11 +120,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
     }
 
-    const dataFile = getDataFilePath();
-    const data: AudioFileRecord[] = fs.existsSync(dataFile)
-      ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
-      : [];
-    const file = data.find(item => item.id === id);
+    const file = getArchiveIndex().byId.get(id) as AudioFileRecord | undefined;
     if (!file || !isSafeStorageId(file.id)) {
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }

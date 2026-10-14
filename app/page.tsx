@@ -4,6 +4,7 @@ import { mutateRecording, type MetadataChanges } from '@/lib/recording-mutations
 
 import { Fragment, memo, type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useWaveform } from '@/lib/use-waveform';
 import WaveSurfer from 'wavesurfer.js';
 import { getPlayableDuration as getWaveSurferPlayableDuration, seekToProgress as seekWaveSurferToProgress, playSafely } from '@/lib/playback';
 import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
@@ -130,8 +131,6 @@ const RENDER_BATCH_SIZE = 30;
 const USE_CACHED_WAVEFORM_RENDERING = true;
 const MOBILE_PLACEHOLDER_WAVEFORM_PEAKS = [[0, 0]];
 const MOBILE_PLACEHOLDER_DURATION = 0.001;
-const MOBILE_WAVEFORM_MOUNT_DELAY = 180;
-const MOBILE_WAVEFORM_IDLE_TIMEOUT = 900;
 const VOL_BOOST_DB = 12;
 const VOL_BOOST_GAIN = Math.pow(10, VOL_BOOST_DB / 20);
 const MAX_VERSION_UPLOAD_BYTES = 30 * 1024 * 1024;
@@ -161,23 +160,6 @@ const isMobilePlaybackDevice = () => {
 const getPlaybackAudioUrl = (id: string) => {
   const baseUrl = `/api/files/${encodeURIComponent(id)}/audio`;
   return isMobilePlaybackDevice() ? `${baseUrl}?format=mobile` : baseUrl;
-};
-
-const scheduleMobileWaveformMount = (callback: () => void) => {
-  if (typeof window === 'undefined') return () => undefined;
-
-  const idleWindow = window as Window & typeof globalThis & {
-    requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
-    cancelIdleCallback?: (handle: number) => void;
-  };
-
-  if (idleWindow.requestIdleCallback && idleWindow.cancelIdleCallback) {
-    const idleId = idleWindow.requestIdleCallback(callback, { timeout: MOBILE_WAVEFORM_IDLE_TIMEOUT });
-    return () => idleWindow.cancelIdleCallback?.(idleId);
-  }
-
-  const timeoutId = window.setTimeout(callback, MOBILE_WAVEFORM_MOUNT_DELAY);
-  return () => window.clearTimeout(timeoutId);
 };
 
 const normalizeTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag;
@@ -572,14 +554,16 @@ const AudioCard = memo(function AudioCard({
   const waveformHeightRef = useRef(getResponsiveWaveformHeight());
   const lastPlaybackUiSyncRef = useRef(0);
 
+  const shouldRenderWaveform = shouldMountWaveform || isActive || shouldPreloadPlayback;
+  const remoteWaveform = useWaveform(file.id, shouldRenderWaveform, waveformRefreshKey);
   const latestFileRef = useRef(file);
   const playWhenReadyRef = useRef(false);
   const audioPlayableRef = useRef(false);
   const pendingPlaybackRef = useRef<{ progress: number; currentTime: number } | null>(null);
 
   useEffect(() => {
-    latestFileRef.current = file;
-  }, [file]);
+    latestFileRef.current = { ...file, ...remoteWaveform.data };
+  }, [file, remoteWaveform.data]);
 
   useEffect(() => {
     if (showLinkSearch) {
@@ -609,36 +593,11 @@ const AudioCard = memo(function AudioCard({
 
   useEffect(() => {
     const cardElement = cardRef.current;
-    if (!cardElement || shouldMountWaveform || isActive || shouldPreloadPlayback) return;
-
-    let cancelScheduledMount: (() => void) | null = null;
-    const mountWaveform = () => {
-      cancelScheduledMount = null;
-      setShouldMountWaveform(true);
-    };
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          observer.disconnect();
-          if (isMobilePlaybackDevice()) {
-            cancelScheduledMount = scheduleMobileWaveformMount(mountWaveform);
-          } else {
-            mountWaveform();
-          }
-        }
-      },
-      { rootMargin: isMobilePlaybackDevice() ? '120px 0px' : '260px 0px' }
-    );
-
+    if (!cardElement) return;
+    const observer = new IntersectionObserver(([entry]) => setShouldMountWaveform(entry.isIntersecting), { rootMargin: '260px 0px' });
     observer.observe(cardElement);
-    return () => {
-      observer.disconnect();
-      cancelScheduledMount?.();
-    };
-  }, [isActive, shouldMountWaveform, shouldPreloadPlayback]);
-
-  const shouldRenderWaveform = shouldMountWaveform || isActive || shouldPreloadPlayback;
+    return () => observer.disconnect();
+  }, []);
 
   const playFromProgress = useCallback((progress: number) => {
     const wavesurfer = wavesurferRef.current;
@@ -702,7 +661,7 @@ const AudioCard = memo(function AudioCard({
   };
 
   useEffect(() => {
-    if (!shouldRenderWaveform) return;
+    if (!shouldRenderWaveform || !remoteWaveform.ready) return;
     if (!waveformRef.current || !cardRef.current) return;
 
     audioPlayableRef.current = false;
@@ -712,11 +671,14 @@ const AudioCard = memo(function AudioCard({
     let disposed = false;
     const cachedPeaks = canRenderCachedWaveform ? latestFileRef.current.waveformPeaks : undefined;
     const cachedDuration = canRenderCachedWaveform ? latestFileRef.current.waveformDuration : undefined;
-    const useMobileStreamingFallback = !canRenderCachedWaveform && isMobilePlaybackDevice();
+    const useMobileStreamingFallback = !canRenderCachedWaveform;
     const fallbackPeaks = useMobileStreamingFallback ? MOBILE_PLACEHOLDER_WAVEFORM_PEAKS : undefined;
     const fallbackDuration = useMobileStreamingFallback ? MOBILE_PLACEHOLDER_DURATION : undefined;
 
+    const audio = document.createElement('audio');
+    audio.preload = 'none';
     const wavesurfer = WaveSurfer.create({
+      media: audio,
       container: waveformRef.current,
       waveColor: '#727479',
       progressColor: tracksStartedFromWaveformClick.has(latestFileRef.current.id) ? '#525252' : '#727479',
@@ -733,7 +695,7 @@ const AudioCard = memo(function AudioCard({
     wavesurferRef.current = wavesurfer;
     onReady(latestFileRef.current, cardRef.current, wavesurfer);
     const mediaElement = wavesurfer.getMediaElement();
-    mediaElement.preload = isMobilePlaybackDevice() ? 'metadata' : 'auto';
+    mediaElement.preload = 'none';
     mediaElement.setAttribute('playsinline', '');
 
     const applyMobileMetadataDuration = () => {
@@ -876,14 +838,14 @@ const AudioCard = memo(function AudioCard({
       pendingPlaybackRef.current = null;
       setIsCardPlaying(false);
     };
-  }, [file.id, onDestroy, onPause, onPlay, onReady, onStop, playFromProgress, setFiles, shouldRenderWaveform, waveformRefreshKey]);
+  }, [file.id, onDestroy, onPause, onPlay, onReady, onStop, playFromProgress, setFiles, shouldRenderWaveform, waveformRefreshKey, remoteWaveform.ready]);
 
   useEffect(() => {
     const mediaElement = wavesurferRef.current?.getMediaElement();
     if (!mediaElement) return;
 
-    mediaElement.preload = isMobilePlaybackDevice() && !shouldPreloadPlayback && !isActive ? 'metadata' : 'auto';
-  }, [isActive, shouldPreloadPlayback]);
+    mediaElement.preload = !shouldPreloadPlayback && !isActive ? 'none' : 'auto';
+  }, [isActive, shouldPreloadPlayback, remoteWaveform.ready]);
 
   useEffect(() => {
     if (!volumeBoostConfirming) return;
@@ -1188,7 +1150,7 @@ const AudioCard = memo(function AudioCard({
         return;
       }
 
-      const filesRes = await fetch('/api/files');
+      const filesRes = await fetch('/api/files?view=metadata');
       if (!filesRes.ok) throw new Error('Failed to reload songs');
       setFiles(await filesRes.json() as AudioFile[]);
       setShowLinkSearch(false);
@@ -2479,6 +2441,7 @@ const AudioCard = memo(function AudioCard({
 });
 
 export default function Home() {
+  const [loadError, setLoadError] = useState(false);
   const [files, setFiles] = useState<AudioFile[]>([]);
   const [currentUser, setCurrentUser] = useState<ArchiveUser | null>(null);
   const [accountUsers, setAccountUsers] = useState<ArchiveUser[]>([]);
@@ -2555,14 +2518,14 @@ export default function Home() {
         setVibeOptions(prev => Array.from(new Set([...prev, ...(data.settings?.defaultVibes || [])])));
       });
 
-    fetch('/api/files')
-      .then(res => res.json())
+    fetch('/api/files?view=metadata')
+      .then(res => { if (!res.ok) throw new Error('Library unavailable'); return res.json(); })
       .then((data: AudioFile[]) => {
         const normalizedFiles = data.map(f => ({ ...f, year: f.year || new Date().getFullYear() }));
         setFiles(normalizedFiles);
         setInstrumentOptions(prev => Array.from(new Set([...prev, ...normalizedFiles.flatMap(file => getTags(file, 'instruments', 'instrument'))])));
         setVibeOptions(prev => Array.from(new Set([...prev, ...normalizedFiles.flatMap(file => getTags(file, 'vibes', 'vibe'))])));
-      });
+      }).catch(() => setLoadError(true));
 
   }, []);
 
@@ -3558,6 +3521,7 @@ export default function Home() {
 
   return (
     <div className="archive-shell min-h-screen text-foreground">
+      {loadError && <div role="alert">Library could not be loaded. <button onClick={() => window.location.reload()}>Retry</button></div>}
       <header className="mx-auto grid h-auto max-w-[1800px] grid-cols-1 items-center gap-3 border-b border-border/40 px-3 py-3 sm:grid-cols-[1fr_auto_1fr] sm:px-4">
         <div className="hidden sm:block" />
         <div className="flex items-center justify-center gap-3">

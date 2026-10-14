@@ -1,3 +1,5 @@
+import { cleanupStorageFile } from '@/lib/storage';
+import { receiveUpload, readUploadHeader, UploadError } from '@/lib/stream-upload';
 import { updateArchive } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
@@ -103,6 +105,8 @@ const isSupportedAudioBuffer = (buffer: Buffer, extension: string) => {
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id: projectId } = await params;
 
+  let staged: Awaited<ReturnType<typeof receiveUpload>> | undefined;
+  let uncommitted: string | undefined;
   try {
     const user = getSessionUser(req);
     if (!user) {
@@ -112,12 +116,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'Invalid project id' }, { status: 400 });
     }
 
-    const formData = await req.formData();
-    const file = formData.get('file');
-    const notesValue = formData.get('notes');
-    if (!(file instanceof File) || file.size === 0) {
-      return NextResponse.json({ error: 'Choose one audio file to upload' }, { status: 400 });
-    }
+    staged = await receiveUpload(req, { files: 1, fileBytes: MAX_UPLOAD_FILE_BYTES, totalBytes: MAX_UPLOAD_FILE_BYTES, fileField: 'file' });
+    const file = staged.files[0];
+    const notesValue = staged.fields.get('notes');
+    if (!file || file.size === 0) return NextResponse.json({ error: 'Choose one audio file to upload' }, { status: 400 });
     if (file.size > MAX_UPLOAD_FILE_BYTES) {
       return NextResponse.json({ error: 'Audio uploads are limited to 30 MB' }, { status: 413 });
     }
@@ -141,7 +143,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'Song project not found' }, { status: 404 });
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer());
+    const buffer = readUploadHeader(file);
     if (!isSupportedAudioBuffer(buffer, extension)) {
       return NextResponse.json({ error: 'The selected file does not contain supported audio data' }, { status: 415 });
     }
@@ -149,7 +151,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const now = new Date();
     const storageId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}${extension}`;
     const filePath = path.join(getUploadsDir(), storageId);
-    fs.writeFileSync(filePath, buffer);
+    fs.renameSync(file.path, filePath);
+    uncommitted = filePath;
 
     let generatedWaveform: Awaited<ReturnType<typeof generateServerWaveform>> | null = null;
     try {
@@ -202,9 +205,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       fs.unlinkSync(filePath);
       return NextResponse.json({ error: 'Song project was deleted during upload' }, { status: 404 });
     }
+    uncommitted = undefined;
     return NextResponse.json({ upload }, { status: 201 });
   } catch (error) {
     console.error(error);
-    return NextResponse.json({ error: 'Upload failed' }, { status: 500 });
+    return NextResponse.json({ error: error instanceof UploadError ? error.message : 'Upload failed' }, { status: error instanceof UploadError ? error.status : 500 });
+    } finally {
+    if (uncommitted) cleanupStorageFile(uncommitted);
+    staged?.cleanup();
   }
 }

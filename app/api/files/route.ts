@@ -1,3 +1,4 @@
+import { getArchiveIndex } from '@/lib/archive-index';
 import { getLegacyCommentId } from '@/lib/comment-id';
 import { NextResponse } from 'next/server';
 import { getSessionUser, type UserId } from '@/lib/auth';
@@ -130,7 +131,10 @@ export async function GET(req: NextRequest) {
     if (!fs.existsSync(dataFile)) {
       return NextResponse.json([]);
     }
-    let data = JSON.parse(fs.readFileSync(dataFile, 'utf8')) as AudioFileRecord[];
+    const lightweight = req.nextUrl.searchParams.get('view') === 'metadata';
+    let data = lightweight
+      ? structuredClone(getArchiveIndex().metadata) as unknown as AudioFileRecord[]
+      : JSON.parse(fs.readFileSync(dataFile, 'utf8')) as AudioFileRecord[];
 
     // Migrate old rating to myRating and userRating
     data = data.map((file) => {
@@ -192,9 +196,16 @@ export async function GET(req: NextRequest) {
     // remove persisted records merely because someone browses the library.
 
     const projects = data.filter(file => !file.projectId);
+    const versions = new Map<string, AudioFileRecord[]>();
+    for (const file of data) {
+      if (file.projectId) {
+        const group = versions.get(file.projectId) || [];
+        group.push(file);
+        versions.set(file.projectId, group);
+      }
+    }
     return NextResponse.json(projects.map(project => {
-      const uploads = data
-        .filter(file => file.projectId === project.id)
+      const uploads = (versions.get(project.id) || [])
         .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime());
 
       return {

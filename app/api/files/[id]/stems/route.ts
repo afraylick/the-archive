@@ -1,3 +1,4 @@
+import { receiveUpload, UploadError } from '@/lib/stream-upload';
 import { randomUUID } from 'crypto';
 import { writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
@@ -22,22 +23,22 @@ const MAX_STEMS_ZIP_BYTES = 2 * 1024 * 1024 * 1024;
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
+  let staged: Awaited<ReturnType<typeof receiveUpload>> | undefined;
   try {
     const user = getSessionUser(req);
     if (!user?.isAdmin) {
       return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
     }
 
-    const formData = await req.formData();
-    const zipFile = formData.get('file');
-    if (!(zipFile instanceof File) || !zipFile.name.toLowerCase().endsWith('.zip')) {
+    staged = await receiveUpload(req, { files: 1, fileBytes: MAX_STEMS_ZIP_BYTES, totalBytes: MAX_STEMS_ZIP_BYTES, fileField: 'file' });
+    const zipFile = staged.files[0];
+    if (!zipFile || !zipFile.name.toLowerCase().endsWith('.zip')) {
       return NextResponse.json({ error: 'A ZIP file is required' }, { status: 400 });
     }
     if (zipFile.size > MAX_STEMS_ZIP_BYTES) {
       return NextResponse.json({ error: 'ZIP file is too large' }, { status: 413 });
     }
 
-    const buffer = Buffer.from(await zipFile.arrayBuffer());
     const dataFile = getDataFilePath();
     const data: AudioFileRecord[] = fs.existsSync(dataFile)
       ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
@@ -54,7 +55,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const stemId = `${randomUUID()}.zip`;
     const newStemPath = getStemPath(stemId);
     try {
-      fs.writeFileSync(newStemPath, buffer, { flag: 'wx' });
+      fs.renameSync(zipFile.path, newStemPath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') cleanupStorageFile(newStemPath);
       throw error;
@@ -75,8 +76,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (previousStemId && isSafeStorageId(previousStemId)) cleanupStorageFile(getStemPath(previousStemId));
 
     return NextResponse.json({ stems });
-  } catch {
-    return NextResponse.json({ error: 'Stem upload failed' }, { status: 500 });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof UploadError ? error.message : 'Stem upload failed' }, { status: error instanceof UploadError ? error.status : 500 });
+  } finally {
+    staged?.cleanup();
   }
 }
 

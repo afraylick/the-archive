@@ -64,7 +64,7 @@ const pauseGeneration = t => {
   t.mock.method(generator, 'generateServerWaveform', () => new Promise(resolve => pending.push(resolve)));
   return {
     async waitFor(count) {
-      for (let i = 0; i < 100 && pending.length < count; i++) await new Promise(resolve => setImmediate(resolve));
+      for (let i = 0; i < 300 && pending.length < count; i++) await new Promise(resolve => setTimeout(resolve, 10));
       assert.equal(pending.length, count, 'processing reached generation');
     },
     finish(index = 0) { pending[index](generated); },
@@ -270,12 +270,12 @@ test('targeted edits and attachment lifecycle', async t => {
     assert.equal((await deleteRoute.DELETE(request('/api/files/fixture.wav', 'DELETE', undefined, member.id), context)).status, 403);
   });
   await t.test('failed new attachment write preserves the original attachment', async t => {
-    await setupStem(); const before = read(); const original = fs.writeFileSync;
-    t.mock.method(fs, 'writeFileSync', (target, ...args) => {
+    await setupStem(); const before = read(); const original = fs.renameSync;
+    t.mock.method(fs, 'renameSync', (source, target) => {
       if (typeof target === 'string' && target.startsWith(storage.getStemsDir())) {
-        original(target, 'partial'); throw new Error('Disk full');
+        throw new Error('Disk full');
       }
-      return original(target, ...args);
+      return original(source, target);
     });
     assert.equal((await stemsRoute.POST(request('/stems', 'POST', stemForm()), context)).status, 500);
     assert.deepEqual(read(), before); assert.deepEqual(fs.readdirSync(storage.getStemsDir()), ['old.zip']);
@@ -330,4 +330,51 @@ test('audio ranges serve exact suffix bytes and reject unsatisfiable requests', 
     if (expected) assert.deepEqual(Buffer.from(await response.arrayBuffer()), expected);
     else assert.equal(response.headers.get('content-range'), 'bytes */100');
   }
+});
+
+test('metadata index, waveform isolation and invalidation', async () => {
+  await setup();
+  save([{ ...fixture, ...generated, waveformCacheVersion: 6 }]);
+  const before = fs.readFileSync(storage.getDataFilePath());
+  const metadata = await (await libraryRoute.GET(request('/api/files?view=metadata'))).json();
+  assert.equal(metadata[0].waveformPeaks, undefined);
+  assert.equal(metadata[0].waveformAvailable, true);
+  const peaks = await (await waveformRoute.GET(request('/waveform'), context)).json();
+  assert.deepEqual(peaks.waveformPeaks, generated.waveformPeaks);
+  assert.deepEqual(fs.readFileSync(storage.getDataFilePath()), before);
+  save([{ ...fixture, name: 'Updated externally' }]);
+  const changed = await (await libraryRoute.GET(request('/api/files?view=metadata'))).json();
+  assert.equal(changed[0].name, 'Updated externally');
+  assert.equal(changed[0].waveformAvailable, false);
+});
+
+test('streamed upload limits and malformed bodies remove temporary files', async () => {
+  await setup();
+  const { receiveUpload } = load('lib/stream-upload.ts');
+  const limits = { files: 1, fileBytes: 10, totalBytes: 10, fileField: 'file' };
+  const oversized = new FormData(); oversized.append('file', new Blob([Buffer.alloc(20)]), 'large.wav');
+  const encoded = new Response(oversized);
+  await assert.rejects(receiveUpload(new Request('http://test/upload', { method: 'POST', body: await encoded.arrayBuffer(), headers: encoded.headers }), limits), /too large/);
+  const malformed = new Request('http://test/upload', { method: 'POST', body: 'broken', headers: { 'content-type': 'multipart/form-data; boundary=bad' } });
+  await assert.rejects(receiveUpload(malformed, limits));
+  assert.equal(fs.readdirSync(storage.getStorageRoot()).some(name => name.startsWith('.incoming-')), false);
+  const small = new FormData(); small.append('file', new Blob(['abc']), 'small.wav');
+  const staged = await receiveUpload(new Request('http://test/upload', { method: 'POST', body: small }), limits);
+  assert.equal(fs.readFileSync(staged.files[0].path, 'utf8'), 'abc'); staged.cleanup();
+  assert.equal(globalThis.archiveUploadsActive, 0);
+});
+
+test('simultaneous mobile ranges share one transcode and release its slot', async t => {
+  await setup();
+  const processing = load('lib/audio-processing.ts');
+  let calls = 0;
+  t.mock.method(processing, 'runFfmpeg', async args => {
+    calls++;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    fs.writeFileSync(args.at(-1), Buffer.alloc(100, 7));
+  });
+  const responses = await Promise.all(Array.from({ length: 4 }, () => audioRoute.GET(request('/api/files/fixture.wav/audio?format=mobile'), context)));
+  for (const response of responses) { assert.equal(response.status, 200); await response.arrayBuffer(); }
+  assert.equal(calls, 1);
+  assert.equal(globalThis.archiveTranscodes.size, 0);
 });

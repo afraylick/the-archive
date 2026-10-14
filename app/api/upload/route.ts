@@ -1,3 +1,5 @@
+import { cleanupStorageFile } from '@/lib/storage';
+import { receiveUpload, UploadError } from '@/lib/stream-upload';
 import { updateArchive } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser, type UserId } from '@/lib/auth';
@@ -77,21 +79,16 @@ const cleanTagArray = (tags: unknown) => Array.isArray(tags)
   : [];
 
 export async function POST(req: NextRequest) {
+  let staged: Awaited<ReturnType<typeof receiveUpload>> | undefined;
+  const uncommitted: string[] = [];
   try {
     const user = getSessionUser(req);
     if (!user?.isAdmin) {
       return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
     }
 
-    const formData = await req.formData();
-    const files = formData.getAll('files') as File[];
-    const metadataStrings = [];
-    for (const [key, value] of formData.entries()) {
-      if (key.startsWith('metadata[')) {
-        metadataStrings.push(value as string);
-      }
-    }
-
+    staged = await receiveUpload(req, { files: MAX_UPLOAD_FILES, fileBytes: MAX_UPLOAD_FILE_BYTES, totalBytes: MAX_UPLOAD_TOTAL_BYTES, fileField: 'files' });
+    const files = staged.files;
     if (files.length === 0) {
       return NextResponse.json({ error: 'No files uploaded' }, { status: 400 });
     }
@@ -111,7 +108,11 @@ export async function POST(req: NextRequest) {
     const results: { id: string; name: string }[] = [];
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const metadata = metadataStrings[i] ? JSON.parse(metadataStrings[i]) as UploadMetadata : {};
+      const rawMetadata = staged.fields.get(`metadata[${i}]`);
+      let metadata: UploadMetadata;
+      try { metadata = rawMetadata ? JSON.parse(rawMetadata) as UploadMetadata : {}; }
+      catch { throw new UploadError('Invalid upload metadata'); }
+      if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new UploadError('Invalid upload metadata');
 
       // Generate unique filename
       const ext = path.extname(file.name);
@@ -119,8 +120,8 @@ export async function POST(req: NextRequest) {
       const filepath = path.join(uploadsDir, filename);
 
       // Save file
-      const buffer = Buffer.from(await file.arrayBuffer());
-      fs.writeFileSync(filepath, buffer);
+      fs.renameSync(file.path, filepath);
+      uncommitted.push(filepath);
 
       // Save metadata
       const instruments = Array.isArray(metadata.instruments)
@@ -178,10 +179,14 @@ export async function POST(req: NextRequest) {
     }
 
     updateArchive<AudioFileRecord>(current => [...current, ...additions]);
+    uncommitted.length = 0;
 
     return NextResponse.json({ message: 'Files uploaded successfully', results });
   } catch (error) {
     console.error(error);
-    return NextResponse.json({ error: 'Upload failed' }, { status: 500 });
+    return NextResponse.json({ error: error instanceof UploadError ? error.message : 'Upload failed' }, { status: error instanceof UploadError ? error.status : 500 });
+  } finally {
+    for (const file of uncommitted) cleanupStorageFile(file);
+    staged?.cleanup();
   }
 }

@@ -1,3 +1,4 @@
+import { getIndexedWaveform } from '@/lib/archive-index';
 import { updateArchive } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
@@ -63,5 +64,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   } catch (error) {
     console.error('Server waveform generation failed for', id, error);
     return NextResponse.json({ error: 'Waveform generation failed' }, { status: 500 });
+  }
+}
+
+
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  if (!getSessionUser(req)) return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+  const { id } = await params;
+  if (!isSafeStorageId(id)) return NextResponse.json({ error: 'Invalid id' }, { status: 400 });
+  try {
+    const waveform = getIndexedWaveform(id);
+    if (!waveform) return NextResponse.json({ error: 'Recording not found' }, { status: 404 });
+    return NextResponse.json(waveform, { headers: { 'Cache-Control': 'private, no-store' } });
+  } catch {
+    return NextResponse.json({ error: 'Failed to load waveform' }, { status: 500 });
   }
 }

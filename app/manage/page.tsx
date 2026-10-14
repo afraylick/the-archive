@@ -7,6 +7,7 @@ import WaveSurfer from 'wavesurfer.js';
 import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
 
 interface AudioFile {
+  waveformAvailable?: boolean;
   id: string;
   projectId?: string;
   defaultVersionId?: string;
@@ -146,6 +147,7 @@ const mapManagedFiles = (projects: AudioFile[], mapper: (file: AudioFile) => Aud
   uploads: project.uploads?.map(mapper),
 }));
 
+const hasAvailableWaveform = (file: AudioFile) => hasCachedWaveform(file) || (file.waveformAvailable && file.waveformCacheVersion === WAVEFORM_CACHE_VERSION);
 const hasCachedWaveform = (file: AudioFile) => isValidWaveformCache(file.waveformPeaks, file.waveformDuration, file.waveformCacheVersion);
 
 const createWaveformPeaks = (audioBuffer: AudioBuffer) => {
@@ -232,6 +234,7 @@ const ManageWaveform = ({
   const [hasPreview, setHasPreview] = useState(false);
   const [status, setStatus] = useState('Click waveform to load full song and refresh cache');
   const latestFileRef = useRef(file);
+  const pendingLoad = useRef<AbortController | null>(null);
 
   useEffect(() => {
     latestFileRef.current = file;
@@ -239,6 +242,7 @@ const ManageWaveform = ({
 
   useEffect(() => {
     return () => {
+      pendingLoad.current?.abort();
       if (activeWaveSurferRef.current === wavesurferRef.current) {
         activeWaveSurferRef.current = null;
       }
@@ -257,9 +261,17 @@ const ManageWaveform = ({
       return;
     }
 
-    if (!containerRef.current) return;
+    if (!containerRef.current || pendingLoad.current) return;
+    const controller = new AbortController();
+    pendingLoad.current = controller;
 
     setStatus('Loading full song...');
+    try {
+      const response = await fetch(`/api/files/${encodeURIComponent(file.id)}/waveform`, { signal: controller.signal });
+      if (response.ok) latestFileRef.current = { ...latestFileRef.current, ...await response.json() };
+    } catch { /* Explicit preview can still decode the original audio. */ }
+    pendingLoad.current = null;
+    if (controller.signal.aborted || !containerRef.current) return;
     const cachedWaveform = hasCachedWaveform(latestFileRef.current);
     const wavesurfer = WaveSurfer.create({
       container: containerRef.current,
@@ -358,6 +370,7 @@ const ManageWaveform = ({
 };
 
 export default function ManagePage() {
+  const [loadError, setLoadError] = useState(false);
   const [files, setFiles] = useState<AudioFile[]>([]);
   const [accountUsers, setAccountUsers] = useState<ArchiveUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -378,12 +391,13 @@ export default function ManagePage() {
   const accountNamesById = new Map(accountUsers.map(user => [user.id, user.name]));
 
   const fetchFiles = useCallback(() => {
-    fetch('/api/files')
-      .then(res => res.json())
+    fetch('/api/files?view=metadata')
+      .then(res => { if (!res.ok) throw new Error('Library unavailable'); return res.json(); })
       .then(data => {
         setFiles(data);
         setLoading(false);
-      });
+        setLoadError(false);
+      }).catch(() => { setLoadError(true); setLoading(false); });
   }, []);
 
   useEffect(() => {
@@ -754,7 +768,7 @@ export default function ManagePage() {
         formatCsvDate(file.createdAt),
         formatCsvDate(file.uploadedAt),
         (file.colorTags || []).join('; '),
-        hasCachedWaveform(file) ? 'yes' : 'no',
+        hasAvailableWaveform(file) ? 'yes' : 'no',
         file.waveformDuration || '',
         file.id,
       ];
@@ -827,6 +841,7 @@ export default function ManagePage() {
   const waveformBulkTotal = waveformBulkProgress ? Number(waveformBulkProgress[2]) : 0;
   const waveformBulkPercent = waveformBulkTotal > 0 ? Math.min(100, Math.max(0, (waveformBulkDone / waveformBulkTotal) * 100)) : 0;
 
+  if (loadError) return <div role="alert">Library could not be loaded. <button onClick={fetchFiles}>Retry</button></div>;
   if (loading) return <div className="bg-background text-foreground min-h-screen flex items-center justify-center">Loading...</div>;
 
   return (
@@ -1043,7 +1058,7 @@ export default function ManagePage() {
                     </div>
                   )}
                   <p className="text-muted-foreground">
-                    Waveform: {hasCachedWaveform(file) ? 'Cached' : 'Not cached'}
+                    Waveform: {hasAvailableWaveform(file) ? 'Cached' : 'Not cached'}
                   </p>
                   <p className="text-muted-foreground">
                     Stems: {file.stems ? file.stems.name : 'None'}
@@ -1086,7 +1101,7 @@ export default function ManagePage() {
                     <button
                       onClick={() => cullWaveform(file)}
                       className="rounded bg-muted px-3 py-2 text-sm text-muted-foreground hover:bg-muted/80 disabled:opacity-50"
-                      disabled={waveformProcessingId === file.id || !hasCachedWaveform(file)}
+                      disabled={waveformProcessingId === file.id || !hasAvailableWaveform(file)}
                     >
                       Cull Waveform
                     </button>
@@ -1215,7 +1230,7 @@ export default function ManagePage() {
                                 type="button"
                                 onClick={() => cullWaveform(variation)}
                                 className="rounded bg-muted px-3 py-2 text-sm text-muted-foreground hover:bg-muted/80 disabled:opacity-50"
-                                disabled={waveformProcessingId === variation.id || !hasCachedWaveform(variation)}
+                                disabled={waveformProcessingId === variation.id || !hasAvailableWaveform(variation)}
                               >
                                 Cull Waveform
                               </button>
@@ -1243,7 +1258,7 @@ export default function ManagePage() {
                               </button>
                             </div>
                             <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm text-muted-foreground">
-                              <span>Waveform: {hasCachedWaveform(variation) ? 'Cached' : 'Not cached'}</span>
+                              <span>Waveform: {hasAvailableWaveform(variation) ? 'Cached' : 'Not cached'}</span>
                               <span className="flex items-center gap-2">
                                 {adminName}&apos;s Rating:
                                 <RatingInput value={variation.ratings?.adam || variation.myRating} onChange={(rating) => updateRating(variation.id, 'adam', rating)} />

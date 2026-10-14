@@ -83,6 +83,7 @@ const RatingInput = ({ value, onChange }: { value: number; onChange: (rating: nu
 
 interface AudioFile {
   id: string;
+  uploads?: AudioFile[];
   name: string;
   instrument?: string;
   vibe?: string;
@@ -115,6 +116,7 @@ const getTags = (file: AudioFile, pluralKey: 'instruments' | 'vibes', singularKe
 
 export default function PlayerPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const [loadError, setLoadError] = useState(false);
   const [playbackError, setPlaybackError] = useState('');
   const [file, setFile] = useState<AudioFile | null>(null);
   const [currentUser, setCurrentUser] = useState<ArchiveUser | null>(null);
@@ -155,20 +157,25 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
         setVibeOptions(prev => Array.from(new Set([...prev, ...(data.settings?.defaultVibes || [])])));
       });
 
-    fetch('/api/files')
-      .then(res => res.json())
-      .then((files: AudioFile[]) => {
+    fetch('/api/files?view=metadata')
+      .then(res => { if (!res.ok) throw new Error('Library unavailable'); return res.json(); })
+      .then(async (files: AudioFile[]) => {
         const updatedFiles = files.map(f => ({ ...f, year: f.year || new Date().getFullYear() }));
-        const f = updatedFiles.find(f => f.id === id);
+        const f = updatedFiles.flatMap(record => [record, ...(record.uploads || [])]).find(f => f.id === id);
         setInstrumentOptions(prev => Array.from(new Set([...prev, ...updatedFiles.flatMap(file => getTags(file, 'instruments', 'instrument'))])));
         setVibeOptions(prev => Array.from(new Set([...prev, ...updatedFiles.flatMap(file => getTags(file, 'vibes', 'vibe'))])));
-        setFile(f || null);
+        if (f) {
+          const response = await fetch(`/api/files/${encodeURIComponent(f.id)}/waveform`);
+          if (response.ok) Object.assign(f, await response.json());
+        }
+        if (!f) throw new Error("Recording not found");
+        setFile(f);
         if (f) {
           setEditInstruments(getTags(f, 'instruments', 'instrument'));
           setEditVibes(getTags(f, 'vibes', 'vibe'));
           setEditMyRating(f.ratings?.adam || f.myRating);
         }
-      });
+      }).catch(() => setLoadError(true));
   }, [id]);
 
   // Global spacebar to pause/resume current audio
@@ -279,6 +286,7 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
     setFile(prev => prev ? { ...prev, ...ratingData } : prev);
   };
 
+  if (loadError) return <div role="alert">Recording unavailable. <button onClick={() => window.location.reload()}>Retry</button></div>;
   if (!file) return <div className="bg-background text-foreground min-h-screen flex items-center justify-center">Loading...</div>;
 
   const instruments = getTags(file, 'instruments', 'instrument');
