@@ -362,6 +362,11 @@ From **Manage**, the Admin can attach one ZIP file to an original or variation. 
 
 Waveforms are cached in `data.json` rather than stored as image files. They are normally generated during upload. The Admin can regenerate or remove an individual cache, rebuild every waveform, or cull all cached waveforms from **Manage**.
 
+Stage 4 uses waveform cache version 6. Earlier caches are ignored because mobile placeholder peaks may have been saved as audio. After deploying, reload open pages and use **Manage → Regenerate All Waveforms**. Keep that page open until it reports completion; failed items retain their previous saved data and can be retried individually. Regeneration updates only waveform peaks, duration, and cache version; it preserves recordings, metadata, ratings, likes, and comments. Do not cull caches first. Desktop playback can regenerate missing caches from decoded audio; mobile playback can stream while awaiting an Admin regeneration and must never save its display placeholder as audio.
+
+Playback, waveform seeking, comment positions, and Media Session use the media duration once available, with cached duration only as a startup fallback. Real silent recordings are valid waveforms. After rollout, verify a representative recording on desktop and a physical iPhone/Android device, including seeking, switching versions, and background playback.
+
+
 If server-side generation fails, the browser may generate a compatible cache after decoding the audio. Installing `ffmpeg` provides the most reliable behavior across the supported formats.
 
 ### CSV export

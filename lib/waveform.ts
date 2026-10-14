@@ -1,6 +1,6 @@
 export const WAVEFORM_PEAK_LENGTH = 4000;
 export const WAVEFORM_PEAK_PRECISION = 10000;
-export const WAVEFORM_CACHE_VERSION = 5;
+export const WAVEFORM_CACHE_VERSION = 6;
 export const WAVEFORM_GENERATION_SAMPLE_RATE = 8000;
 
 export const hasLegacyLowPrecisionWaveform = (peaks: number[]) => {
@@ -26,7 +26,6 @@ export const isValidWaveformCache = (
   return Array.isArray(peaks) &&
     peaks.length >= 512 &&
     peaks.every(peak => typeof peak === 'number' && Number.isFinite(peak) && Math.abs(peak) <= 1) &&
-    !hasLegacyLowPrecisionWaveform(peaks) &&
     typeof waveformDuration === 'number' &&
     Number.isFinite(waveformDuration) &&
     waveformDuration > 0 &&

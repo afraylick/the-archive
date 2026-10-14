@@ -58,7 +58,7 @@ Validation: `npm test` passes 37 focused cases (42 reported tests including pare
 
 ## Stage 4 Repair waveform and playback synchronization
 
-Status: Planned.
+Status: Complete locally; not deployed.
 
 - Never persist mobile placeholder peaks as decoded audio.
 - Establish a consistent timeline for waveform drawing, seeking, comments, mini-player, and Media Session; reconcile cached and actual media duration.
@@ -67,6 +67,14 @@ Status: Planned.
 - Handle playback failures and player lifecycle transitions visibly and consistently.
 
 Acceptance: fixtures cover uncached mobile audio, existing bad caches, differing durations, seeking, version switching, and range responses; verify representative desktop and mobile browser playback.
+
+Implemented a shared media-duration-first timeline for main/focused players, seeking, comment jumps, mini-player progress, and Media Session. Removed manual progress rendering that competed with WaveSurfer's media clock. Mobile display placeholders and supplied cached peaks are never re-exported as decoded audio. Automatic cache saves no longer remount the active main player; focused-player comments and ratings no longer recreate its player. Rejected playback promises surface visible errors, and destroyed focused players are cleared from the global active-player reference.
+
+Cache version 6 invalidates earlier caches, including saved mobile placeholders, without deleting archive data. Silent and naturally quantized recordings remain valid. After deployment, reload old pages and run **Manage → Regenerate All Waveforms**; no preliminary cull is needed. Bulk regeneration now reports successes/failures, keeps retry controls available after completion, and preserves old saved waveforms on failure. This turn regenerated only disposable test fixtures. Original files, metadata, ratings, likes, and comments are preserved by the existing targeted waveform update.
+
+Audio suffix ranges now return the requested final bytes; satisfiable ranges are clamped to EOF, and valid unsatisfiable ranges return 416 with `Content-Range: bytes */size`. Unsupported range syntax is ignored and returns the full resource.
+
+Validation: 47 reported tests pass, including timeline disagreement/seeking, old placeholder invalidation, valid silence/quantized peaks, playback rejection/cancellation, and actual audio-route range responses, alongside prior-stage preservation/security tests. Lint and production build pass (Google Fonts required network access; the existing tracing warning remains Stage 5). An isolated desktop browser verified replacement of a stale 20-second cache with a 10-second timeline, successful bulk regeneration, a midpoint seek at 4.99 seconds, comment submission during playback, and switching from a 10-second original to a 5-second silent variant with the old player stopped. Physical iOS/Android playback, background Media Session behavior, and codec-specific duration differences still need rollout smoke checks; no physical-device validation is claimed.
 
 ## Stage 5 Update dependencies and isolate deployment artifacts
 

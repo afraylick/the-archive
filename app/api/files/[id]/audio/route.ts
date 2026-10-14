@@ -1,3 +1,4 @@
+import { readAudioRange } from '@/lib/audio-range';
 import { NextRequest, NextResponse } from 'next/server';
 import { runAudioJob, runFfmpeg } from '@/lib/audio-processing';
 import { getSessionUser } from '@/lib/auth';
@@ -14,24 +15,6 @@ interface AudioFileRecord {
 
 const AUDIO_CACHE_CONTROL = 'private, max-age=86400, stale-while-revalidate=604800';
 const MOBILE_AUDIO_CACHE_CONTROL = 'private, max-age=604800, stale-while-revalidate=2592000';
-
-const readRange = (rangeHeader: string | null, fileSize: number) => {
-  if (!rangeHeader) return null;
-
-  const match = rangeHeader.match(/^bytes=(\d*)-(\d*)$/);
-  if (!match) return null;
-
-  const startText = match[1];
-  const endText = match[2];
-  const start = startText ? Number(startText) : Math.max(fileSize - Number(endText || 0), 0);
-  const end = endText ? Number(endText) : fileSize - 1;
-
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start || start >= fileSize) {
-    return null;
-  }
-
-  return { start, end: Math.min(end, fileSize - 1) };
-};
 
 const getContentDisposition = (downloadName: string | undefined): Record<string, string> => {
   if (!downloadName) return {};
@@ -51,8 +34,14 @@ const streamAudioFile = (
   downloadName?: string
 ) => {
   const stat = fs.statSync(filePath);
-  const range = readRange(rangeHeader, stat.size);
+  const range = readAudioRange(rangeHeader, stat.size);
 
+  if (range === 'unsatisfiable') {
+    return new Response(null, { status: 416, headers: {
+      'Content-Range': `bytes */${stat.size}`, 'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-store', 'Vary': 'Cookie',
+    } });
+  }
   if (range) {
     const stream = Readable.toWeb(fs.createReadStream(filePath, range));
     return new Response(stream as ReadableStream, {

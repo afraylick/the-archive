@@ -2,8 +2,9 @@
 
 import { mutateRecording, type MetadataChanges } from '@/lib/recording-mutations';
 
-import { useEffect, useRef, useState, use } from 'react';
+import { useEffect, useRef, useState, useMemo, use } from 'react';
 import WaveSurfer from 'wavesurfer.js';
+import { seekToProgress, playSafely } from '@/lib/playback';
 import { isValidWaveformCache } from '@/lib/waveform';
 
 declare global {
@@ -112,21 +113,9 @@ const getTags = (file: AudioFile, pluralKey: 'instruments' | 'vibes', singularKe
   return tag ? [normalizeTag(tag)] : [];
 };
 
-const getPlayableDuration = (wavesurfer: WaveSurfer) => {
-  const mediaDuration = wavesurfer.getMediaElement().duration;
-  if (Number.isFinite(mediaDuration) && mediaDuration > 0) return mediaDuration;
-
-  const duration = wavesurfer.getDuration();
-  return Number.isFinite(duration) && duration > 0 ? duration : 0;
-};
-
-const seekToProgress = (wavesurfer: WaveSurfer, progress: number) => {
-  const duration = getPlayableDuration(wavesurfer);
-  wavesurfer.setTime(Math.min(1, Math.max(0, progress)) * duration);
-};
-
 export default function PlayerPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const [playbackError, setPlaybackError] = useState('');
   const [file, setFile] = useState<AudioFile | null>(null);
   const [currentUser, setCurrentUser] = useState<ArchiveUser | null>(null);
   const [accountUsers, setAccountUsers] = useState<ArchiveUser[]>([]);
@@ -191,7 +180,7 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
           if (globalThis.currentActiveWaveSurfer.isPlaying()) {
             globalThis.currentActiveWaveSurfer.pause();
           } else {
-            globalThis.currentActiveWaveSurfer.play();
+            playSafely(globalThis.currentActiveWaveSurfer);
           }
         }
       }
@@ -200,7 +189,14 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  const playbackId = file?.id;
+  const playbackPeaks = file?.waveformPeaks;
+  const playbackDuration = file?.waveformDuration;
+  const playbackVersion = file?.waveformCacheVersion;
+  const playbackFile = useMemo(() => playbackId ? ({ id: playbackId, waveformPeaks: playbackPeaks, waveformDuration: playbackDuration, waveformCacheVersion: playbackVersion }) : null, [playbackId, playbackPeaks, playbackDuration, playbackVersion]);
+
   useEffect(() => {
+    const file = playbackFile;
     if (file && waveformRef.current) {
       const cachedWaveform = isValidWaveformCache(file.waveformPeaks, file.waveformDuration, file.waveformCacheVersion);
       const useMobileStreamingFallback = !cachedWaveform && isMobilePlaybackDevice();
@@ -218,22 +214,9 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
       mediaElement.preload = 'auto';
       mediaElement.setAttribute('playsinline', '');
 
-      if (useMobileStreamingFallback) {
-        const applyMetadataDuration = () => {
-          const mediaDuration = mediaElement.duration;
-          if (!Number.isFinite(mediaDuration) || mediaDuration <= 0) return;
-
-          wavesurferRef.current?.setOptions({
-            peaks: MOBILE_PLACEHOLDER_WAVEFORM_PEAKS,
-            duration: mediaDuration,
-          });
-          mediaElement.removeEventListener('loadedmetadata', applyMetadataDuration);
-          mediaElement.removeEventListener('canplay', applyMetadataDuration);
-        };
-
-        mediaElement.addEventListener('loadedmetadata', applyMetadataDuration);
-        mediaElement.addEventListener('canplay', applyMetadataDuration);
-      }
+      const player = wavesurferRef.current;
+      const handleError = () => setPlaybackError('Playback failed. Try playing again or reload this page.');
+      mediaElement.addEventListener('archiveplaybackerror', handleError);
 
       // Add to global list
       if (!globalThis.waveSurfers) globalThis.waveSurfers = [];
@@ -241,12 +224,12 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
 
       // Event listeners for debugging
       wavesurferRef.current.on('ready', () => console.log('WaveSurfer ready for', file.id));
-      wavesurferRef.current.on('error', (err) => console.error('WaveSurfer error for', file.id, err));
+      wavesurferRef.current.on('error', handleError);
       wavesurferRef.current.on('pause', () => console.log('Paused', file.id));
 
       // When this starts playing, pause others
       wavesurferRef.current.on('play', () => {
-        console.log('Playing', file.id);
+        setPlaybackError('');
         globalThis.currentActiveWaveSurfer = wavesurferRef.current;
         globalThis.waveSurfers.forEach(ws => {
           if (ws !== wavesurferRef.current && ws.isPlaying()) {
@@ -256,6 +239,8 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
       });
 
       return () => {
+        mediaElement.removeEventListener('archiveplaybackerror', handleError);
+        if (globalThis.currentActiveWaveSurfer === player) globalThis.currentActiveWaveSurfer = null;
         if (wavesurferRef.current) {
           // Remove from global list
           globalThis.waveSurfers = globalThis.waveSurfers.filter(ws => ws !== wavesurferRef.current);
@@ -264,7 +249,7 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
         }
       };
     }
-  }, [file]);
+  }, [playbackFile]);
 
   const handleAddComment = async () => {
     if (!file || !newComment.trim()) return;
@@ -308,13 +293,14 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
   return (
     <div className="container mx-auto p-4 bg-background text-foreground min-h-screen">
       <h1 className="text-2xl font-bold mb-4">{file.name}</h1>
+      {playbackError && <p role="alert">{playbackError}</p>}
       <div ref={waveformRef} className="mb-4 cursor-pointer" onClick={(e) => {
         if (wavesurferRef.current) {
           const rect = wavesurferRef.current.getWrapper().getBoundingClientRect();
           const x = e.clientX - rect.left;
           const progress = x / rect.width;
           seekToProgress(wavesurferRef.current, progress);
-          wavesurferRef.current.play();
+          playSafely(wavesurferRef.current);
         }
       }}></div>
       <button 

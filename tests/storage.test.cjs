@@ -185,7 +185,7 @@ const setupStem = async () => {
 test('targeted edits and attachment lifecycle', async t => {
   await t.test('unrelated edits preserve server-owned fields and concurrent interactions', async () => {
     await setup();
-    const original = { ...fixture, originalName: 'original.wav', ratings: { adam: 4, member: 5 }, ratingUpdatedAt: { member: 'recent' }, likedBy: ['member'], collections: ['New collection'], notes: 'original', waveformPeaks: generated.waveformPeaks, waveformDuration: 10, waveformCacheVersion: 5, stems: { id: 'new.zip' } };
+    const original = { ...fixture, originalName: 'original.wav', ratings: { adam: 4, member: 5 }, ratingUpdatedAt: { member: 'recent' }, likedBy: ['member'], collections: ['New collection'], notes: 'original', waveformPeaks: generated.waveformPeaks, waveformDuration: 10, waveformCacheVersion: 6, stems: { id: 'new.zip' } };
     save([original]);
     await addComment();
     assert.equal((await patch({ operation: 'metadata', changes: { name: 'Rename from tab A' } })).status, 200);
@@ -214,7 +214,7 @@ test('targeted edits and attachment lifecycle', async t => {
     assert.equal(read()[0].createdAt, '2024-05-06T12:00:00.000Z');
   });
   await t.test('waveform removal and rating reset are explicit and preserve unrelated data', async () => {
-    await setup(); save([{ ...fixture, ...generated, waveformCacheVersion: 5, ratings: { adam: 4, member: 5 }, ratingUpdatedAt: { adam: 'keep', member: 'remove' }, notes: 'keep me' }]);
+    await setup(); save([{ ...fixture, ...generated, waveformCacheVersion: 6, ratings: { adam: 4, member: 5 }, ratingUpdatedAt: { adam: 'keep', member: 'remove' }, notes: 'keep me' }]);
     assert.equal((await patch({ operation: 'reset-member-ratings' })).status, 200);
     assert.deepEqual(read()[0].ratings, { adam: 4 }); assert.deepEqual(read()[0].ratingUpdatedAt, { adam: 'keep' });
     assert.equal(read()[0].waveformDuration, 10);
@@ -250,7 +250,7 @@ test('targeted edits and attachment lifecycle', async t => {
     for (const mutation of [{ operation: 'metadata', changes: { notes: 'no' } }, { operation: 'reset-member-ratings' }, { operation: 'waveform', waveform: null }]) {
       assert.equal((await patch(mutation, member.id)).status, 403);
     }
-    const response = await patch({ operation: 'waveform', waveform: { ...generated, waveformCacheVersion: 5 } }, member.id);
+    const response = await patch({ operation: 'waveform', waveform: { ...generated, waveformCacheVersion: 6 } }, member.id);
     assert.equal(response.status, 200);
     assert.deepEqual(Object.keys((await response.json()).changes).sort(), ['waveformCacheVersion', 'waveformDuration', 'waveformPeaks']);
     const anonymous = new NextRequest('http://test.local/api/files/fixture.wav', { method: 'PATCH', body: '{}' });
@@ -316,4 +316,18 @@ test('targeted edits and attachment lifecycle', async t => {
     assert.deepEqual(read(), []);
     assert.equal(fs.existsSync(storage.getUploadPath(fixture.id)), true);
   });
+});
+
+const audioRoute = load('app/api/files/[id]/audio/route.ts');
+test('audio ranges serve exact suffix bytes and reject unsatisfiable requests', async () => {
+  await setup();
+  const bytes = Buffer.from(Array.from({ length: 100 }, (_, i) => i));
+  fs.writeFileSync(storage.getUploadPath(fixture.id), bytes);
+  for (const [range, status, expected] of [['bytes=-10', 206, bytes.subarray(90)], ['bytes=90-', 206, bytes.subarray(90)], ['bytes=0-999', 206, bytes], ['bytes=100-', 416], ['bytes=-0', 416], ['bytes=20-10', 416]]) {
+    const r = request('/api/files/fixture.wav/audio'); r.headers.set('range', range);
+    const response = await audioRoute.GET(r, context);
+    assert.equal(response.status, status);
+    if (expected) assert.deepEqual(Buffer.from(await response.arrayBuffer()), expected);
+    else assert.equal(response.headers.get('content-range'), 'bytes */100');
+  }
 });

@@ -5,6 +5,7 @@ import { mutateRecording, type MetadataChanges } from '@/lib/recording-mutations
 import { Fragment, memo, type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import WaveSurfer from 'wavesurfer.js';
+import { getPlayableDuration as getWaveSurferPlayableDuration, seekToProgress as seekWaveSurferToProgress, playSafely } from '@/lib/playback';
 import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
 
 interface AudioFile {
@@ -351,34 +352,6 @@ const formatDuration = (duration: number | undefined) => {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 };
 
-const getWaveSurferPlayableDuration = (wavesurfer: WaveSurfer) => {
-  const mediaDuration = wavesurfer.getMediaElement().duration;
-  if (Number.isFinite(mediaDuration) && mediaDuration > 0) return mediaDuration;
-
-  const wavesurferDuration = wavesurfer.getDuration();
-  return Number.isFinite(wavesurferDuration) && wavesurferDuration > 0 ? wavesurferDuration : 0;
-};
-
-const seekWaveSurferToProgress = (wavesurfer: WaveSurfer, progress: number, fallbackDuration = 0) => {
-  const safeProgress = Math.min(1, Math.max(0, progress));
-  const duration = fallbackDuration || getWaveSurferPlayableDuration(wavesurfer);
-  const time = duration * safeProgress;
-  wavesurfer.setTime(time);
-  if (duration > 0) {
-    wavesurfer.getRenderer().renderProgress(safeProgress, wavesurfer.isPlaying());
-  }
-
-  return { duration, progress: safeProgress, time };
-};
-
-const renderWaveSurferTimelineProgress = (wavesurfer: WaveSurfer, currentTime: number, timelineDuration = 0) => {
-  if (timelineDuration <= 0) return;
-  wavesurfer.getRenderer().renderProgress(
-    Math.min(1, Math.max(0, currentTime / timelineDuration)),
-    wavesurfer.isPlaying()
-  );
-};
-
 const setMediaSessionAction = (
   action: MediaSessionAction,
   handler: MediaSessionActionHandler | null
@@ -592,12 +565,13 @@ const AudioCard = memo(function AudioCard({
   const [shouldMountWaveform, setShouldMountWaveform] = useState(false);
   const [hasStartedPlayback, setHasStartedPlayback] = useState(() => tracksStartedFromWaveformClick.has(file.id));
   const [isCardPlaying, setIsCardPlaying] = useState(false);
+  const [playbackError, setPlaybackError] = useState('');
   const [duration, setDuration] = useState(file.waveformDuration || 0);
   const [currentTime, setCurrentTime] = useState(0);
   const durationRef = useRef(file.waveformDuration || 0);
   const waveformHeightRef = useRef(getResponsiveWaveformHeight());
   const lastPlaybackUiSyncRef = useRef(0);
-  const canRenderCachedWaveform = USE_CACHED_WAVEFORM_RENDERING && hasCachedWaveform(file);
+
   const latestFileRef = useRef(file);
   const playWhenReadyRef = useRef(false);
   const audioPlayableRef = useRef(false);
@@ -691,7 +665,7 @@ const AudioCard = memo(function AudioCard({
     }
 
     pendingPlaybackRef.current = null;
-    void wavesurfer.play();
+    void playSafely(wavesurfer);
   }, []);
 
   const handleTagRowWheel = (event: React.WheelEvent<HTMLDivElement>) => {
@@ -733,6 +707,9 @@ const AudioCard = memo(function AudioCard({
 
     audioPlayableRef.current = false;
     pendingPlaybackRef.current = null;
+    setPlaybackError('');
+    const canRenderCachedWaveform = USE_CACHED_WAVEFORM_RENDERING && hasCachedWaveform(latestFileRef.current);
+    let disposed = false;
     const cachedPeaks = canRenderCachedWaveform ? latestFileRef.current.waveformPeaks : undefined;
     const cachedDuration = canRenderCachedWaveform ? latestFileRef.current.waveformDuration : undefined;
     const useMobileStreamingFallback = !canRenderCachedWaveform && isMobilePlaybackDevice();
@@ -758,22 +735,15 @@ const AudioCard = memo(function AudioCard({
     const mediaElement = wavesurfer.getMediaElement();
     mediaElement.preload = isMobilePlaybackDevice() ? 'metadata' : 'auto';
     mediaElement.setAttribute('playsinline', '');
-    let appliedMobileMetadataDuration = false;
 
     const applyMobileMetadataDuration = () => {
-      if (!useMobileStreamingFallback || appliedMobileMetadataDuration) return;
 
       const mediaDuration = mediaElement.duration;
       if (!Number.isFinite(mediaDuration) || mediaDuration <= 0) return;
 
-      appliedMobileMetadataDuration = true;
       durationRef.current = mediaDuration;
       setDuration(mediaDuration);
-      wavesurfer.setOptions({
-        peaks: MOBILE_PLACEHOLDER_WAVEFORM_PEAKS,
-        duration: mediaDuration,
-      });
-      renderWaveSurferTimelineProgress(wavesurfer, mediaElement.currentTime || 0, mediaDuration);
+
     };
 
     const handleCanPlay = () => {
@@ -793,10 +763,11 @@ const AudioCard = memo(function AudioCard({
       );
       setDuration(seekState.duration);
       setCurrentTime(seekState.time);
-      void wavesurfer.play();
+      void playSafely(wavesurfer);
     };
 
     const handlePlay = () => {
+      setPlaybackError('');
       if (cardRef.current) {
         onPlay(latestFileRef.current, cardRef.current, wavesurfer);
       }
@@ -811,11 +782,15 @@ const AudioCard = memo(function AudioCard({
       setIsCardPlaying(false);
       onStop(latestFileRef.current, wavesurfer);
     };
-    const handleError = (error: Error) => console.error('WaveSurfer error for', latestFileRef.current.id, error);
+    const handleError = () => {
+      if (disposed) return;
+      pendingPlaybackRef.current = null;
+      setIsCardPlaying(false);
+      setPlaybackError('Playback failed. Try playing again or reload this page.');
+    };
     const handleReady = (readyDuration: number) => {
-      const timelineDuration = hasCachedWaveform(latestFileRef.current)
-        ? latestFileRef.current.waveformDuration || readyDuration
-        : readyDuration;
+      const timelineDuration = getWaveSurferPlayableDuration(wavesurfer, readyDuration);
+      durationRef.current = timelineDuration;
       setDuration(timelineDuration);
       setCurrentTime(wavesurfer.getCurrentTime());
       if (playWhenReadyRef.current) {
@@ -831,11 +806,9 @@ const AudioCard = memo(function AudioCard({
 
       lastPlaybackUiSyncRef.current = now;
       setCurrentTime(time);
-      renderWaveSurferTimelineProgress(
-        wavesurfer,
-        time,
-        hasCachedWaveform(latestFileRef.current) ? latestFileRef.current.waveformDuration || 0 : durationRef.current || 0
-      );
+      const actualDuration = getWaveSurferPlayableDuration(wavesurfer);
+      durationRef.current = actualDuration;
+      setDuration(actualDuration);
     };
     const handleTimeUpdate = (time: number) => syncPlaybackUi(time);
     const handleSeeking = (time: number) => syncPlaybackUi(time, true);
@@ -852,7 +825,7 @@ const AudioCard = memo(function AudioCard({
     const handleDecode = async (duration: number) => {
       const latestFile = latestFileRef.current;
       setDuration(duration);
-      if (hasCachedWaveform(latestFile) || duration <= 0) return;
+      if (disposed || useMobileStreamingFallback || canRenderCachedWaveform || hasCachedWaveform(latestFile) || duration <= 0) return;
 
       const decodedData = wavesurfer.getDecodedData();
       if (!decodedData) return;
@@ -863,9 +836,9 @@ const AudioCard = memo(function AudioCard({
       try {
         const changes = await mutateRecording<AudioFile>(latestFile.id, {
           operation: 'waveform',
-          waveform: { waveformPeaks, waveformDuration: duration, waveformCacheVersion: WAVEFORM_CACHE_VERSION },
+          waveform: { waveformPeaks, waveformDuration: decodedData.duration, waveformCacheVersion: WAVEFORM_CACHE_VERSION },
         });
-        setFiles(prev => replaceFileVersion(prev, { id: latestFile.id, ...changes }));
+        if (!disposed) setFiles(prev => replaceFileVersion(prev, { id: latestFile.id, ...changes }));
       } catch (error) {
         console.error('Failed to cache waveform for', latestFile.id, error);
       }
@@ -880,10 +853,15 @@ const AudioCard = memo(function AudioCard({
     wavesurfer.on('seeking', handleSeeking);
     wavesurfer.on('decode', handleDecode);
     wavesurfer.getWrapper().addEventListener('click', handleWaveformWrapperClick);
+    mediaElement.addEventListener('archiveplaybackerror', handleError);
+    mediaElement.addEventListener('durationchange', applyMobileMetadataDuration);
     mediaElement.addEventListener('canplay', handleCanPlay);
     mediaElement.addEventListener('loadedmetadata', handleCanPlay);
 
     return () => {
+      disposed = true;
+      mediaElement.removeEventListener('archiveplaybackerror', handleError);
+      mediaElement.removeEventListener('durationchange', applyMobileMetadataDuration);
       wavesurfer.getWrapper().removeEventListener('click', handleWaveformWrapperClick);
       mediaElement.removeEventListener('canplay', handleCanPlay);
       mediaElement.removeEventListener('loadedmetadata', handleCanPlay);
@@ -898,7 +876,7 @@ const AudioCard = memo(function AudioCard({
       pendingPlaybackRef.current = null;
       setIsCardPlaying(false);
     };
-  }, [canRenderCachedWaveform, file.id, onDestroy, onPause, onPlay, onReady, onStop, playFromProgress, setFiles, shouldRenderWaveform, waveformRefreshKey]);
+  }, [file.id, onDestroy, onPause, onPlay, onReady, onStop, playFromProgress, setFiles, shouldRenderWaveform, waveformRefreshKey]);
 
   useEffect(() => {
     const mediaElement = wavesurferRef.current?.getMediaElement();
@@ -1064,7 +1042,8 @@ const AudioCard = memo(function AudioCard({
   const seekAndPlayComment = (timestamp: number) => {
     if (!wavesurferRef.current || !markerDuration) return;
 
-    playFromProgress(timestamp / markerDuration);
+    const actualDuration = getWaveSurferPlayableDuration(wavesurferRef.current, markerDuration);
+    playFromProgress(timestamp / actualDuration);
   };
 
   const handleCardPlayButton = () => {
@@ -1087,7 +1066,7 @@ const AudioCard = memo(function AudioCard({
       return;
     }
     playFromProgress((wavesurfer.getCurrentTime() || 0) / (
-      hasCachedWaveform(file) ? file.waveformDuration || 1 : durationRef.current || wavesurfer.getDuration() || 1
+      getWaveSurferPlayableDuration(wavesurfer) || 1
     ));
   };
 
@@ -1863,6 +1842,7 @@ const AudioCard = memo(function AudioCard({
               `link-song-mobile-${project.id}`,
             )}
             {currentUser.isAdmin && showSendPanel && renderSendPanel('right-0 top-10 md:hidden')}
+            {playbackError && <p role="alert" className="text-sm text-red-400">{playbackError}</p>}
             <div 
               ref={waveformRef} 
               className="min-h-40 w-full cursor-pointer pt-8 sm:min-h-36 md:min-h-[118px] md:pt-2"
@@ -3068,7 +3048,7 @@ export default function Home() {
           if (activeWaveSurferRef.current.isPlaying()) {
             activeWaveSurferRef.current.pause();
           } else {
-            activeWaveSurferRef.current.play();
+            playSafely(activeWaveSurferRef.current);
           }
         }
       }
@@ -3088,7 +3068,7 @@ export default function Home() {
         return;
       }
 
-      const duration = hasCachedWaveform(activeTrack) ? activeTrack.waveformDuration || ws.getDuration() : ws.getDuration();
+      const duration = getWaveSurferPlayableDuration(ws);
       const currentTime = ws.getCurrentTime();
       const hidden = document.hidden;
       if (!hidden) {
@@ -3133,7 +3113,7 @@ export default function Home() {
 
   const playRegisteredPlayer = useCallback((player: PlayerRegistryEntry, shouldScroll = true) => {
     player.wavesurfer.setVolume(miniVolumeRef.current);
-    void player.wavesurfer.play();
+    void playSafely(player.wavesurfer);
     if (shouldScroll && !document.hidden) {
       player.cardElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
@@ -3169,7 +3149,7 @@ export default function Home() {
 
   const handleCardStop = useCallback((file: AudioFile, wavesurfer: WaveSurfer) => {
     if (endModeRef.current === 'repeat' && activeTrackIdRef.current === file.id && activeWaveSurferRef.current === wavesurfer) {
-      wavesurfer.play();
+      playSafely(wavesurfer);
       return;
     }
 
@@ -3227,7 +3207,7 @@ export default function Home() {
     if (wavesurfer.isPlaying()) {
       wavesurfer.pause();
     } else {
-      wavesurfer.play();
+      playSafely(wavesurfer);
     }
   }, []);
 
@@ -3290,7 +3270,7 @@ export default function Home() {
 
     navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
     setMediaSessionAction('play', () => {
-      void activeWaveSurferRef.current?.play();
+      if (activeWaveSurferRef.current) void playSafely(activeWaveSurferRef.current);
     });
     setMediaSessionAction('pause', () => {
       activeWaveSurferRef.current?.pause();
@@ -3305,13 +3285,13 @@ export default function Home() {
     setMediaSessionAction('seekforward', (details) => {
       const wavesurfer = activeWaveSurferRef.current;
       if (!wavesurfer) return;
-      const duration = activeTrack.waveformDuration || wavesurfer.getDuration();
+      const duration = getWaveSurferPlayableDuration(wavesurfer);
       wavesurfer.setTime(Math.min(duration || Number.POSITIVE_INFINITY, wavesurfer.getCurrentTime() + (details.seekOffset || 10)));
     });
     setMediaSessionAction('seekto', (details) => {
       const wavesurfer = activeWaveSurferRef.current;
       if (!wavesurfer || details.seekTime === undefined) return;
-      wavesurfer.setTime(details.seekTime);
+      wavesurfer.setTime(Math.min(getWaveSurferPlayableDuration(wavesurfer), Math.max(0, details.seekTime)));
     });
   }, [activeTrack, archiveName, isPlaying, playRelativeTrack]);
 

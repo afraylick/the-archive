@@ -253,7 +253,7 @@ const ManageWaveform = ({
         activeWaveSurferRef.current.pause();
       }
       activeWaveSurferRef.current = wavesurferRef.current;
-      wavesurferRef.current.playPause();
+      void wavesurferRef.current.playPause().catch(() => setStatus('Playback failed. Try again.'));
       return;
     }
 
@@ -283,7 +283,7 @@ const ManageWaveform = ({
         activeWaveSurferRef.current.pause();
       }
       activeWaveSurferRef.current = wavesurfer;
-      wavesurfer.play();
+      void wavesurfer.play().catch(() => setStatus('Playback failed. Try again.'));
     });
 
     wavesurfer.on('play', () => {
@@ -302,6 +302,7 @@ const ManageWaveform = ({
     });
 
     wavesurfer.on('decode', async (duration: number) => {
+      if (cachedWaveform) return; // Supplied peaks are not a newly decoded recording.
       try {
         setStatus('Refreshing waveform...');
         const decodedData = wavesurfer.getDecodedData();
@@ -310,7 +311,7 @@ const ManageWaveform = ({
         const waveformPeaks = createWaveformPeaks(decodedData);
         if (!waveformPeaks[0]?.length || duration <= 0) return;
 
-        await onWaveformRegenerated(latestFileRef.current, waveformPeaks, duration);
+        await onWaveformRegenerated(latestFileRef.current, waveformPeaks, decodedData.duration);
         setStatus(wavesurfer.isPlaying() ? 'Playing' : 'Ready');
       } catch (error) {
         console.error('Failed to refresh manage waveform for', latestFileRef.current.id, error);
@@ -362,6 +363,7 @@ export default function ManagePage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [waveformProcessingId, setWaveformProcessingId] = useState<string | null>(null);
+  const [waveformBulkRunning, setWaveformBulkRunning] = useState(false);
   const [waveformBulkStatus, setWaveformBulkStatus] = useState('');
   const [stemUploadingId, setStemUploadingId] = useState<string | null>(null);
   const [stemDeletingId, setStemDeletingId] = useState<string | null>(null);
@@ -464,7 +466,7 @@ export default function ManagePage() {
           id: file.id, waveformPeaks: waveformData.waveformPeaks,
           waveformDuration: waveformData.waveformDuration, waveformCacheVersion: waveformData.waveformCacheVersion,
         }));
-        return;
+        return true;
       }
 
       const res = await fetch(`/api/files/${encodeURIComponent(file.id)}/audio`);
@@ -484,9 +486,11 @@ export default function ManagePage() {
         } },
         'Failed to save waveform'
       );
+      return true;
     } catch (error) {
       console.error('Failed to regenerate waveform for', file.id, error);
       if (showError) alert('Failed to regenerate waveform');
+      return false;
     } finally {
       setWaveformProcessingId(null);
     }
@@ -495,6 +499,7 @@ export default function ManagePage() {
   const cullAllWaveforms = async () => {
     if (!confirm('Cull all cached waveforms? Audio files will not be deleted.')) return;
     const managedFiles = getAllManagedFiles(files);
+    setWaveformBulkRunning(true);
     try {
       setWaveformBulkStatus(`Culled 0/${managedFiles.length}`);
       for (let i = 0; i < managedFiles.length; i++) {
@@ -507,20 +512,24 @@ export default function ManagePage() {
     } catch {
       alert('Failed to cull all waveforms');
     } finally {
+      setWaveformBulkRunning(false);
       setWaveformBulkStatus('');
     }
   };
 
   const regenerateAllWaveforms = async () => {
     const managedFiles = getAllManagedFiles(files);
+    setWaveformBulkRunning(true);
+    let failed = 0;
     try {
       setWaveformBulkStatus(`Generated 0/${managedFiles.length}`);
       for (let i = 0; i < managedFiles.length; i++) {
-        await regenerateWaveform(managedFiles[i], false);
-        setWaveformBulkStatus(`Generated ${i + 1}/${managedFiles.length}`);
+        if (!await regenerateWaveform(managedFiles[i], false)) failed++;
+        setWaveformBulkStatus(`Processed ${i + 1}/${managedFiles.length}; ${failed} failed`);
       }
     } finally {
-      setWaveformBulkStatus('');
+      setWaveformBulkRunning(false);
+      setWaveformBulkStatus(`Finished: ${managedFiles.length - failed} generated; ${failed} failed. Existing waveforms are preserved on failure.`);
     }
   };
 
@@ -844,14 +853,14 @@ export default function ManagePage() {
           <button
             onClick={cullAllWaveforms}
             className="rounded bg-muted px-4 py-2 text-muted-foreground transition hover:bg-muted/80"
-            disabled={files.length === 0 || Boolean(waveformBulkStatus)}
+            disabled={files.length === 0 || waveformBulkRunning}
           >
             Cull All Waveforms
           </button>
           <button
             onClick={regenerateAllWaveforms}
             className="rounded bg-accent px-4 py-2 text-accent-foreground transition hover:bg-accent/80 disabled:opacity-50"
-            disabled={files.length === 0 || Boolean(waveformBulkStatus)}
+            disabled={files.length === 0 || waveformBulkRunning}
           >
             Regenerate All Waveforms
           </button>
