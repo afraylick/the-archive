@@ -2,7 +2,7 @@
 .count { color: #75899c; font-size: 10px; }
 .state { padding: 30px 0; color: #93a8bc; }
 .state p { margin-bottom: 15px; }
-.table { width: 100%; border-collapse: collapse; text-align: left; }
+.table { width: 100%; min-width: 570px; border-collapse: collapse; text-align: left; }
 .table th { padding: 12px 12px; background: #ffffff02; border-block: 1px solid #ffffff08; color: #6d7e91; font-size: 9px; letter-spacing: 1px; font-weight: 500; white-space: nowrap; }
 .table td { padding: 20px 12px; border-bottom: 1px solid #ffffff09; }
 .table th:first-child, .table td:first-child { padding-left: 21px; }
@@ -61,10 +61,17 @@
 @media (min-width:1600px) { .workspace { grid-template-columns: minmax(0,1fr) 390px; gap: 28px; } .table td { padding-block: 23px; } }
 @media (max-width:1200px) { .workspace { grid-template-columns: minmax(0,1fr) 320px; gap: 16px; } .table th, .table td { padding-inline: 9px; } .table th:nth-child(4), .table td:nth-child(4), .table th:nth-child(5), .table td:nth-child(5) { display: none; } .activityTabs { gap: 12px; } }
 @media (max-width:1000px) { .workspace { grid-template-columns: minmax(0,1fr); } .details { width: 100%; } .table th:nth-child(4), .table td:nth-child(4), .table th:nth-child(5), .table td:nth-child(5) { display: table-cell; } }
-@media (max-width:760px) { .table { min-width: 440px; } .table th, .table td { padding: 15px 9px; } .table th:first-child, .table td:first-child { padding-left: 15px; } .table th:nth-child(2), .table td:nth-child(2) { display: none; } .table th { font-size: 8px; letter-spacing: .5px; } .member { min-width: 130px; gap: 9px; } .member strong { font-size: 12px; } .editForm :is(input,select) { font-size: 16px; } .inputAction button { padding-block: 12px; } }
+@media (max-width:760px) { .table { min-width: 570px; } .table th, .table td { padding: 15px 9px; } .table th:first-child, .table td:first-child { padding-left: 15px; } .table th:nth-child(2), .table td:nth-child(2) { display: none; } .table th { font-size: 8px; letter-spacing: .5px; } .member { min-width: 130px; gap: 9px; } .member strong { font-size: 12px; } .editForm :is(input,select) { font-size: 16px; } .inputAction button { padding-block: 12px; } }
 
 .editForm input:disabled { opacity: .55; }
 .editForm > small { margin-top: 9px; }
 
 .memberTabs { overflow-x: auto; }
 .memberTabs button { flex-shrink: 0; }
+
+.lastLogin { display: block; color: #bbc9d7; font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.lastLogin small { display: block; color: #75879a; font-size: 9px; margin-top: 6px; }
+.noLogin { color: #71869a; font-size: 10px; white-space: nowrap; }
+.loginSummary { display: flex; justify-content: space-between; align-items: start; gap: 16px; padding-bottom: 21px; margin-bottom: 21px; border-bottom: 1px solid #ffffff09; }
+.loginSummary dt { font-size: 10px; color: #9eb2c7; }
+.loginSummary dd { text-align: right; }

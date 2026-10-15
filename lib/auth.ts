@@ -15,6 +15,7 @@ export interface ArchiveUser {
   name: string;
   isAdmin: boolean;
   role: UserRole;
+  lastLoginAt?: string;
 }
 
 export const SESSION_COOKIE = 'archive_session';
@@ -156,6 +157,23 @@ export const getPublicUsers = () => getAllUsers().map(user => ({
   isAdmin: user.isAdmin,
   role: user.role,
 }));
+
+/** Login history is only included by the administrative member endpoint. */
+export const getUserLastLogins = () => Object.fromEntries(getAllUsers().map(user => [
+  user.id,
+  typeof user.lastLoginAt === 'string' && Number.isFinite(Date.parse(user.lastLoginAt)) ? user.lastLoginAt : null,
+]));
+
+export const recordUserLogin = (userId: UserId) => {
+  const user = getUserById(userId);
+  if (!user) throw new Error('User not found');
+  const stored = readCustomUsers();
+  const updated = { ...user, lastLoginAt: new Date().toISOString() };
+  const index = stored.findIndex(account => account.id === userId);
+  if (index < 0) stored.push(updated);
+  else stored[index] = updated;
+  writeCustomUsers(stored);
+};
 
 const readPasswordHashes = () => {
   const read = (file: string) => {

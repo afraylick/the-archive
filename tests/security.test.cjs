@@ -285,3 +285,68 @@ test('Owner migration and role authorization', async t => {
     assert.equal(await auth.verifyPasscode(member.id, 'member-password'), true);
   });
 });
+
+test('last successful login history', async t => {
+  const login = passcode => session.POST(new NextRequest('http://test.local/api/session', {
+    method: 'POST', body: JSON.stringify({ passcode }),
+  }));
+  await t.test('records successful logins durably without changing credentials, roles, or recordings', async () => {
+    fresh(); await auth.setUserPasscode('adam', 'owner-password');
+    const member = await auth.createUser('Listener', 'listener-password');
+    fs.writeFileSync(file('data.json'), '[]');
+    const credentials = fs.readFileSync(file('users.json'));
+    const recordings = fs.readFileSync(file('data.json'));
+    const initial = await (await usersRoute.GET(accountRequest('adam', 'GET'))).json();
+    assert.equal(initial.users.find(user => user.id === member.id).lastLoginAt, null);
+    assert.equal(initial.users.find(user => user.id === 'adam').lastLoginAt, null);
+    const before = Date.now();
+    const response = await login('listener-password');
+    assert.equal(response.status, 200); assert.match(response.headers.get('set-cookie'), /archive_session=/);
+    const saved = JSON.parse(fs.readFileSync(file('accounts.json'))).find(user => user.id === member.id);
+    assert.ok(Date.parse(saved.lastLoginAt) >= before && Date.parse(saved.lastLoginAt) <= Date.now());
+    assert.equal(saved.role, 'member'); assert.equal(saved.name, 'Listener');
+    assert.deepEqual(fs.readFileSync(file('users.json')), credentials);
+    assert.deepEqual(fs.readFileSync(file('data.json')), recordings);
+    const summary = await (await usersRoute.GET(accountRequest('adam', 'GET'))).json();
+    assert.equal(summary.users.find(user => user.id === member.id).lastLoginAt, saved.lastLoginAt);
+    assert.equal(auth.getUserLastLogins()[member.id], saved.lastLoginAt);
+    assert.equal(auth.getUserLastLogins().adam, null);
+    auth.renameUser(member.id, 'Renamed Listener'); auth.setUserRole('adam', member.id, 'admin');
+    assert.equal(auth.getUserLastLogins()[member.id], saved.lastLoginAt);
+    await auth.setUserPasscode(member.id, 'new-listener-password');
+    assert.equal(auth.getUserLastLogins()[member.id], saved.lastLoginAt);
+    assert.equal((await usersRoute.PATCH(accountRequest('adam', 'PATCH', { userId: member.id, lastLoginAt: '2000-01-01T00:00:00Z' }))).status, 400);
+  });
+
+  await t.test('failed logins, session reads, and password checks do not update history or expose other login times', async () => {
+    fresh(); await auth.setUserPasscode('adam', 'owner-password');
+    const member = await auth.createUser('Listener', 'listener-password');
+    const oldLogin = '2020-01-01T12:00:00.000Z';
+    const stored = JSON.parse(fs.readFileSync(file('accounts.json')));
+    stored.find(user => user.id === member.id).lastLoginAt = oldLogin;
+    json.writeJsonAtomic(file('accounts.json'), stored);
+    const before = fs.readFileSync(file('accounts.json'));
+    assert.equal((await login('incorrect-password')).status, 401);
+    assert.equal(await auth.verifyPasscode(member.id, 'listener-password'), true);
+    const publicResponse = await (await session.GET(accountRequest(member.id, 'GET'))).json();
+    assert.ok(publicResponse.users.every(user => !('lastLoginAt' in user)));
+    assert.ok(auth.getPublicUsers().every(user => !('lastLoginAt' in user)));
+    assert.equal((await usersRoute.GET(accountRequest(member.id, 'GET'))).status, 403);
+    assert.deepEqual(fs.readFileSync(file('accounts.json')), before);
+    assert.equal((await login('listener-password')).status, 200);
+    assert.ok(Date.parse(auth.getUserLastLogins()[member.id]) > Date.parse(oldLogin));
+  });
+
+  await t.test('parallel successful logins preserve both accounts and the original Owner', async () => {
+    fresh(); await auth.setUserPasscode('adam', 'owner-password');
+    const member = await auth.createUser('Listener', 'listener-password');
+    const results = await Promise.all([login('owner-password'), login('listener-password')]);
+    assert.ok(results.every(response => response.status === 200));
+    const logins = auth.getUserLastLogins();
+    assert.ok(logins.adam); assert.ok(logins[member.id]);
+    assert.equal(auth.getUserById('adam').role, 'owner');
+    const records = JSON.parse(fs.readFileSync(file('accounts.json')));
+    assert.equal(records.filter(user => user.id === 'adam').length, 1);
+    assert.equal(records.filter(user => user.id === member.id).length, 1);
+  });
+});

@@ -116,6 +116,7 @@ It combines browser-based batch uploads, waveform playback, metadata and collect
 - Editable display names without changing the stable internal IDs used by ratings, likes, comments, and upload history.
 - Owners can promote Members to Admin or demote Admins from **Members & access → Access role**.
 - Admins can manage Member accounts and their own name/password, but cannot change roles or edit, reset passwords for, or delete other Admin or Owner accounts.
+- Last successful login appears in the member directory and details, with sorting by last login. Tracking starts after this update; earlier logins show **Not recorded**.
 - Per-user summaries for rating count and average, likes, comments, rated songs, liked songs, and commented songs.
 - Password-only login: the submitted password identifies the account, so every account must use a unique password.
 - Signed, HTTP-only session cookies with a 30-day lifetime.
@@ -266,7 +267,7 @@ The application uses JSON metadata plus ordinary files rather than an external d
 | --- | --- |
 | `data.json` | Song projects, variations, metadata, waveform peaks, ratings, likes, comments, collections, and stems references |
 | `archive-settings.json` | Installation title, defaults, and compatibility mode |
-| `accounts.json` | Created users and display-name overrides |
+| `accounts.json` | Created users, display-name overrides, roles, and last successful login timestamps |
 | `users.json` | Password hashes |
 | `uploads/` | Original audio and uploaded versions |
 | `stems/` | Attached ZIP files |

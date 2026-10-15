@@ -6,6 +6,7 @@ import {
   getPublicUsers,
   getSessionUser,
   getUserById,
+  getUserLastLogins,
   renameUser,
   setUserPasscode,
   setUserRole,
@@ -48,6 +49,7 @@ export async function GET(req: NextRequest) {
   }
 
   const files = readFiles();
+  const lastLogins = getUserLastLogins();
   const users = getPublicUsers().map(account => {
     const ratedSongs = files
       .filter(file => (file.ratings?.[account.id] || 0) > 0)
@@ -60,6 +62,7 @@ export async function GET(req: NextRequest) {
 
     return {
       ...account,
+      lastLoginAt: lastLogins[account.id],
       permissions: {
         canEdit: canEditAccount(user, account),
         canChangeRole: canChangeAccountRole(user, account),

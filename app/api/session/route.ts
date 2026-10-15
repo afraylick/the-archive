@@ -4,6 +4,7 @@ import {
   getUserByPasscode,
   getPublicUsers,
   getSessionUser,
+  recordUserLogin,
   SESSION_COOKIE,
 } from '@/lib/auth';
 import { getArchiveSettings } from '@/lib/archive-settings';
@@ -53,10 +54,12 @@ export async function POST(req: NextRequest) {
     }
 
     clearFailedLogins(req, undefined);
+    const token = createSessionToken(loginUser.id);
+    recordUserLogin(loginUser.id);
     const response = NextResponse.json({
       user: getPublicUsers().find(user => user.id === loginUser.id),
     });
-    response.cookies.set(SESSION_COOKIE, createSessionToken(loginUser.id), {
+    response.cookies.set(SESSION_COOKIE, token, {
       httpOnly: true,
       sameSite: 'lax',
       secure: isSecureRequest(req),
