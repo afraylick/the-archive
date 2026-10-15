@@ -73,6 +73,8 @@ const streamedPlayer = () => {
 test('streamed click waits for seek completion and reconciles the actual position', async () => {
   const { player, media, plays, progress } = streamedPlayer();
   const pending = seekAndPlay(player, .5);
+  await Promise.resolve();
+  await Promise.resolve();
   assert.equal(media.currentTime, 1800);
   assert.deepEqual(plays, []);
   media.currentTime = 1800.25; media.seeking = false;
@@ -86,13 +88,80 @@ test('rapid clicks supersede pending playback; destroying a player cancels a see
   const first = seekAndPlay(player, .25);
   const latest = seekAndPlay(player, .75);
   await first;
+  await Promise.resolve();
   assert.deepEqual(plays, []);
   media.seeking = false; media.dispatchEvent(new Event('seeked'));
   await latest;
   assert.deepEqual(plays, [2700]);
   const destroyed = seekAndPlay(player, .1);
+  await Promise.resolve();
+  await Promise.resolve();
   events.get('destroy')();
   media.dispatchEvent(new Event('seeked'));
   await destroyed;
   assert.deepEqual(plays, [2700]);
+});
+
+test('Firefox MP3 scrubbing decodes once, seeks by sample time, and releases on track switch', async t => {
+  const { prepareAccurateSeeking, releaseAccurateSeeking } = load('lib/accurate-seeking.ts');
+  const previousContext = globalThis.AudioContext;
+  const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { userAgent: 'Firefox/145.0' } });
+  const starts = []; let closed = 0; let decodes = 0; let downloads = 0;
+  const buffer = { duration: 545.489, sampleRate: 44100 };
+  class Context {
+    currentTime = 0;
+    destination = {};
+    async resume() {}
+    async close() { closed++; }
+    createGain() { return { gain: { value: 1 }, connect() {}, disconnect() {} }; }
+    createBufferSource() {
+      return { playbackRate: { value: 1 }, connect() {}, disconnect() {}, stop() {}, start(when, offset) { starts.push({ offset, buffer: this.buffer }); } };
+    }
+    async decodeAudioData() { decodes++; return buffer; }
+  }
+  globalThis.AudioContext = Context;
+  t.mock.method(globalThis, 'fetch', async () => { downloads++; return new Response(Buffer.from('fixture')); });
+  t.after(() => {
+    releaseAccurateSeeking();
+    globalThis.AudioContext = previousContext;
+    if (navigatorDescriptor) Object.defineProperty(globalThis, 'navigator', navigatorDescriptor);
+    else delete globalThis.navigator;
+  });
+  const { player, media: original } = streamedPlayer();
+  original.src = 'http://test/api/files/fixture.mp3/audio'; original.pause = () => {};
+  let media = original;
+  player.getMediaElement = () => media;
+  player.setMediaElement = value => { media = value; };
+  player.getVolume = () => .5; player.getPlaybackRate = () => 1;
+  const first = prepareAccurateSeeking(player);
+  await Promise.all([first, prepareAccurateSeeking(player)]);
+  assert.equal(downloads, 1); assert.equal(decodes, 1);
+  assert.notEqual(media, original);
+  media.currentTime = 242;
+  await media.play();
+  assert.equal(starts[0].offset, 242);
+  assert.equal(starts[0].buffer, buffer, 'scrub uses the decoded sample buffer');
+  media.pause(); media.currentTime = 10; await media.play();
+  assert.deepEqual(starts.map(start => start.offset), [242, 10]);
+  releaseAccurateSeeking(player);
+  assert.equal(closed, 0, 'active track retains its buffer');
+  releaseAccurateSeeking();
+  assert.equal(media, original); assert.equal(original.currentTime, 10);
+  assert.equal(closed, 1);
+});
+
+test('downloads reject interrupted bodies and HTTP failures before creating a download', async t => {
+  const { downloadAudio } = load('lib/download-audio.ts');
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls++;
+    assert.equal(options.cache, 'no-store');
+    assert.ok(url.endsWith('/audio?download=1'));
+    if (calls === 1) return new Response('short', { headers: { 'content-length': '100' } });
+    return new Response('unauthorized', { status: 401 });
+  });
+  const signal = new AbortController().signal;
+  await assert.rejects(downloadAudio('fixture.mp3', 'file.mp3', signal), /interrupted/);
+  await assert.rejects(downloadAudio('fixture.mp3', 'file.mp3', signal), /session expired/);
 });

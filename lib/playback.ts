@@ -1,6 +1,8 @@
 import type WaveSurfer from 'wavesurfer.js';
+import { cancelAccuratePreparation, prepareAccurateSeeking } from './accurate-seeking';
 
 const pendingSeeks = new WeakMap<WaveSurfer, () => void>();
+const seekVersions = new WeakMap<WaveSurfer, number>();
 
 /** The media clock is authoritative; cached/decoded duration is only a startup fallback. */
 export const getPlayableDuration = (player: WaveSurfer, fallback = 0) => {
@@ -24,11 +26,22 @@ export const seekToProgress = (player: WaveSurfer, progress: number, fallback = 
 };
 
 /** Pause while the browser resolves a streamed seek; a newer click supersedes it. */
-export const seekAndPlay = (player: WaveSurfer, progress: number, fallback = 0) => {
+export const seekAndPlay = async (player: WaveSurfer, progress: number, fallback = 0, resume = true) => {
+  const version = (seekVersions.get(player) || 0) + 1;
+  seekVersions.set(player, version);
   pendingSeeks.get(player)?.();
   player.pause();
+  const original = player.getMediaElement();
+  try {
+    if (progress > 0) await prepareAccurateSeeking(player);
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === 'AbortError')) original.dispatchEvent(new Event('archiveplaybackerror'));
+    return;
+  }
+  if (seekVersions.get(player) !== version) return;
   const media = player.getMediaElement();
   return new Promise<void>((resolve) => {
+    let completed = false;
     const cleanup = () => {
       clearTimeout(timer);
       media.removeEventListener('seeked', complete);
@@ -38,13 +51,16 @@ export const seekAndPlay = (player: WaveSurfer, progress: number, fallback = 0) 
     };
     const cancel = () => { cleanup(); resolve(); };
     const complete = () => {
+      if (completed) return;
+      completed = true;
       cleanup();
       // setTime emits the requested time synchronously. Reconcile to the media
       // clock only after the browser has actually resolved the seek.
       player.getRenderer().renderProgress(
         media.currentTime / (getPlayableDuration(player, fallback) || 1), false
       );
-      void playSafely(player).then(resolve);
+      if (resume) void playSafely(player).then(resolve);
+      else resolve();
     };
     pendingSeeks.set(player, cancel);
     media.addEventListener('seeked', complete, { once: true });
@@ -67,6 +83,9 @@ export const seekAndPlay = (player: WaveSurfer, progress: number, fallback = 0) 
 
 /** Route rejected play promises through the same visible error UI as media errors. */
 export const playSafely = async (player: WaveSurfer) => {
+  seekVersions.set(player, (seekVersions.get(player) || 0) + 1);
+  pendingSeeks.get(player)?.();
+  cancelAccuratePreparation(player);
   try {
     await player.play();
   } catch (error) {

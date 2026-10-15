@@ -6,7 +6,9 @@ import { Fragment, memo, type Dispatch, type SetStateAction, useCallback, useEff
 import Link from 'next/link';
 import { useWaveform } from '@/lib/use-waveform';
 import WaveSurfer from 'wavesurfer.js';
-import { getPlayableDuration as getWaveSurferPlayableDuration, getSeekTarget, seekToProgress as seekWaveSurferToProgress, seekAndPlay, playSafely } from '@/lib/playback';
+import { releaseAccurateSeeking } from '@/lib/accurate-seeking';
+import { downloadAudio } from '@/lib/download-audio';
+import { getPlayableDuration as getWaveSurferPlayableDuration, getSeekTarget, seekAndPlay, playSafely } from '@/lib/playback';
 import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
 
 interface AudioFile {
@@ -548,6 +550,27 @@ const AudioCard = memo(function AudioCard({
   const [hasStartedPlayback, setHasStartedPlayback] = useState(() => tracksStartedFromWaveformClick.has(file.id));
   const [isCardPlaying, setIsCardPlaying] = useState(false);
   const [playbackError, setPlaybackError] = useState('');
+  const [seekBusy, setSeekBusy] = useState(false);
+  const seekUiVersionRef = useRef(0);
+  const [downloadBusy, setDownloadBusy] = useState(false);
+  const [downloadError, setDownloadError] = useState('');
+  const downloadControllerRef = useRef<AbortController | null>(null);
+  useEffect(() => () => downloadControllerRef.current?.abort(), [file.id]);
+  const handleDownload = async () => {
+    if (downloadControllerRef.current) return;
+    const controller = new AbortController();
+    downloadControllerRef.current = controller;
+    setDownloadBusy(true);
+    setDownloadError('');
+    try {
+      await downloadAudio(file.id, file.originalName || file.name || file.id, controller.signal);
+    } catch (error) {
+      if (!controller.signal.aborted) setDownloadError(error instanceof Error ? error.message : 'Download failed. Try again.');
+    } finally {
+      if (downloadControllerRef.current === controller) downloadControllerRef.current = null;
+      setDownloadBusy(false);
+    }
+  };
   const [duration, setDuration] = useState(file.waveformDuration || 0);
   const [currentTime, setCurrentTime] = useState(0);
   const durationRef = useRef(file.waveformDuration || 0);
@@ -630,7 +653,11 @@ const AudioCard = memo(function AudioCard({
     }
 
     pendingPlaybackRef.current = null;
-    void seekAndPlay(wavesurfer, seekState.progress, timelineDuration);
+    const requestVersion = ++seekUiVersionRef.current;
+    setSeekBusy(true);
+    void seekAndPlay(wavesurfer, seekState.progress, timelineDuration).finally(() => {
+      if (seekUiVersionRef.current === requestVersion) setSeekBusy(false);
+    });
   }, []);
 
   const handleTagRowWheel = (event: React.WheelEvent<HTMLDivElement>) => {
@@ -1036,9 +1063,7 @@ const AudioCard = memo(function AudioCard({
       playFromProgress(0);
       return;
     }
-    playFromProgress((wavesurfer.getCurrentTime() || 0) / (
-      getWaveSurferPlayableDuration(wavesurfer) || 1
-    ));
+    void playSafely(wavesurfer);
   };
 
   const addComment = async () => {
@@ -1668,9 +1693,10 @@ const AudioCard = memo(function AudioCard({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 11a8.1 8.1 0 0 0-15.5-2M4 5v4h4m-4 4a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" />
               </svg>
             </button>
-            <a
-              href={`/api/files/${encodeURIComponent(file.id)}/audio?download=1`}
-              download={file.originalName || file.name}
+            <button
+              type="button"
+              onClick={() => void handleDownload()}
+              disabled={downloadBusy}
               className="inline-flex h-8 w-9 items-center justify-center border-l border-border/70 text-muted-foreground transition hover:text-foreground"
               title="Download audio"
               aria-label={`Download ${file.name}`}
@@ -1678,7 +1704,7 @@ const AudioCard = memo(function AudioCard({
               <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v11m0 0 4-4m-4 4-4-4M5 19h14" />
               </svg>
-            </a>
+            </button>
             {currentUser.isAdmin && (
               <button
                 type="button"
@@ -1756,9 +1782,10 @@ const AudioCard = memo(function AudioCard({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 11a8.1 8.1 0 0 0-15.5-2M4 5v4h4m-4 4a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" />
                 </svg>
               </button>
-              <a
-                href={`/api/files/${encodeURIComponent(file.id)}/audio?download=1`}
-                download={file.originalName || file.name}
+              <button
+                type="button"
+                onClick={() => void handleDownload()}
+                disabled={downloadBusy}
                 className="inline-flex h-8 w-9 items-center justify-center border-l border-border/70 text-muted-foreground transition hover:text-foreground"
                 title="Download audio"
                 aria-label={`Download ${file.name}`}
@@ -1766,7 +1793,7 @@ const AudioCard = memo(function AudioCard({
                 <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v11m0 0 4-4m-4 4-4-4M5 19h14" />
                 </svg>
-              </a>
+              </button>
               {currentUser.isAdmin && (
                 <button
                   type="button"
@@ -1814,6 +1841,9 @@ const AudioCard = memo(function AudioCard({
             )}
             {currentUser.isAdmin && showSendPanel && renderSendPanel('right-0 top-10 md:hidden')}
             {playbackError && <p role="alert" className="text-sm text-red-400">{playbackError}</p>}
+            {seekBusy && <p role="status" className="text-sm text-muted-foreground">Seeking…</p>}
+            {downloadBusy && <p role="status" className="text-sm text-muted-foreground">Downloading audio…</p>}
+            {downloadError && <p role="alert" className="text-sm text-red-400">{downloadError}</p>}
             <div 
               ref={waveformRef} 
               className="min-h-40 w-full cursor-pointer pt-8 sm:min-h-36 md:min-h-[118px] md:pt-2"
@@ -3102,6 +3132,7 @@ export default function Home() {
   }, [playRegisteredPlayer]);
 
   const handleCardPlay = useCallback((file: AudioFile, _cardElement: HTMLDivElement, wavesurfer: WaveSurfer) => {
+    releaseAccurateSeeking(wavesurfer);
     if (activeWaveSurferRef.current && activeWaveSurferRef.current !== wavesurfer) {
       activeWaveSurferRef.current.pause();
     }
@@ -3190,8 +3221,7 @@ export default function Home() {
     const rect = event.currentTarget.getBoundingClientRect();
     const progress = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
     const fallback = activeTrack && hasCachedWaveform(activeTrack) ? activeTrack.waveformDuration || 0 : 0;
-    if (wavesurfer.isPlaying()) void seekAndPlay(wavesurfer, progress, fallback);
-    else seekWaveSurferToProgress(wavesurfer, progress, fallback);
+    void seekAndPlay(wavesurfer, progress, fallback, wavesurfer.isPlaying());
     setProgress(progress * 100);
   }, [activeTrack]);
 

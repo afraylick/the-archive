@@ -366,6 +366,10 @@ Stage 4 uses waveform cache version 6. Earlier caches are ignored because mobile
 
 Playback, waveform seeking, comment positions, and Media Session use the media duration once available, with cached duration only as a startup fallback. Real silent recordings are valid waveforms. After rollout, verify a representative recording on desktop and a physical iPhone/Android device, including seeking, switching versions, and background playback.
 
+Firefox MP3 scrubbing switches the selected player to decoded Web Audio playback on its first seek. This addresses inaccurate variable-bitrate media seeks even when the MP3 already contains a seek table. It downloads and decodes the complete file in the browser once; ordinary playback from the beginning still streams. Only one decoded track is retained, and switching tracks or destroying its player releases it. No server audio copies are generated. The first scrub may take longer on a slow connection, and decoded stereo audio uses about 22 MB of browser memory per minute at 48 kHz. Later scrubs reuse that buffer.
+
+Audio downloads show a loading state while the complete original is received, bypass response caches, and report an error if the response fails or is truncated. The browser is handed the downloaded file only after the full response is available.
+
 
 If server-side generation fails, the browser may generate a compatible cache after decoding the audio. Installing `ffmpeg` provides the most reliable behavior across the supported formats.
 

@@ -332,6 +332,21 @@ test('audio ranges serve exact suffix bytes and reject unsatisfiable requests', 
   }
 });
 
+test('audio download returns the complete original with an attachment filename', async () => {
+  await setup();
+  const id = 'fixture.mp3';
+  const filename = '210221_WaveringTrip.mp3';
+  const bytes = Buffer.from(Array.from({ length: 100 }, (_, i) => i));
+  save([{ ...fixture, id, originalName: filename }]);
+  fs.writeFileSync(storage.getUploadPath(id), bytes);
+  const response = await audioRoute.GET(request(`/api/files/${id}/audio?download=1`), { params: Promise.resolve({ id }) });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-length'), String(bytes.length));
+  assert.equal(response.headers.get('content-type'), 'audio/mpeg');
+  assert.equal(response.headers.get('content-disposition'), `attachment; filename="${filename}"; filename*=UTF-8''${filename}`);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
+});
+
 test('metadata index, waveform isolation and invalidation', async () => {
   await setup();
   save([{ ...fixture, ...generated, waveformCacheVersion: 6 }]);

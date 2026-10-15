@@ -136,7 +136,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       ? file.originalName || file.name || id
       : undefined;
 
-    if (wantsMobileAudio) {
+    if (wantsMobileAudio && !downloadName) {
       try {
         const mobileAudioPath = await getMobileAudioPath(filePath, id);
         if (mobileAudioPath) {
@@ -147,7 +147,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       }
     }
 
-    return streamAudioFile(filePath, contentType, req.headers.get('range'), AUDIO_CACHE_CONTROL, downloadName);
+    return streamAudioFile(filePath, contentType, req.headers.get('range'), downloadName ? 'private, no-store' : AUDIO_CACHE_CONTROL, downloadName);
   } catch {
     return NextResponse.json({ error: 'Audio stream failed' }, { status: 500 });
   }
