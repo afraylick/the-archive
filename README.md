@@ -366,6 +366,8 @@ Stage 4 uses waveform cache version 6. Earlier caches are ignored because mobile
 
 Playback, waveform seeking, comment positions, and Media Session use the media duration once available, with cached duration only as a startup fallback. Real silent recordings are valid waveforms. After rollout, verify a representative recording on desktop and a physical iPhone/Android device, including seeking, switching versions, and background playback.
 
+MP3 players request an indexed playback copy (`format=playback` on desktop, `format=mobile` on mobile). With `ffmpeg` installed, the server copies the compressed audio frames into a cached MP3 with an explicit frame count and seek table. This prevents duration estimates in unindexed MP3s from stretching the waveform timeline, particularly in long variable-bitrate recordings. Indexing does not re-encode the audio; uploads and original downloads stay unchanged. Copies are built once on demand in `transcoded/`, refreshed when the source changes, and removed when the recording is deleted. If indexing fails or `ffmpeg` is unavailable, playback falls back to the original file.
+
 
 If server-side generation fails, the browser may generate a compatible cache after decoding the audio. Installing `ffmpeg` provides the most reliable behavior across the supported formats.
 

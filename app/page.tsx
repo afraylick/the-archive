@@ -159,7 +159,7 @@ const isMobilePlaybackDevice = () => {
 
 const getPlaybackAudioUrl = (id: string) => {
   const baseUrl = `/api/files/${encodeURIComponent(id)}/audio`;
-  return isMobilePlaybackDevice() ? `${baseUrl}?format=mobile` : baseUrl;
+  return `${baseUrl}?format=${isMobilePlaybackDevice() ? 'mobile' : 'playback'}`;
 };
 
 const normalizeTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag;

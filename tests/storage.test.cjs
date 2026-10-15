@@ -378,3 +378,44 @@ test('simultaneous mobile ranges share one transcode and release its slot', asyn
   assert.equal(calls, 1);
   assert.equal(globalThis.archiveTranscodes.size, 0);
 });
+
+test('MP3 playback uses one indexed copy while downloads retain the original', async t => {
+  await setup();
+  const id = 'timing.mp3';
+  const ctx = { params: Promise.resolve({ id }) };
+  save([{ ...fixture, id }]);
+  const original = Buffer.from('original uploaded audio');
+  const indexed = Buffer.from('indexed playback audio');
+  fs.writeFileSync(storage.getUploadPath(id), original);
+  const processing = load('lib/audio-processing.ts');
+  let calls = 0;
+  t.mock.method(processing, 'runFfmpeg', async args => {
+    calls++;
+    assert.equal(args[args.indexOf('-codec:a') + 1], 'copy');
+    assert.equal(args[args.indexOf('-write_xing') + 1], '1');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    fs.writeFileSync(args.at(-1), indexed);
+  });
+  const requests = ['playback', 'mobile'].map(format => {
+    const req = request(`/api/files/${id}/audio?format=${format}`);
+    req.headers.set('range', 'bytes=-5');
+    return audioRoute.GET(req, ctx);
+  });
+  for (const response of await Promise.all(requests)) {
+    assert.equal(response.status, 206);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), indexed.subarray(-5));
+    assert.equal(response.headers.get('content-range'), `bytes ${indexed.length - 5}-${indexed.length - 1}/${indexed.length}`);
+  }
+  assert.equal(calls, 1);
+  assert.equal(globalThis.archiveIndexedAudioJobs.size, 0);
+  for (const query of ['', '?format=playback&download=1']) {
+    const response = await audioRoute.GET(request(`/api/files/${id}/audio${query}`), ctx);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), original);
+  }
+  assert.equal(calls, 1);
+  const replay = await audioRoute.GET(request(`/api/files/${id}/audio?format=playback`), ctx);
+  assert.deepEqual(Buffer.from(await replay.arrayBuffer()), indexed);
+  assert.equal(calls, 1, 'cached playback must not run ffmpeg again');
+  assert.equal((await deleteRoute.DELETE(request(`/api/files/${id}`, 'DELETE'), ctx)).status, 200);
+  assert.equal(fs.existsSync(storage.getIndexedMp3CachePath(id)), false);
+});
