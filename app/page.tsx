@@ -594,7 +594,13 @@ const AudioCard = memo(function AudioCard({
   useEffect(() => {
     const cardElement = cardRef.current;
     if (!cardElement) return;
-    const observer = new IntersectionObserver(([entry]) => setShouldMountWaveform(entry.isIntersecting), { rootMargin: '260px 0px' });
+    // Retain visited waveforms: reversing scroll must not fetch or redraw them.
+    // Only waveform data loads ahead; inactive audio keeps preload='none'.
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting) return;
+      setShouldMountWaveform(true);
+      observer.disconnect();
+    }, { rootMargin: '1600px 0px' });
     observer.observe(cardElement);
     return () => observer.disconnect();
   }, []);
