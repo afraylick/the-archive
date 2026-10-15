@@ -1,97 +1,44 @@
-import { writeJsonAtomic } from '@/lib/json-storage';
-import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
-import { getDataFilePath } from '@/lib/storage';
+import { readCollections, createCollection, collectionForUser, canAccessCollection } from '@/lib/collections';
+import { PATCH as updateCollection, DELETE as deleteCollection } from './[id]/route';
 
-interface AudioFileRecord {
-  id: string;
-  collections?: string[];
-  [key: string]: unknown;
+export async function GET(req: NextRequest) {
+  const user = getSessionUser(req);
+  if (!user) return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+  try {
+    return NextResponse.json({ collections: readCollections().filter(collection => canAccessCollection(collection, user)).map(collection => {
+      const { comments: _comments, ...summary } = collectionForUser(collection, user);
+      void _comments;
+      return summary;
+    }) });
+  } catch {
+    return NextResponse.json({ error: 'Collections could not be loaded' }, { status: 500 });
+  }
 }
 
-const MAX_COLLECTION_NAME_LENGTH = 80;
+export async function POST(req: NextRequest) {
+  const user = getSessionUser(req);
+  if (!user) return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+  try {
+    const body = await req.json();
+    const collection = createCollection(body.name, user, body.visibility, body.memberIds);
+    return NextResponse.json({ collection: collectionForUser(collection, user) }, { status: 201 });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Collection creation failed' }, { status: 400 });
+  }
+}
 
-const cleanCollectionName = (value: unknown) => (
-  typeof value === 'string' ? value.trim().slice(0, MAX_COLLECTION_NAME_LENGTH) : ''
-);
-
-const readFiles = () => {
-  const dataFile = getDataFilePath();
-  const files: AudioFileRecord[] = fs.existsSync(dataFile)
-    ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
-    : [];
-  return { dataFile, files };
-};
-
+// Keep the management screen's name-based operations compatible with playlist IDs.
+async function legacyContext(req: NextRequest) {
+  const body = await req.clone().json();
+  const user = getSessionUser(req);
+  const collection = user && readCollections().find(item => item.name === body.collection && canAccessCollection(item, user));
+  return { params: Promise.resolve({ id: collection ? collection.id : '' }) };
+}
 export async function PATCH(req: NextRequest) {
-  try {
-    const user = getSessionUser(req);
-    if (!user?.isAdmin) {
-      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
-    }
-
-    const body = await req.json() as { collection?: unknown; name?: unknown };
-    const collection = cleanCollectionName(body.collection);
-    const name = cleanCollectionName(body.name);
-    if (!collection || !name) {
-      return NextResponse.json({ error: 'Both collection names are required' }, { status: 400 });
-    }
-
-    const { dataFile, files } = readFiles();
-    let filesUpdated = 0;
-    const nextFiles = files.map(file => {
-      const collections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
-      if (!collections.includes(collection)) return file;
-
-      filesUpdated += 1;
-      return {
-        ...file,
-        collections: Array.from(new Set(collections.map(value => value === collection ? name : value))),
-      };
-    });
-
-    if (filesUpdated === 0) {
-      return NextResponse.json({ error: 'Collection not found' }, { status: 404 });
-    }
-
-    writeJsonAtomic(dataFile, nextFiles);
-    return NextResponse.json({ collection: name, filesUpdated });
-  } catch {
-    return NextResponse.json({ error: 'Collection rename failed' }, { status: 500 });
-  }
+  return updateCollection(req, await legacyContext(req));
 }
-
 export async function DELETE(req: NextRequest) {
-  try {
-    const user = getSessionUser(req);
-    if (!user?.isAdmin) {
-      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
-    }
-
-    const body = await req.json() as { collection?: unknown };
-    const collection = cleanCollectionName(body.collection);
-    if (!collection) {
-      return NextResponse.json({ error: 'Collection name is required' }, { status: 400 });
-    }
-
-    const { dataFile, files } = readFiles();
-    let filesUpdated = 0;
-    const nextFiles = files.map(file => {
-      const collections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
-      if (!collections.includes(collection)) return file;
-
-      filesUpdated += 1;
-      return { ...file, collections: collections.filter(value => value !== collection) };
-    });
-
-    if (filesUpdated === 0) {
-      return NextResponse.json({ error: 'Collection not found' }, { status: 404 });
-    }
-
-    writeJsonAtomic(dataFile, nextFiles);
-    return NextResponse.json({ filesUpdated });
-  } catch {
-    return NextResponse.json({ error: 'Collection deletion failed' }, { status: 500 });
-  }
+  return deleteCollection(req, await legacyContext(req));
 }

@@ -438,10 +438,125 @@ test('collection names persist across projects and variations', async () => {
   const response = await collectionRoute.PATCH(request('/api/collections', 'PATCH', { collection: 'Demos, 2026', name: 'Renamed' }));
   assert.equal(response.status, 200);
   assert.equal((await response.json()).filesUpdated, 2);
-  assert.deepEqual(read().map(file => file.collections), [['Renamed', 'Other'], ['Renamed'], ['Unrelated']]);
+  assert.deepEqual(read().map(file => file.collections), [['Demos, 2026', 'Other'], ['Demos, 2026', 'Renamed'], ['Unrelated']], 'renaming preserves stable membership keys');
   assert.equal(read()[0].notes, 'Keep notes');
   const assigned = await recordingCollectionsRoute.PUT(request('/api/files/fixture.wav/collections', 'PUT', { collections: ['Renamed', 'Other', 'New, collection'] }), context);
   assert.equal(assigned.status, 200);
-  assert.deepEqual(read()[0].collections, ['Renamed', 'Other', 'New, collection']);
-  assert.deepEqual(read()[1].collections, ['Renamed']);
+  const collections = load('lib/collections.ts');
+  const catalog = collections.readCollections();
+  const renamed = catalog.find(collection => collection.name === 'Renamed');
+  assert.deepEqual(collections.collectionTrackIds(renamed), [fixture.id, 'version.wav']);
+  assert.equal(catalog.some(collection => collection.name === 'New, collection' && collection.ownerId === 'adam'), true);
+  assert.deepEqual((await (await libraryRoute.GET(request('/api/files?view=metadata'))).json())[0].collections, ['Renamed', 'Other', 'New, collection']);
+});
+
+
+const collectionDetailRoute = load('app/api/collections/[id]/route.ts');
+const collectionChatRoute = load('app/api/collections/[id]/comments/route.ts');
+const ratingsRoute = load('app/api/files/[id]/rating/route.ts');
+test('playlist privacy, sharing, ordering, and collaborative ratings', async t => {
+  await setup();
+  const owner = await auth.createUser('Playlist owner', 'playlist-owner-password');
+  const invited = await auth.createUser('Invited listener', 'playlist-invited-password');
+  const outsider = await auth.createUser('Other listener', 'playlist-outsider-password');
+  save([{ ...fixture, likedBy: [owner.id], ratings: { adam: 4, [owner.id]: 3, [invited.id]: 5, [outsider.id]: 2 } }, { ...fixture, id: 'second.wav', name: 'Second song' }]);
+  fs.writeFileSync(storage.getUploadPath('second.wav'), 'audio');
+  const created = await collectionRoute.POST(request('/api/collections', 'POST', { name: 'New playlist' }, owner.id));
+  assert.equal(created.status, 201);
+  const initial = (await created.json()).collection;
+  assert.equal(initial.visibility, 'public');
+  assert.equal(initial.ownerId, owner.id);
+  const ctx = { params: Promise.resolve({ id: initial.id }) };
+  const update = (body, userId = owner.id) => collectionDetailRoute.PATCH(request('/collection', 'PATCH', body, userId), ctx);
+  const detail = userId => collectionDetailRoute.GET(request('/collection', 'GET', undefined, userId), ctx);
+  const list = async userId => (await (await collectionRoute.GET(request('/api/collections', 'GET', undefined, userId))).json()).collections;
+  await t.test('all members can create; public defaults are accessible but settings belong to the creator', async () => {
+    assert.equal((await detail(outsider.id)).status, 200);
+    assert.equal((await update({ name: 'Take over' }, outsider.id)).status, 403);
+    assert.equal((await update({ addSongId: fixture.id }, outsider.id)).status, 403);
+    assert.equal((await update({ addSongId: fixture.id })).status, 200);
+    assert.equal((await update({ addSongId: 'second.wav' })).status, 200);
+    assert.equal((await update({ addSongId: fixture.id })).status, 200);
+    assert.deepEqual((await (await detail(owner.id)).json()).collection.songIds, [fixture.id, 'second.wav']);
+  });
+  await t.test('private collections hide their names, content and chat even from uninvited administrators', async () => {
+    assert.equal((await update({ visibility: 'private', memberIds: [invited.id] })).status, 200);
+    for (const userId of [outsider.id, 'adam']) {
+      assert.equal((await detail(userId)).status, 404);
+      assert.equal((await list(userId)).some(collection => collection.id === initial.id), false);
+      const library = await (await libraryRoute.GET(request('/api/files?view=metadata', 'GET', undefined, userId))).json();
+      assert.equal(library[0].collections.includes('New playlist'), false);
+      assert.equal((await libraryRoute.GET(request(`/api/files?view=metadata&collection=${initial.id}`, 'GET', undefined, userId))).status, 404);
+      assert.equal((await collectionChatRoute.POST(request('/chat', 'POST', { text: 'Unauthorized' }, userId), ctx)).status, 404);
+      assert.equal((await recordingCollectionsRoute.PUT(request('/file', 'PUT', { collections: ['New playlist'] }, userId), context)).status, 400);
+    }
+    const before = read()[0].collections;
+    assert.equal((await recordingCollectionsRoute.PUT(request('/file', 'PUT', { collections: [] }, outsider.id), context)).status, 200);
+    assert.deepEqual(read()[0].collections, before, 'hidden memberships survive a visible-only edit');
+  });
+  await t.test('invited users see all ratings only in the private playlist and can edit their own rating', async () => {
+    const regular = await (await libraryRoute.GET(request('/api/files?view=metadata', 'GET', undefined, invited.id))).json();
+    assert.equal(regular[0].ratings[owner.id], undefined);
+    const shared = await (await libraryRoute.GET(request(`/api/files?view=metadata&collection=${initial.id}`, 'GET', undefined, invited.id))).json();
+    assert.equal(shared[0].ratings[owner.id], 3);
+    assert.equal(shared[0].ratings[outsider.id], 2);
+    assert.deepEqual(shared[0].likedBy, [], 'shared rating access does not broaden like visibility');
+    const rated = await ratingsRoute.PUT(request(`/api/files/fixture.wav/rating?collection=${initial.id}`, 'PUT', { rating: 1, userId: owner.id }, invited.id), context);
+    assert.equal(rated.status, 200);
+    const ratings = (await rated.json()).ratings;
+    assert.equal(ratings[owner.id], 3, 'members cannot overwrite another member rating');
+    assert.equal(ratings[invited.id], 1);
+    const wrongContext = await ratingsRoute.PUT(request(`/api/files/fixture.wav/rating?collection=${initial.id}`, 'PUT', { rating: 2 }, outsider.id), context);
+    assert.equal((await wrongContext.json()).ratings[owner.id], undefined);
+  });
+  await t.test('collaborators reorder songs, share messages, and cannot alter owner-only settings', async () => {
+    assert.equal((await update({ moveSongId: 'second.wav', direction: 'up' }, invited.id)).status, 200);
+    const songs = await (await libraryRoute.GET(request(`/api/files?view=metadata&collection=${initial.id}`, 'GET', undefined, invited.id))).json();
+    assert.deepEqual(songs.map(song => song.id), ['second.wav', fixture.id]);
+    assert.equal((await update({ visibility: 'public' }, invited.id)).status, 403);
+    const posted = await collectionChatRoute.POST(request('/chat', 'POST', { text: 'Keep the second take' }, invited.id), ctx);
+    assert.equal(posted.status, 200);
+    const comment = (await posted.json()).comments[0];
+    assert.equal(comment.userId, invited.id);
+    assert.equal((await collectionChatRoute.DELETE(request('/chat', 'DELETE', { commentId: comment.id }, outsider.id), ctx)).status, 404);
+    assert.equal((await collectionChatRoute.DELETE(request('/chat', 'DELETE', { commentId: comment.id }, owner.id), ctx)).status, 200);
+    assert.equal((await update({ removeSongId: 'second.wav' }, invited.id)).status, 200);
+    assert.equal(read().some(file => file.id === 'second.wav'), true, 'removing a song never deletes the recording');
+  });
+  await t.test('renaming preserves privacy and playlist URLs; revocation closes access', async () => {
+    const before = fs.readFileSync(storage.getDataFilePath(), 'utf8');
+    assert.equal((await update({ name: 'Private works in progress' })).status, 200);
+    assert.equal(fs.readFileSync(storage.getDataFilePath(), 'utf8'), before, 'rename is a single metadata commit');
+    assert.equal((await list(outsider.id)).some(collection => collection.name.includes('Private')), false);
+    assert.equal((await (await detail(invited.id)).json()).collection.name, 'Private works in progress');
+    assert.equal((await update({ memberIds: [] })).status, 200);
+    assert.equal((await detail(invited.id)).status, 404);
+    assert.equal((await collectionChatRoute.POST(request('/chat', 'POST', { text: 'Revoked' }, invited.id), ctx)).status, 404);
+  });
+  await t.test('song collection edits retain waveform caches and unrelated metadata', async () => {
+    save(read().map(record => record.id === fixture.id ? { ...record, ...generated, waveformCacheVersion: 6, notes: 'Keep notes' } : record));
+    const updated = await recordingCollectionsRoute.PUT(request('/file', 'PUT', { collections: ['Private works in progress', 'Another playlist'] }, owner.id), context);
+    assert.equal(updated.status, 200);
+    assert.deepEqual(read()[0].waveformPeaks, generated.waveformPeaks);
+    assert.equal(read()[0].notes, 'Keep notes');
+    assert.equal(read()[0].ratings[owner.id], 3);
+  });
+  await t.test('a failed private rename preserves the old name and never re-exposes legacy memberships', async t => {
+    const original = fs.renameSync;
+    t.mock.method(fs, 'renameSync', (source, target) => {
+      if (target === path.join(storage.getStorageRoot(), 'collections.json')) throw new Error('Simulated collection storage failure');
+      return original(source, target);
+    });
+    assert.equal((await update({ name: 'Must not be public' })).status, 400);
+    assert.equal((await (await detail(owner.id)).json()).collection.name, 'Private works in progress');
+    assert.equal((await list(outsider.id)).some(collection => collection.id === initial.id), false);
+  });
+  await t.test('invalid sharing and malformed memberships cannot partially mutate a playlist', async () => {
+    const before = fs.readFileSync(path.join(storage.getStorageRoot(), 'collections.json'), 'utf8');
+    assert.equal((await update({ name: 'Must not change', visibility: 'unlisted' })).status, 400);
+    assert.equal((await update({ name: 'Must not change', memberIds: ['missing-user'] })).status, 400);
+    assert.equal(fs.readFileSync(path.join(storage.getStorageRoot(), 'collections.json'), 'utf8'), before);
+    assert.equal((await recordingCollectionsRoute.PUT(request('/file', 'PUT', { collections: [123] }, owner.id), context)).status, 400);
+    assert.equal((await collectionRoute.POST(new NextRequest('http://test.local/api/collections', { method: 'POST', body: '{}' }))).status, 401);
+  });
 });

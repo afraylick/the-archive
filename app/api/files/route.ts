@@ -1,3 +1,4 @@
+import { readCollections, canAccessCollection, collectionTrackIds, collectionKeys } from '@/lib/collections';
 import { getArchiveIndex } from '@/lib/archive-index';
 import { getLegacyCommentId } from '@/lib/comment-id';
 import { NextResponse } from 'next/server';
@@ -93,16 +94,16 @@ const getUploadedAtFromId = (id: string | undefined) => {
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 };
 
-const sanitizeFileForUser = (file: AudioFileRecord, userId: UserId, isAdmin: boolean) => {
+const sanitizeFileForUser = (file: AudioFileRecord, userId: UserId, isAdmin: boolean, showAllRatings = isAdmin) => {
   const ratings = file.ratings || {};
   const ratingUpdatedAt = file.ratingUpdatedAt || {};
-  const visibleRatings = isAdmin
+  const visibleRatings = showAllRatings
     ? ratings
     : {
         adam: ratings.adam || file.myRating || 0,
         [userId]: getRating(file, userId),
       };
-  const visibleRatingUpdatedAt = isAdmin
+  const visibleRatingUpdatedAt = showAllRatings
     ? ratingUpdatedAt
     : {
         adam: ratingUpdatedAt.adam || '',
@@ -127,6 +128,17 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
     }
 
+    const collections = readCollections();
+    const accessibleCollections = collections.filter(collection => canAccessCollection(collection, user));
+    const namesByKey = new Map(accessibleCollections.flatMap(collection => collectionKeys(collection).map(key => [key, collection.name] as const)));
+    const collectionId = req.nextUrl.searchParams.get('collection');
+    const selectedCollection = collectionId ? accessibleCollections.find(collection => collection.id === collectionId) : undefined;
+    if (collectionId && !selectedCollection) return NextResponse.json({ error: 'Collection not found or unavailable' }, { status: 404 });
+    const selectedIds = new Set(selectedCollection ? collectionTrackIds(selectedCollection) : []);
+    const sanitize = (file: AudioFileRecord) => ({
+      ...sanitizeFileForUser(file, user.id, user.isAdmin, user.isAdmin || Boolean(selectedCollection?.visibility === 'private' && selectedIds.has(file.id))),
+      collections: [...new Set((file.collections || []).flatMap(key => namesByKey.has(key) ? [namesByKey.get(key)!] : []))],
+    });
     const dataFile = getDataFilePath();
     if (!fs.existsSync(dataFile)) {
       return NextResponse.json([]);
@@ -204,16 +216,23 @@ export async function GET(req: NextRequest) {
         versions.set(file.projectId, group);
       }
     }
-    return NextResponse.json(projects.map(project => {
-      const uploads = (versions.get(project.id) || [])
+    const result = projects.filter(project => !selectedCollection || selectedIds.has(project.id) || (versions.get(project.id) || []).some(file => selectedIds.has(file.id))).map(project => {
+      const uploads = (versions.get(project.id) || []).filter(file => !selectedCollection || selectedIds.has(file.id))
         .sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime());
 
       return {
-        ...sanitizeFileForUser(project, user.id, user.isAdmin),
+        ...sanitize(project),
+        defaultVersionId: selectedCollection && !selectedIds.has(project.defaultVersionId || project.id) ? (selectedIds.has(project.id) ? project.id : uploads[0]?.id) : project.defaultVersionId,
         interactionUserIds: user.isAdmin ? getInteractionUserIds([project, ...uploads]) : undefined,
-        uploads: uploads.map(file => sanitizeFileForUser(file, user.id, user.isAdmin)),
+        uploads: uploads.map(sanitize),
       };
-    }));
+    });
+    if (selectedCollection) {
+      const order = collectionTrackIds(selectedCollection);
+      const position = (project: typeof result[number]) => Math.min(...[project.id, ...project.uploads.map(file => file.id)].map(id => { const index = order.indexOf(id); return index < 0 ? Infinity : index; }));
+      result.sort((a, b) => position(a) - position(b));
+    }
+    return NextResponse.json(result);
   } catch {
     return NextResponse.json({ error: 'Failed to load files' }, { status: 500 });
   }

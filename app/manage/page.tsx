@@ -4,11 +4,12 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mutateRecording } from '@/lib/recording-mutations';
 import {
-  allManagedRecordings, collectionNames, defaultRecording, hasManagedWaveform,
+  allManagedRecordings, defaultRecording, hasManagedWaveform,
   metadataEdits, projectInCollection, recordingTags, renameManagedCollection,
   replaceManagedRecording, type ManagedRecording,
 } from '@/lib/management';
 import AdvancedTools from './advanced-tools';
+import type { CollectionView } from '../collections/collection-ui';
 import Icon from './manage-icon';
 import RecordingPlayer from './recording-player';
 import s from './management.module.css';
@@ -28,6 +29,7 @@ async function requestJson<T>(url: string, method: string, body?: unknown): Prom
 }
 
 export default function ManagePage() {
+  const [collectionViews, setCollectionViews] = useState<CollectionView[]>([]);
   const [files, setFiles] = useState<ManagedRecording[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -55,11 +57,15 @@ export default function ManagePage() {
     const response = await fetch('/api/files?view=metadata', { signal });
     if (!response.ok) throw new Error('Library unavailable.');
     const data: ManagedRecording[] = await response.json();
+    const catalog = await requestJson<{ collections: CollectionView[] }>('/api/collections', 'GET');
+    if (!signal?.aborted) setCollectionViews(catalog.collections);
     if (!signal?.aborted) { setFiles(data); setLoadError(''); setLoading(false); }
   }, []);
 
   useEffect(() => {
     const controller = new AbortController();
+    // Refresh awaits network data before it updates React state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh(controller.signal).catch(() => { if (!controller.signal.aborted) { setLoadError('Library unavailable.'); setLoading(false); } });
     fetch('/api/session', { signal: controller.signal }).then(response => response.json()).then(data => {
       if (!controller.signal.aborted) {
@@ -73,10 +79,12 @@ export default function ManagePage() {
   const modalOpen = Boolean(editing || bulkOpen || renaming);
   useEffect(() => { if (modalOpen) dialog.current?.showModal(); else dialog.current?.close(); }, [modalOpen]);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(null), 6500); return () => clearTimeout(timer); }, [notice]);
-  useEffect(() => setLimit(60), [query, filter, collectionFilter, finish, sort]);
+  const paginationKey = JSON.stringify([query, filter, collectionFilter, finish, sort]);
+  const [previousPaginationKey, setPreviousPaginationKey] = useState(paginationKey);
+  if (previousPaginationKey !== paginationKey) { setPreviousPaginationKey(paginationKey); setLimit(60); }
 
   const allFiles = useMemo(() => allManagedRecordings(files), [files]);
-  const collections = useMemo(() => collectionNames(files), [files]);
+  const collections = useMemo(() => collectionViews.map(collection => collection.name).sort((a, b) => a.localeCompare(b)), [collectionViews]);
   const missingTags = files.filter(file => !recordingTags(file, 'instruments').length || !recordingTags(file, 'vibes').length);
   const missingWaves = allFiles.filter(file => !hasManagedWaveform(file));
   const needsAttention = files.filter(file => missingTags.includes(file) || !hasManagedWaveform(defaultRecording(file)));
@@ -147,7 +155,7 @@ export default function ManagePage() {
     }
     setBusy(''); setSelected(failed);
     if (failed.length) setDialogError(`${failed.length} recording(s) could not be updated. Retry to finish.`);
-    else { setBulkOpen(false); setBulkCollection(''); notify('Collection updated.'); }
+    else { setBulkOpen(false); setBulkCollection(''); notify('Collection updated.'); void refresh().catch(() => notify('Refresh failed.', true)); }
   }
 
   async function renameCollection() {
@@ -158,6 +166,7 @@ export default function ManagePage() {
       setFiles(current => renameManagedCollection(current, renaming.original, data.collection));
       setCollectionFilter(current => current === renaming.original ? data.collection : current);
       setRenaming(null); notify(`Collection renamed on ${data.filesUpdated} recording(s).`);
+      void refresh().catch(() => notify('Refresh failed.', true));
     } catch (error) { setDialogError(error instanceof Error ? error.message : 'Rename failed.'); }
     finally { setBusy(''); }
   }
@@ -234,9 +243,9 @@ export default function ManagePage() {
               <footer className={s.tableFooter}><span>Showing {Math.min(limit, visible.length)} of {visible.length} projects</span>{visible.length > limit && <button className={s.textLink} onClick={() => setLimit(value => value + 60)}>Load more</button>}</footer>
             </>}
             {section === 'Collections' && <div className={s.collectionGrid}>
-              {collections.map(collection => <article key={collection} className={s.collectionCard}>
-                <div className={s.collectionArt}><Icon name="collections" size={28}/></div><h3>{collection}</h3><p>{files.filter(file => projectInCollection(file, collection)).length} projects</p>
-                <div className={s.collectionActions}><button className={s.secondary} onClick={() => showLibrary('all', collection)}>Open</button><button className={s.renameButton} aria-label={`Rename collection ${collection}`} disabled={Boolean(busy)} onClick={() => { setDialogError(''); setRenaming({ original: collection, name: collection }); }}>Rename</button></div>
+              {collectionViews.map(collection => <article key={collection.id} className={s.collectionCard}>
+                <div className={s.collectionArt}><Icon name="collections" size={28}/></div><h3>{collection.name}</h3><p>{collection.songIds.length} recordings · {collection.visibility}</p>
+                <div className={s.collectionActions}><Link className={s.secondary} href={`/collections/${encodeURIComponent(collection.id)}`}>Open</Link>{collection.canManage && <button className={s.renameButton} aria-label={`Rename collection ${collection.name}`} disabled={Boolean(busy)} onClick={() => { setDialogError(''); setRenaming({ original: collection.name, name: collection.name }); }}>Rename</button>}</div>
               </article>)}
               {!collections.length && <p className={s.sectionHint}>No collections. Select recordings in Library to add one.</p>}
             </div>}
@@ -268,7 +277,7 @@ export default function ManagePage() {
           <label>Song title<input required maxLength={255} value={editing.name} onChange={event => setEditing({ ...editing, name: event.target.value })}/></label>
           <div className={s.formGrid}><label>Instruments<input value={editing.instruments} onChange={event => setEditing({ ...editing, instruments: event.target.value })}/></label><label>Vibes<input value={editing.vibes} onChange={event => setEditing({ ...editing, vibes: event.target.value })}/></label><label>Type<select value={editing.finish} onChange={event => setEditing({ ...editing, finish: event.target.value })}><option value="">Unspecified</option>{finishOptions.map(type => <option key={type}>{type}</option>)}</select></label><label>Year<input type="number" min="1900" max="2100" step="1" required={Boolean(editing.initial.year)} value={editing.year} onChange={event => setEditing({ ...editing, year: event.target.value })}/></label></div>
           {Boolean(editing.initial.uploads?.length) && <label>Default version<select value={editing.defaultVersionId} onChange={event => setEditing({ ...editing, defaultVersionId: event.target.value })}>{[editing.initial, ...(editing.initial.uploads || [])].map(version => <option key={version.id} value={version.id}>{version.name}{version.id === editing.initial.id ? ' (original)' : ''}</option>)}</select></label>}
-          <fieldset className={s.collectionPicker}><legend>Collections</legend>{collections.map(collection => <label key={collection}><input type="checkbox" checked={editing.collections.includes(collection)} onChange={event => setEditing({ ...editing, collections: event.target.checked ? [...editing.collections, collection] : editing.collections.filter(value => value !== collection) })}/>{collection}</label>)}{!collections.length && <small>No collections.</small>}</fieldset>
+          <fieldset className={s.collectionPicker}><legend>Collections</legend>{collections.map(collection => <label key={collection}><input type="checkbox" disabled={!collectionViews.some(item => item.name === collection && item.canEdit)} checked={editing.collections.includes(collection)} onChange={event => setEditing({ ...editing, collections: event.target.checked ? [...editing.collections, collection] : editing.collections.filter(value => value !== collection) })}/>{collection}</label>)}{!collections.length && <small>No collections.</small>}</fieldset>
           <label>Notes<textarea rows={3} maxLength={10000} value={editing.notes} onChange={event => setEditing({ ...editing, notes: event.target.value })}/></label>
         </> : renaming ? <>
           <p className={s.dialogIntro}>{files.filter(file => projectInCollection(file, renaming.original)).length} projects · all versions updated</p>
@@ -276,7 +285,7 @@ export default function ManagePage() {
         </> : <>
           <p className={s.dialogIntro}>{selected.length} recordings selected</p><label>Collection<input required autoFocus maxLength={80} list="management-collections" value={bulkCollection} onChange={event => setBulkCollection(event.target.value)}/></label>
         </>}
-        <datalist id="management-collections">{collections.map(collection => <option key={collection} value={collection}/>)}</datalist>
+        <datalist id="management-collections">{collectionViews.filter(collection => collection.canEdit).map(collection => <option key={collection.id} value={collection.name}/>)}</datalist>
         <div className={s.dialogFooter}><button type="button" className={s.secondary} disabled={Boolean(busy)} onClick={closeDialog}>Cancel</button><button type="submit" className={s.primary} disabled={Boolean(busy) || Boolean(renaming && (!renaming.name.trim() || renaming.name.trim() === renaming.original))}>{busy ? 'Saving…' : editing ? 'Save changes' : renaming ? 'Rename collection' : 'Add to collection'}</button></div>
       </form>
     </dialog>

@@ -1,3 +1,4 @@
+import { resolveCollectionMemberships } from '@/lib/collections';
 import { cleanupStorageFile } from '@/lib/storage';
 import { receiveUpload, UploadError } from '@/lib/stream-upload';
 import { updateArchive } from '@/lib/json-storage';
@@ -178,6 +179,10 @@ export async function POST(req: NextRequest) {
       results.push({ id: filename, name: file.name });
     }
 
+    const names = [...new Set(additions.flatMap(record => record.collections))];
+    const keys = resolveCollectionMemberships(names, user);
+    const keysByName = new Map(names.map((name, index) => [name, keys[index]]));
+    additions.forEach(record => { record.collections = record.collections.map(name => keysByName.get(name)!); });
     updateArchive<AudioFileRecord>(current => [...current, ...additions]);
     uncommitted.length = 0;
 

@@ -1,3 +1,4 @@
+import { readCollections, collectionKeys, canAccessCollection, canEditCollection } from '@/lib/collections';
 import { cleanupStorageFile } from '@/lib/storage';
 import { receiveUpload, readUploadHeader, UploadError } from '@/lib/stream-upload';
 import { updateArchive } from '@/lib/json-storage';
@@ -196,6 +197,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       waveformCacheVersion: generatedWaveform ? WAVEFORM_CACHE_VERSION : undefined,
     };
 
+    const collections = readCollections();
+    const editableKeys = new Set(collections.filter(collection => canAccessCollection(collection, user) && canEditCollection(collection, user)).flatMap(collectionKeys));
+    upload.collections = (upload.collections || []).filter(key => editableKeys.has(key));
     let parentExists = false;
     updateArchive<AudioFileRecord>(current => {
       parentExists = current.some(item => item.id === projectId && !item.projectId);
@@ -206,7 +210,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'Song project was deleted during upload' }, { status: 404 });
     }
     uncommitted = undefined;
-    return NextResponse.json({ upload }, { status: 201 });
+    const namesByKey = new Map(collections.flatMap(collection => collectionKeys(collection).map(key => [key, collection.name] as const)));
+    return NextResponse.json({ upload: { ...upload, collections: [...new Set((upload.collections || []).map(key => namesByKey.get(key)!))] } }, { status: 201 });
   } catch (error) {
     console.error(error);
     return NextResponse.json({ error: error instanceof UploadError ? error.message : 'Upload failed' }, { status: error instanceof UploadError ? error.status : 500 });

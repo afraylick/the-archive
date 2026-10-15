@@ -65,7 +65,7 @@ It combines browser-based batch uploads, waveform playback, metadata and collect
 ### Search, filtering, and discovery
 
 - Search by song name, with an option to include Admin notes.
-- Include or exclude instruments, vibes, collections, Finish values, years, and Admin ratings.
+- Include or exclude instruments, vibes, Finish values, years, and Admin ratings. Browse collections as separate playlists below search.
 - Admin filtering by users who rated, liked, commented on, or uploaded a version of a song.
 - Filter to the current user's liked songs.
 - Admin-only filter for recordings without instrument or vibe tags.
@@ -84,7 +84,7 @@ It combines browser-based batch uploads, waveform playback, metadata and collect
 - Comments can point to the current playhead or a typed timecode such as `1:23`.
 - Clicking a time-coded comment seeks to that moment and starts playback.
 - Users can delete their own comments.
-- All authenticated users can add or remove a song from collections and create a new collection name while doing so.
+- Every member can create a public or private collection. Owners and invited members can edit playlist songs; everyone with access can comment.
 - All authenticated users can upload alternate versions to an existing project.
 - Admin activity feed for ratings and comments from other users.
 
@@ -136,10 +136,12 @@ The application has three roles: Owner, Admin, and Member. The original administ
 | --- | --- | --- | --- |
 | Browse, filter, play, and download audio or stems | Yes | Yes | Yes |
 | Rate, like, and comment; delete own comments | Yes | Yes | Yes |
-| Update recording collections or upload alternate versions | Yes | Yes | Yes |
+| Create collections or upload alternate versions | Yes | Yes | Yes |
+| Edit playlist songs | Creator or invited | Creator or invited | Creator or invited |
+| Manage collection privacy and sharing | Creator | Creator | Creator |
 | Upload new song projects in bulk | Yes | Yes | No |
 | Edit projects, tags, notes, or another user's rating | Yes | Yes | No |
-| Manage stems, waveforms, collections, and files | Yes | Yes | No |
+| Manage stems, waveforms, and files | Yes | Yes | No |
 | View archive-wide activity and user summaries | Yes | Yes | No |
 | Create and manage Member accounts | Yes | Yes | No |
 | Edit own name and password | Yes | Yes | No |
@@ -217,6 +219,14 @@ A fresh archive is initialized with:
 
 The default Owner's stable internal ID is `adam` for data-schema compatibility. Changing the display name on the Users page does not change that ID or any existing history.
 
+## Collections
+
+Collections are playlists with their own pages at `/collections/[id]`. Open the collapsible **Collections** panel below the library search to browse accessible playlists or create one. Every signed-in member can create a collection; new collections are public to everyone signed into this archive by default. Public does not bypass the archive login.
+
+The creator can rename a collection, make it private, and invite or remove existing archive members through **Sharing & settings**. Only the creator and invited members can add, remove, or reorder songs. Anyone with access can rate songs and join the collection conversation above the playlist. Private collection members can see everyone's song ratings within that collection; ordinary library and public collection rating visibility stays the same. Private collections and their conversations are hidden from uninvited accounts, including administrators.
+
+Existing collection tags appear as public playlists owned by the original archive owner. Their recording memberships and stable page URLs survive renaming. Collection metadata, sharing, playlist order, and chat are stored in `collections.json` beside `data.json`; include both in archive backups. Removing a song from a collection never deletes its audio or library entry.
+
 ## Configuration
 
 ### Environment variables
@@ -265,7 +275,8 @@ The application uses JSON metadata plus ordinary files rather than an external d
 
 | Path | Contents |
 | --- | --- |
-| `data.json` | Song projects, variations, metadata, waveform peaks, ratings, likes, comments, collections, and stems references |
+| `data.json` | Song projects, variations, metadata, waveform peaks, ratings, likes, comments, collection membership keys, and stems references |
+| `collections.json` | Collection names, owners, privacy, invited members, playlist order, and collection chat |
 | `archive-settings.json` | Installation title, defaults, and compatibility mode |
 | `accounts.json` | Created users, display-name overrides, roles, and last successful login timestamps |
 | `users.json` | Password hashes |
@@ -334,14 +345,14 @@ Review the queue before upload and click the selected Finish to clear it or choo
 - Admins can rename a project by using the edit control beside its title.
 - Admins can add or remove instrument and vibe tags from a song card.
 - Admin notes are editable by the Admin and readable by members when present.
-- Every user can add a recording to existing collections or create a collection from a song card.
+- Every user can create a collection from the Collections panel or a song card. Owners and invited members can add recordings to their playlists.
 - Admins can rename or remove a collection globally from **Manage**.
 - Finish and year can be changed from **Manage** for originals and variations.
 - Changing a project's display name does not rename the stored audio file.
 
 ### Ratings, likes, and comments
 
-- Members see the Admin rating and their own rating.
+- Members see the Admin rating and their own rating in the library and public collections. Within an accessible private collection, they see everyone’s ratings.
 - Admins can see all submitted ratings and can edit a rating on another account's behalf.
 - Each account has an independent liked state.
 - Comments support plain text, the current playhead, or a manually entered timecode.

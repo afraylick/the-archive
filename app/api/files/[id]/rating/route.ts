@@ -1,3 +1,4 @@
+import { privateRatingAccess } from '@/lib/collections';
 import { writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser, getUserById, type UserId } from '@/lib/auth';
@@ -46,8 +47,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     writeJsonAtomic(dataFile, data);
 
+    const showAllRatings = user.isAdmin || privateRatingAccess(req.nextUrl.searchParams.get('collection'), user, id);
     return NextResponse.json({
-      ratings: user.isAdmin
+      ratings: showAllRatings
         ? updatedFile.ratings
         : {
             adam: updatedFile.ratings.adam || 0,
@@ -55,7 +57,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           },
       myRating: updatedFile.ratings.adam || 0,
       userRating: updatedFile.ratings[user.id] || 0,
-      ratingUpdatedAt: user.isAdmin
+      ratingUpdatedAt: showAllRatings
         ? updatedFile.ratingUpdatedAt
         : {
             adam: updatedFile.ratingUpdatedAt.adam || '',
