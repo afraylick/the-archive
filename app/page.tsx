@@ -6,7 +6,7 @@ import { Fragment, memo, type Dispatch, type SetStateAction, useCallback, useEff
 import Link from 'next/link';
 import { useWaveform } from '@/lib/use-waveform';
 import WaveSurfer from 'wavesurfer.js';
-import { getPlayableDuration as getWaveSurferPlayableDuration, getSeekTarget, seekToProgress as seekWaveSurferToProgress, seekAndPlay, playSafely } from '@/lib/playback';
+import { getPlayableDuration as getWaveSurferPlayableDuration, getSeekTarget, seekToProgress as seekWaveSurferToProgress, seekAndPlay, playSafely, needsMp3SampleTable } from '@/lib/playback';
 import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
 
 interface AudioFile {
@@ -159,6 +159,7 @@ const isMobilePlaybackDevice = () => {
 
 const getPlaybackAudioUrl = (id: string) => {
   const baseUrl = `/api/files/${encodeURIComponent(id)}/audio`;
+  if (typeof navigator !== 'undefined' && needsMp3SampleTable(id, navigator.userAgent)) return `${baseUrl}?format=mp4`;
   return isMobilePlaybackDevice() ? `${baseUrl}?format=mobile` : baseUrl;
 };
 

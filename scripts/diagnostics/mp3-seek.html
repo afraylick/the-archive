@@ -1,0 +1,61 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MP3 seek audio capture</title>
+<style>body{font:16px system-ui;max-width:1000px;margin:24px auto}#wave{height:128px}pre{white-space:pre-wrap}</style>
+<h1>MP3 seek audio capture</h1>
+<p>This local diagnostic captures the media element's decoded output silently. No microphone is used.</p>
+<button id="run">Run capture</button><div id="wave"></div><pre id="log"></pre>
+<script type="module">
+import WaveSurfer from '/wavesurfer.js';
+import { seekAndPlay } from '/playback.js';
+const params = new URLSearchParams(location.search);
+const mode = params.get('mode') || 'original';
+const log = value => { document.querySelector('#log').textContent += JSON.stringify(value) + '\n'; };
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const event = (el, name) => new Promise((resolve, reject) => {
+  el.addEventListener(name, resolve, { once: true });
+  el.addEventListener('error', () => reject(Error(el.error?.message || 'Media error')), { once: true });
+});
+async function run() {
+  document.querySelector('#run').disabled = true;
+  // A failure here prevents accidentally validating a full-file decoding path.
+  AudioContext.prototype.decodeAudioData = () => { throw Error('Full-file decoding is forbidden in this probe'); };
+  const context = new AudioContext({ sampleRate: 44100 }); await context.resume();
+  const waveform = await fetch('/waveform').then(r => r.json());
+  const media = new Audio(); media.preload = 'auto';
+  const source = context.createMediaElementSource(media);
+  const processor = context.createScriptProcessor(2048, 2, 1);
+  const mute = context.createGain(); mute.gain.value = 0;
+  source.connect(processor); processor.connect(mute); mute.connect(context.destination);
+  const ws = WaveSurfer.create({ media, container: '#wave', height: 128, interact: false,
+    backend: 'MediaElement', url: '/audio?mode=' + mode,
+    peaks: waveform.waveformPeaks, duration: waveform.waveformDuration });
+  let blocks = null;
+  processor.onaudioprocess = e => {
+    if (!blocks || media.paused || media.seeking) return;
+    const l = e.inputBuffer.getChannelData(0), r = e.inputBuffer.getChannelData(1);
+    blocks.push({ time: media.currentTime, clock: context.currentTime, samples: Array.from(l, (x, i) => (x + r[i]) / 2) });
+  };
+  if (media.readyState === 0) await event(media, 'loadedmetadata');
+  const height = document.querySelector('#wave').getBoundingClientRect().height;
+  log({ mode, userAgent: navigator.userAgent, duration: media.duration, waveformDuration: waveform.waveformDuration });
+  for (const target of [0, 60, 242, 400, 242]) {
+    const start = performance.now();
+    await seekAndPlay(ws, target / media.duration);
+    const latency = performance.now() - start;
+    await sleep(1000); blocks = []; await sleep(6000);
+    const captured = blocks; blocks = null; ws.pause();
+    const result = { ua: navigator.userAgent, mode, target, duration: media.duration, latency,
+      sampleRate: context.sampleRate, height, finalHeight: document.querySelector('#wave').getBoundingClientRect().height, blocks: captured };
+    await fetch('/result', { method: 'POST', body: JSON.stringify(result) });
+    log({ target, latency, samples: captured.length * 2048 });
+  }
+  const rapid = [60, 400, 242].map(t => seekAndPlay(ws, t / media.duration));
+  await Promise.all(rapid);
+  log({ rapidSeek: media.currentTime, playing: !media.paused, mediaError: media.error });
+  ws.pause(); ws.destroy(); await context.close(); log('DONE');
+  await fetch('/done', { method: 'POST', body: JSON.stringify({ ua: navigator.userAgent, mode }) });
+}
+document.querySelector('#run').onclick = () => run().catch(e => log(String(e)));
+if (params.has('auto')) run().catch(e => log(String(e)));
+</script>

@@ -4,7 +4,7 @@ import { mutateRecording, type MetadataChanges } from '@/lib/recording-mutations
 
 import { useEffect, useRef, useState, useMemo, use } from 'react';
 import WaveSurfer from 'wavesurfer.js';
-import { seekToProgress, playSafely } from '@/lib/playback';
+import { seekToProgress, playSafely, needsMp3SampleTable } from '@/lib/playback';
 import { isValidWaveformCache } from '@/lib/waveform';
 
 declare global {
@@ -33,6 +33,7 @@ const isMobilePlaybackDevice = () => {
 
 const getPlaybackAudioUrl = (id: string) => {
   const baseUrl = `/api/files/${encodeURIComponent(id)}/audio`;
+  if (typeof navigator !== 'undefined' && needsMp3SampleTable(id, navigator.userAgent)) return `${baseUrl}?format=mp4`;
   return isMobilePlaybackDevice() ? `${baseUrl}?format=mobile` : baseUrl;
 };
 
@@ -206,7 +207,7 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
     const file = playbackFile;
     if (file && waveformRef.current) {
       const cachedWaveform = isValidWaveformCache(file.waveformPeaks, file.waveformDuration, file.waveformCacheVersion);
-      const useMobileStreamingFallback = !cachedWaveform && isMobilePlaybackDevice();
+      const useMobileStreamingFallback = !cachedWaveform;
       wavesurferRef.current = WaveSurfer.create({
         container: waveformRef.current,
         waveColor: '#a3a3a3',

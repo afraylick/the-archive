@@ -340,7 +340,7 @@ test('MP3 playback streams originals even for stale PCM URLs without invoking ff
   fs.writeFileSync(storage.getUploadPath(id), bytes);
   t.mock.method(load('lib/audio-processing.ts'), 'runFfmpeg', async () => { throw new Error('Playback must not invoke ffmpeg'); });
   const ctx = { params: Promise.resolve({ id }) };
-  for (const query of ['', '?format=pcm', '?format=mobile', '?download=1']) {
+  for (const query of ['', '?format=pcm', '?format=mobile', '?download=1', '?format=mp4', '?format=mp4&download=1']) {
     const response = await audioRoute.GET(request(`/api/files/${id}/audio${query}`), ctx);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('content-type'), 'audio/mpeg');
@@ -352,6 +352,31 @@ test('MP3 playback streams originals even for stale PCM URLs without invoking ff
   assert.equal(range.status, 206);
   assert.equal(range.headers.get('content-range'), 'bytes 20-39/100');
   assert.deepEqual(Buffer.from(await range.arrayBuffer()), bytes.subarray(20, 40));
+});
+
+test('sample table playback authenticates, streams ranges, and bypasses wrapping for downloads', async t => {
+  await setup();
+  const id = 'indexed.mp3';
+  save([{ ...fixture, id, originalName: 'Original.mp3' }]);
+  const source = Buffer.from('original MP3 bytes');
+  fs.writeFileSync(storage.getUploadPath(id), source);
+  const header = Buffer.from('virtual header');
+  let indexes = 0;
+  t.mock.method(load('lib/mp3-mp4.ts'), 'getMp3Container', async () => { indexes++; return { header, sourceSize: source.length }; });
+  const ctx = { params: Promise.resolve({ id }) };
+  const url = `/api/files/${id}/audio?format=mp4`;
+  const anonymous = await audioRoute.GET(new NextRequest(`http://test.local${url}`), ctx);
+  assert.equal(anonymous.status, 401); assert.equal(indexes, 0);
+  const req = request(url); req.headers.set('range', `bytes=${header.length - 2}-${header.length + 3}`);
+  const response = await audioRoute.GET(req, ctx);
+  assert.equal(response.status, 206);
+  assert.equal(response.headers.get('content-type'), 'audio/mp4');
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), Buffer.concat([header.subarray(-2), source.subarray(0, 4)]));
+  const download = await audioRoute.GET(request(`${url}&download=1`), ctx);
+  assert.equal(indexes, 1);
+  assert.equal(download.headers.get('content-type'), 'audio/mpeg');
+  assert.match(download.headers.get('content-disposition'), /Original.mp3/);
+  assert.deepEqual(Buffer.from(await download.arrayBuffer()), source);
 });
 
 test('metadata index, waveform isolation and invalidation', async () => {

@@ -1,5 +1,6 @@
 import { getArchiveIndex } from '@/lib/archive-index';
 import { readAudioRange } from '@/lib/audio-range';
+import { getMp3Container, streamMp3Container } from '@/lib/mp3-mp4';
 import { NextRequest, NextResponse } from 'next/server';
 import { runAudioJob, runFfmpeg } from '@/lib/audio-processing';
 import { getSessionUser } from '@/lib/auth';
@@ -136,7 +137,18 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       ? file.originalName || file.name || id
       : undefined;
 
-    if (wantsMobileAudio) {
+    if (!downloadName && req.nextUrl.searchParams.get('format') === 'mp4' && path.extname(id).toLowerCase() === '.mp3') {
+      try {
+        const container = await getMp3Container(filePath);
+        if (container) return streamMp3Container(filePath, container, req.headers.get('range'));
+      } catch (error) {
+        console.error('MP3 sample indexing failed for', id, error);
+      }
+      // Unsupported MP3 structures and temporary indexing failures keep the
+      // original streaming path available. Downloads always bypass this branch.
+    }
+
+    if (wantsMobileAudio && !downloadName) {
       try {
         const mobileAudioPath = await getMobileAudioPath(filePath, id);
         if (mobileAudioPath) {

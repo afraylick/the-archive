@@ -2,6 +2,9 @@ import type WaveSurfer from 'wavesurfer.js';
 
 const pendingSeeks = new WeakMap<WaveSurfer, () => void>();
 
+/** Scoped to the engine verified with captured audio, not Chromium or iOS WebKit. */
+export const needsMp3SampleTable = (id: string, userAgent: string) => /\.mp3$/i.test(id) && /Firefox\//.test(userAgent);
+
 /** The media clock is authoritative; cached/decoded duration is only a startup fallback. */
 export const getPlayableDuration = (player: WaveSurfer, fallback = 0) => {
   for (const value of [player.getMediaElement().duration, player.getDuration(), fallback]) {

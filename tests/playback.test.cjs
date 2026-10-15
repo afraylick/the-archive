@@ -18,9 +18,16 @@ require.extensions['.ts'] = (mod, filename) => {
   }).outputText, filename);
 };
 const load = name => require(path.join(root, name));
-const { getPlayableDuration, seekToProgress, seekAndPlay, playSafely } = load('lib/playback.ts');
+const { getPlayableDuration, seekToProgress, seekAndPlay, playSafely, needsMp3SampleTable } = load('lib/playback.ts');
 const { isValidWaveformCache, WAVEFORM_CACHE_VERSION } = load('lib/waveform.ts');
 const { readAudioRange } = load('lib/audio-range.ts');
+test('sample table workaround targets Firefox MP3 playback only', () => {
+  assert.equal(needsMp3SampleTable('track.MP3', 'Gecko/20100101 Firefox/158.0'), true);
+  for (const ua of ['Version/18.5 Safari/605.1.15', 'Chrome/140.0 Safari/537.36', 'FxiOS/140.0 Mobile/15 Safari/605.1.15']) {
+    assert.equal(needsMp3SampleTable('track.mp3', ua), false);
+  }
+  assert.equal(needsMp3SampleTable('track.wav', 'Firefox/158.0'), false);
+});
 test('media duration overrides stale cached duration and seeks consistently', () => {
   const media = new EventTarget(); media.duration = 100;
   let time;

@@ -57,6 +57,7 @@ It combines browser-based batch uploads, waveform playback, metadata and collect
 - Persistent mini-player with play/pause, seeking, volume, and stop/repeat/continue-to-next modes.
 - Browser Media Session integration for play, pause, previous, next, seek, and lock-screen metadata when supported.
 - HTTP range streaming for efficient seeking.
+- Firefox MP3 playback uses an in-memory MP4 sample table with exact frame timestamps. Audio bytes stream from the original file; no transcode, persistent copy, or full-file browser decode is required. Downloads remain the original file. Safari and Chromium retain their existing playback paths.
 - Automatic cached MP3 transcodes for WAV playback on mobile devices when `ffmpeg` is available.
 - Incremental rendering in groups of 30 recordings for larger libraries.
 - Authenticated single-recording pages at `/player/<recording-id>` for direct navigation to a focused player and metadata view.
@@ -494,6 +495,54 @@ npm test
 npm run lint
 npm run build
 ```
+
+### MP3 seek regression diagnostic
+
+Firefox's native raw-MP3 demuxer can report the requested `currentTime` while
+playing audio from an earlier position. On `210221_WaveringTrip.mp3`, captured
+Firefox 158 output after a seek to 4:02 was about 2.72 seconds behind a sequential
+FFmpeg decode. This also reproduced without WaveSurfer; waiting for `seeked` did
+not correct it. Rebuilding the Xing TOC still left about 2.4 seconds of error.
+The demuxer estimates frame timestamps using average frame sizes even when a
+TOC is present (see [Mozilla's MP3 demuxer source](https://github.com/mozilla/gecko-dev/blob/master/dom/media/mp3/MP3Demuxer.cpp),
+`FastSeek`, `FrameIndexFromOffset`, and `ScanUntil`).
+
+The Firefox playback URL requests `?format=mp4`. The server scans MP3 frame
+headers and constructs MP4 sample sizes, offsets, and timestamps, then serves a
+virtual file consisting of that header followed by the original MP3 bytes.
+The sample table excludes ID3/Xing metadata from audio samples. LAME gapless
+timing is represented with an edit list. No FFmpeg process is used for playback.
+The header cache is bounded to 32 MiB / 64 entries, invalidated on source changes,
+and shared by concurrent range requests. Unsupported/corrupt structures fall
+back to original streaming; those files may retain the native seek limitation.
+
+The supplied 13.9 MB sample needs a 167,672-byte header; local indexing took about
+19 ms. In an actual Firefox 158 headless run using WaveSurfer 7.12.6 and the app's
+seek helper, corrected output at 1:00, 4:02, 6:40, and a backward seek to 4:02
+matched the reference within 44 ms (the capture includes audio-callback timing
+uncertainty). Local buffered seeks took 1–3 ms; network latency is additional.
+Waveform height stayed fixed, and rapid seeks resolved to the final target.
+The production-build library page also matched the reference within 41 ms at
+4:02, made zero full-file decode calls, and retained its 92 px waveform height.
+The original download matched the supplied file byte for byte (SHA-256). A WAV
+control matched within 34 ms across the same seek sequence.
+Safari testing was explicitly deferred; this workaround is not enabled there.
+
+To reproduce with a local file (requires FFmpeg; analysis requires Python/NumPy):
+
+```bash
+node scripts/diagnostics/mp3-seek.cjs /path/to/sample.mp3 /tmp/seek-results
+# Open localhost:3016/?mode=original, click Run capture, then repeat with mode=indexed.
+python3 scripts/diagnostics/analyze-seeks.py /tmp/seek-results
+```
+
+The diagnostic binds to loopback, captures the media element's decoded output
+without a microphone, and compares it to sequentially decoded reference PCM.
+It rejects any attempt to use `decodeAudioData` in the browser. Use a sample
+longer than seven minutes for the fixed seek targets. Inspect correlation as
+well as offset; silence and interrupted captures cannot establish alignment.
+Diagnostic PCM/results stay in the explicitly supplied output directory and
+are not application caches or deployment assets.
 
 ## Architecture and operational limits
 
