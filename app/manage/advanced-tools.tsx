@@ -4,6 +4,7 @@ import { mutateRecording, type RecordingMutation, type MetadataChanges } from '@
 
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
 import WaveSurfer from 'wavesurfer.js';
+import { disposePlayer } from '@/lib/playback';
 import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
 
 interface AudioFile {
@@ -246,7 +247,7 @@ const ManageWaveform = ({
       if (activeWaveSurferRef.current === wavesurferRef.current) {
         activeWaveSurferRef.current = null;
       }
-      wavesurferRef.current?.destroy();
+      if (wavesurferRef.current) disposePlayer(wavesurferRef.current);
       wavesurferRef.current = null;
     };
   }, [activeWaveSurferRef]);

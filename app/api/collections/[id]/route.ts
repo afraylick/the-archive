@@ -72,7 +72,12 @@ export async function PATCH(req: NextRequest, context: Context) {
     // All validation finishes before either store is changed.
     if ('addSongId' in body || 'removeSongId' in body) writeJsonAtomic(getDataFilePath(), records);
     writeCollections(collections);
-    return NextResponse.json({ collection: body.collection ? collection.name : collectionForUser(collection, user, records), filesUpdated });
+    const changedRecording = records.find(record => record.id === (body.addSongId || body.removeSongId));
+    const recording = changedRecording ? {
+      id: changedRecording.id,
+      collections: collections.filter(item => canAccessCollection(item, user) && collectionKeys(item).some(key => changedRecording.collections?.includes(key))).map(item => item.name),
+    } : undefined;
+    return NextResponse.json({ collection: body.collection ? collection.name : collectionForUser(collection, user, records), filesUpdated, recording });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Collection update failed' }, { status: 400 });
   }

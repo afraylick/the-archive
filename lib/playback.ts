@@ -2,6 +2,20 @@ import type WaveSurfer from 'wavesurfer.js';
 
 const pendingSeeks = new WeakMap<WaveSurfer, () => void>();
 
+/** WaveSurfer leaves externally supplied audio alive; the page owns its cleanup. */
+export const disposePlayer = (player: WaveSurfer) => {
+  pendingSeeks.get(player)?.();
+  const media = player.getMediaElement();
+  try {
+    media.pause();
+    player.destroy();
+  } finally {
+    // Abort outstanding play/load requests as well as stopping current playback.
+    media.removeAttribute('src');
+    media.load();
+  }
+};
+
 /** Scoped to the engine verified with captured audio, not Chromium or iOS WebKit. */
 export const needsMp3SampleTable = (id: string, userAgent: string) => /\.mp3$/i.test(id) && /Firefox\//.test(userAgent);
 

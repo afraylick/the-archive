@@ -9,7 +9,7 @@ import { CollectionsPanel, CollectionHeader, PlaylistControls, type CollectionVi
 import { useWaveform } from '@/lib/use-waveform';
 import { useStableFilterResults } from '@/lib/use-stable-filter-results';
 import WaveSurfer from 'wavesurfer.js';
-import { getPlayableDuration as getWaveSurferPlayableDuration, getSeekTarget, seekToProgress as seekWaveSurferToProgress, seekAndPlay, playSafely, getPlaybackAudioUrl } from '@/lib/playback';
+import { getPlayableDuration as getWaveSurferPlayableDuration, getSeekTarget, seekToProgress as seekWaveSurferToProgress, seekAndPlay, playSafely, getPlaybackAudioUrl, disposePlayer } from '@/lib/playback';
 import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
 
 interface AudioFile {
@@ -84,7 +84,7 @@ interface AudioCardProps {
   accountUsers: ArchiveUser[];
   instrumentOptions: string[];
   vibeOptions: string[];
-  collectionOptions: string[];
+  collectionOptions: CollectionView[];
   collectionId?: string;
   showAllRatings?: boolean;
   linkableSongs: AudioFile[];
@@ -530,6 +530,9 @@ const AudioCard = memo(function AudioCard({
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const [showNewCollectionForm, setShowNewCollectionForm] = useState(false);
   const [newCollection, setNewCollection] = useState('');
+  const [collectionSaving, setCollectionSaving] = useState(false);
+  const [collectionError, setCollectionError] = useState('');
+  const collectionMutationPending = useRef(false);
   const [newComment, setNewComment] = useState('');
   const [usePlayheadTime, setUsePlayheadTime] = useState(true);
   const [commentTimecode, setCommentTimecode] = useState('');
@@ -835,7 +838,7 @@ const AudioCard = memo(function AudioCard({
       gainNodeRef.current = null;
       mediaSourceRef.current?.disconnect();
       mediaSourceRef.current = null;
-      wavesurfer.destroy();
+      disposePlayer(wavesurfer);
       wavesurferRef.current = null;
       audioPlayableRef.current = false;
       pendingPlaybackRef.current = null;
@@ -961,43 +964,61 @@ const AudioCard = memo(function AudioCard({
     await updateFile(file.id, category === 'instruments' ? { instruments: nextInstruments } : { vibes: nextVibes });
   };
 
-  const toggleCollection = async (collection: string) => {
-    const trimmedCollection = collection.trim();
-    if (!trimmedCollection) return;
+  const updateCollectionMembership = async (collection: CollectionView, selected: boolean, recordingId = file.id) => {
+    const response = await fetch(`/api/collections/${encodeURIComponent(collection.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(selected ? { addSongId: recordingId } : { removeSongId: recordingId }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not update collection');
+    const recording = data.recording as Pick<AudioFile, 'id' | 'collections'>;
+    setFiles(previous => replaceFileVersion(previous, recording));
+    window.dispatchEvent(new CustomEvent('collections-changed', { detail: { collection: data.collection } }));
+  };
 
-    const collections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
-    const nextCollections = collections.includes(trimmedCollection)
-      ? collections.filter(existingCollection => existingCollection !== trimmedCollection)
-      : [...collections, trimmedCollection];
-
-    await updateCollections(nextCollections);
+  const toggleCollection = async (collection: CollectionView) => {
+    if (collectionMutationPending.current) return;
+    collectionMutationPending.current = true;
+    setCollectionSaving(true);
+    setCollectionError('');
+    try {
+      await updateCollectionMembership(collection, !collection.songIds.includes(file.id));
+    } catch (error) {
+      setCollectionError(error instanceof Error ? error.message : 'Could not update collection');
+    } finally {
+      collectionMutationPending.current = false;
+      setCollectionSaving(false);
+    }
   };
 
   const addCollection = async () => {
-    const trimmedCollection = newCollection.trim();
-    if (!trimmedCollection) return;
-
-    const collections = Array.isArray(file.collections) ? file.collections.filter(Boolean) : [];
-    if (!collections.includes(trimmedCollection)) {
-      await updateCollections([...collections, trimmedCollection]);
+    const name = newCollection.trim();
+    if (!name || collectionMutationPending.current) return;
+    collectionMutationPending.current = true;
+    setCollectionSaving(true);
+    setCollectionError('');
+    const recordingId = file.id;
+    try {
+      let collection = collectionOptions.find(collection => collection.name === name);
+      if (!collection) {
+        const response = await fetch('/api/collections', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Could not create collection');
+        collection = data.collection as CollectionView;
+        window.dispatchEvent(new CustomEvent('collections-changed', { detail: { collection } }));
+      }
+      await updateCollectionMembership(collection, true, recordingId);
+      setNewCollection('');
+      setShowNewCollectionForm(false);
+    } catch (error) {
+      setCollectionError(error instanceof Error ? error.message : 'Could not add song to collection');
+    } finally {
+      collectionMutationPending.current = false;
+      setCollectionSaving(false);
     }
-    setNewCollection('');
-    setShowNewCollectionForm(false);
-  };
-
-  const updateCollections = async (collections: string[]) => {
-    const res = await fetch(`/api/files/${encodeURIComponent(file.id)}/collections`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collections }),
-    });
-
-    if (!res.ok) { const data = await res.json(); throw new Error(data.error || 'Could not update collection'); }
-
-    const data = await res.json() as { collections: string[] };
-    window.dispatchEvent(new Event('collections-changed'));
-    const updatedFile = { id: file.id, collections: data.collections };
-    setFiles(prev => replaceFileVersion(prev, updatedFile));
   };
 
   const saveNotes = async () => {
@@ -1320,7 +1341,7 @@ const AudioCard = memo(function AudioCard({
     : [];
   const instrumentChoices = Array.from(new Set([...instruments, ...instrumentOptions]));
   const vibeChoices = Array.from(new Set([...vibes, ...vibeOptions]));
-  const collectionChoices = Array.from(new Set([...collections, ...collectionOptions]));
+  const collectionChoices = collectionOptions.filter(collection => collection.canEdit || collection.songIds.includes(file.id));
   const hasNotes = noteText.trim().length > 0;
   const comments = useMemo<AudioComment[]>(
     () => Array.isArray(file.comments) ? file.comments.filter(comment => comment.userId) : [],
@@ -2001,7 +2022,7 @@ const AudioCard = memo(function AudioCard({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowCollections(prev => !prev)}
+                  onClick={() => { setShowCollections(prev => !prev); window.dispatchEvent(new Event('collections-changed')); }}
                   className={`row-start-1 inline-flex min-h-9 min-w-0 items-center justify-center gap-1 whitespace-nowrap border-b border-border/70 px-2 py-1.5 text-xs transition sm:min-h-0 sm:flex-none sm:gap-2 sm:border-b-0 sm:border-r sm:px-4 sm:text-sm ${
                     currentUser.isAdmin || hasNotes ? 'col-span-2' : 'col-span-3'
                   } ${
@@ -2333,28 +2354,32 @@ const AudioCard = memo(function AudioCard({
             <div className="rounded-md border border-border/65 bg-background/35 p-3">
               <div className="mb-3 flex flex-wrap gap-2">
                 {collectionChoices.length > 0 ? collectionChoices.map(collection => {
-                  const selected = collections.includes(collection);
+                  const selected = collection.songIds.includes(file.id);
                   return (
                     <button
-                      key={collection}
+                      key={collection.id}
                       type="button"
-                      disabled={!collectionOptions.includes(collection)}
-                      onClick={() => void toggleCollection(collection).catch(error => alert(error.message))}
+                      disabled={collectionSaving || !collection.canEdit}
+                      aria-pressed={selected}
+                      aria-label={`${selected ? 'Remove from' : 'Add to'} ${collection.name}`}
+                      title={!collection.canEdit ? 'Only the owner and invited members can change songs' : undefined}
+                      onClick={() => void toggleCollection(collection)}
                       className={`rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
                         selected
                           ? 'border-accent/40 bg-accent/10 text-[#7fa6c9]'
                           : 'border-border bg-background text-muted-foreground hover:text-foreground'
                       }`}
                     >
-                      {displayTag(collection)}
+                      {collection.name}<span className="ml-2 text-[10px] opacity-60">{collection.visibility}</span>
                     </button>
                   );
                 }) : (
-                  <span className="text-xs text-muted-foreground">No collections yet</span>
+                  <span className="text-xs text-muted-foreground">No editable collections yet. Create one or ask its owner for an invitation.</span>
                 )}
                 <button
                   type="button"
-                  onClick={() => setShowNewCollectionForm(prev => !prev)}
+                  disabled={collectionSaving}
+                  onClick={() => { setShowNewCollectionForm(prev => !prev); setCollectionError(''); }}
                   className={`rounded border px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
                     showNewCollectionForm
                     ? 'border-accent/40 bg-accent/10 text-[#7fa6c9]'
@@ -2365,6 +2390,8 @@ const AudioCard = memo(function AudioCard({
                   {showNewCollectionForm ? '-' : '+'}
                 </button>
               </div>
+              {collectionSaving && <p className="mb-2 text-xs text-muted-foreground" role="status">Saving collection…</p>}
+              {collectionError && <p className="mb-2 text-xs text-red-300" role="alert">{collectionError}</p>}
               {showNewCollectionForm && (
                 <div className="flex max-w-md">
                   <input
@@ -2372,14 +2399,18 @@ const AudioCard = memo(function AudioCard({
                     value={newCollection}
                     onChange={(event) => setNewCollection(event.target.value)}
                     onKeyDown={(event) => {
-                      if (event.key === 'Enter') void addCollection().catch(error => alert(error.message));
+                      if (event.key === 'Enter') void addCollection();
                     }}
+                    disabled={collectionSaving}
+                    maxLength={80}
+                    aria-label="New collection name"
                     placeholder="New collection"
                     className="min-w-0 flex-1 rounded-l border border-border bg-background/70 p-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent sm:p-2"
                   />
                   <button
                     type="button"
-                    onClick={() => void addCollection().catch(error => alert(error.message))}
+                    disabled={collectionSaving || !newCollection.trim()}
+                    onClick={() => void addCollection()}
                     className="rounded-r bg-accent px-3 py-2 text-sm text-accent-foreground transition hover:bg-accent/90"
                   >
                     Add
@@ -2460,7 +2491,19 @@ export default function Library({ collectionId }: { collectionId?: string }) {
   }, []);
   useEffect(() => {
     let active = true;
-    const load = () => fetch('/api/collections').then(async response => { if (!response.ok) throw new Error('Collections could not be loaded'); return response.json(); }).then(data => { if (active) { setAccessibleCollections(data.collections); setCollectionsError(''); } }).catch(error => { if (active) setCollectionsError(error.message); }).finally(() => { if (active) setCollectionsLoading(false); });
+    let latestRequest = 0;
+    const load = (event?: Event) => {
+      const request = ++latestRequest;
+      if (event instanceof CustomEvent && event.detail?.collection) {
+        const changed = event.detail.collection as CollectionView;
+        setAccessibleCollections(previous => [...previous.filter(collection => collection.id !== changed.id), changed]);
+      }
+      return fetch('/api/collections')
+        .then(async response => { if (!response.ok) throw new Error('Collections could not be loaded'); return response.json(); })
+        .then(data => { if (active && request === latestRequest) { setAccessibleCollections(data.collections); setCollectionsError(''); } })
+        .catch(error => { if (active && request === latestRequest) setCollectionsError(error.message); })
+        .finally(() => { if (active && request === latestRequest) setCollectionsLoading(false); });
+    };
     void load();
     window.addEventListener('focus', load);
     window.addEventListener('collections-changed', load);
@@ -2840,7 +2883,7 @@ export default function Library({ collectionId }: { collectionId?: string }) {
   const finishOptions = useMemo(() => (
     Array.from(new Set([...FINISH_OPTIONS, ...files.map(file => file.finish || '').filter(Boolean)]))
   ), [files]);
-  const collectionOptions = useMemo(() => accessibleCollections.filter(collection => collection.canEdit).map(collection => collection.name).sort((a, b) => a.localeCompare(b)), [accessibleCollections]);
+  const collectionOptions = useMemo(() => [...accessibleCollections].sort((a, b) => a.name.localeCompare(b.name)), [accessibleCollections]);
   const interactionUsers = useMemo(() => (
     accountUsers
       .filter(user => user.id !== currentUser?.id)
@@ -3256,6 +3299,11 @@ export default function Library({ collectionId }: { collectionId?: string }) {
       if (!wavesurfer || details.seekTime === undefined) return;
       wavesurfer.setTime(Math.min(getWaveSurferPlayableDuration(wavesurfer), Math.max(0, details.seekTime)));
     });
+    return () => {
+      for (const action of ['play', 'pause', 'nexttrack', 'previoustrack', 'seekbackward', 'seekforward', 'seekto'] as const) setMediaSessionAction(action, null);
+      navigator.mediaSession.playbackState = 'none';
+      navigator.mediaSession.metadata = null;
+    };
   }, [activeTrack, archiveName, isPlaying, playRelativeTrack]);
 
   const updateMiniVolume = useCallback((value: number) => {

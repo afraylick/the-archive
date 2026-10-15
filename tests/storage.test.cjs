@@ -560,3 +560,32 @@ test('playlist privacy, sharing, ordering, and collaborative ratings', async t =
     assert.equal((await collectionRoute.POST(new NextRequest('http://test.local/api/collections', { method: 'POST', body: '{}' }))).status, 401);
   });
 });
+
+
+test('targeted playlist membership preserves other collections and works across renames and variations', async () => {
+  await setup();
+  save([{ ...fixture, collections: ['Keep this membership'], ...generated }, { ...fixture, id: 'variation.wav', projectId: fixture.id }]);
+  fs.writeFileSync(storage.getUploadPath('variation.wav'), 'audio');
+  const create = async name => (await (await collectionRoute.POST(request('/api/collections', 'POST', { name }))).json()).collection;
+  const first = await create('First playlist');
+  const second = await create('Second playlist');
+  const patch = (collection, body) => collectionDetailRoute.PATCH(request('/playlist', 'PATCH', body), { params: Promise.resolve({ id: collection.id }) });
+  // Two clients add to separate playlists without replacing each other's snapshot.
+  const responses = await Promise.all([patch(first, { addSongId: fixture.id }), patch(second, { addSongId: fixture.id })]);
+  assert.deepEqual(responses.map(response => response.status), [200, 200]);
+  const added = await responses[1].json();
+  assert.deepEqual(added.recording, { id: fixture.id, collections: ['Keep this membership', 'First playlist', 'Second playlist'] });
+  const memberships = async () => (await (await libraryRoute.GET(request('/api/files?view=metadata'))).json())[0].collections;
+  assert.deepEqual((await memberships()).sort(), ['First playlist', 'Keep this membership', 'Second playlist']);
+  assert.equal((await patch(first, { name: 'Renamed playlist' })).status, 200);
+  const removed = await patch(first, { removeSongId: fixture.id });
+  assert.equal(removed.status, 200, 'a stale picker can use its stable playlist ID after a rename');
+  assert.deepEqual((await removed.json()).recording, { id: fixture.id, collections: ['Keep this membership', 'Second playlist'] });
+  assert.deepEqual((await memberships()).sort(), ['Keep this membership', 'Second playlist']);
+  assert.deepEqual(read()[0].waveformPeaks, generated.waveformPeaks);
+  assert.equal((await patch(first, { addSongId: 'variation.wav' })).status, 200);
+  const playlist = await (await libraryRoute.GET(request(`/api/files?view=metadata&collection=${first.id}`))).json();
+  assert.equal(playlist[0].defaultVersionId, 'variation.wav');
+  assert.deepEqual(playlist[0].collections.sort(), ['Keep this membership', 'Second playlist']);
+  assert.deepEqual(playlist[0].uploads[0].collections, ['Renamed playlist']);
+});

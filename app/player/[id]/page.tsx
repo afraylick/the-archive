@@ -4,7 +4,7 @@ import { mutateRecording, type MetadataChanges } from '@/lib/recording-mutations
 
 import { useEffect, useRef, useState, useMemo, use } from 'react';
 import WaveSurfer from 'wavesurfer.js';
-import { seekToProgress, playSafely, needsMp3SampleTable } from '@/lib/playback';
+import { disposePlayer, seekToProgress, playSafely, needsMp3SampleTable } from '@/lib/playback';
 import { isValidWaveformCache } from '@/lib/waveform';
 
 declare global {
@@ -252,7 +252,7 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
         if (wavesurferRef.current) {
           // Remove from global list
           globalThis.waveSurfers = globalThis.waveSurfers.filter(ws => ws !== wavesurferRef.current);
-          wavesurferRef.current.destroy();
+          disposePlayer(wavesurferRef.current);
           wavesurferRef.current = null;
         }
       };

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 import { useWaveform } from '@/lib/use-waveform';
 import { isValidWaveformCache } from '@/lib/waveform';
-import { getPlayableDuration, getPlaybackAudioUrl } from '@/lib/playback';
+import { disposePlayer, getPlayableDuration, getPlaybackAudioUrl } from '@/lib/playback';
 import s from './management.module.css';
 
 const formatTime = (seconds: number) => `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
@@ -67,10 +67,7 @@ export default function RecordingPlayer({ recordingId }: { recordingId: string }
       media.removeEventListener('loadedmetadata', syncDuration);
       media.removeEventListener('durationchange', syncDuration);
       media.removeEventListener('archiveplaybackerror', fail);
-      media.pause();
-      waveform.destroy();
-      media.removeAttribute('src');
-      media.load();
+      disposePlayer(waveform);
       player.current = null;
     };
   }, [recordingId, cached.ready, cached.data, hasCache]);

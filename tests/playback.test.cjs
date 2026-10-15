@@ -18,7 +18,7 @@ require.extensions['.ts'] = (mod, filename) => {
   }).outputText, filename);
 };
 const load = name => require(path.join(root, name));
-const { getPlayableDuration, seekToProgress, seekAndPlay, playSafely, needsMp3SampleTable, getPlaybackAudioUrl } = load('lib/playback.ts');
+const { getPlayableDuration, seekToProgress, seekAndPlay, playSafely, needsMp3SampleTable, getPlaybackAudioUrl, disposePlayer } = load('lib/playback.ts');
 const { isValidWaveformCache, WAVEFORM_CACHE_VERSION } = load('lib/waveform.ts');
 const { readAudioRange } = load('lib/audio-range.ts');
 test('sample table workaround targets Firefox MP3 playback only', () => {
@@ -119,4 +119,39 @@ test('rapid clicks supersede pending playback; destroying a player cancels a see
   media.dispatchEvent(new Event('seeked'));
   await destroyed;
   assert.deepEqual(plays, [2700]);
+});
+
+
+test('page cleanup stops and unloads externally owned audio with the installed WaveSurfer player', async () => {
+  const { pathToFileURL } = require('node:url');
+  const { default: Player } = await import(pathToFileURL(path.join(root, 'node_modules/wavesurfer.js/dist/player.js')).href);
+  const media = new EventTarget();
+  Object.assign(media, {
+    src: '/api/files/playing.wav/audio', volume: 1, muted: false, paused: false, loads: 0,
+    pause() { this.paused = true; this.dispatchEvent(new Event('pause')); },
+    removeAttribute(name) { if (name === 'src') this.src = ''; },
+    load() { this.loads++; },
+  });
+  const player = new Player({ media });
+  disposePlayer(player);
+  assert.equal(media.paused, true);
+  assert.equal(media.src, '');
+  assert.equal(media.loads, 1, 'unload aborts pending browser playback and downloads');
+});
+
+test('page cleanup cancels a pending streamed seek before a late seeked event can restart playback', async () => {
+  const { player, media, plays, events } = streamedPlayer();
+  let paused = false; let unloaded = false;
+  media.pause = () => { paused = true; };
+  media.removeAttribute = name => assert.equal(name, 'src');
+  media.load = () => { unloaded = true; };
+  player.destroy = () => events.get('destroy')?.();
+  const pending = seekAndPlay(player, .5);
+  disposePlayer(player);
+  media.seeking = false;
+  media.dispatchEvent(new Event('seeked'));
+  await pending;
+  assert.equal(paused, true);
+  assert.equal(unloaded, true);
+  assert.deepEqual(plays, []);
 });
