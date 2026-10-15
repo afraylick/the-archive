@@ -7,7 +7,7 @@ import Link from 'next/link';
 import { useWaveform } from '@/lib/use-waveform';
 import { useStableFilterResults } from '@/lib/use-stable-filter-results';
 import WaveSurfer from 'wavesurfer.js';
-import { getPlayableDuration as getWaveSurferPlayableDuration, getSeekTarget, seekToProgress as seekWaveSurferToProgress, seekAndPlay, playSafely, needsMp3SampleTable } from '@/lib/playback';
+import { getPlayableDuration as getWaveSurferPlayableDuration, getSeekTarget, seekToProgress as seekWaveSurferToProgress, seekAndPlay, playSafely, getPlaybackAudioUrl } from '@/lib/playback';
 import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
 
 interface AudioFile {
@@ -148,20 +148,6 @@ const tracksStartedFromWaveformClick = new Set<string>();
 const getSharedAudioContext = () => {
   sharedAudioContext ??= new AudioContext();
   return sharedAudioContext;
-};
-
-const isMobilePlaybackDevice = () => {
-  if (typeof navigator === 'undefined') return false;
-
-  const userAgent = navigator.userAgent || '';
-  return /Android|webOS|iPhone|iPad|iPod|Mobile/i.test(userAgent)
-    || (/Macintosh/i.test(userAgent) && navigator.maxTouchPoints > 1);
-};
-
-const getPlaybackAudioUrl = (id: string) => {
-  const baseUrl = `/api/files/${encodeURIComponent(id)}/audio`;
-  if (typeof navigator !== 'undefined' && needsMp3SampleTable(id, navigator.userAgent)) return `${baseUrl}?format=mp4`;
-  return isMobilePlaybackDevice() ? `${baseUrl}?format=mobile` : baseUrl;
 };
 
 const normalizeTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag;

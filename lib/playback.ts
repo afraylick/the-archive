@@ -5,6 +5,16 @@ const pendingSeeks = new WeakMap<WaveSurfer, () => void>();
 /** Scoped to the engine verified with captured audio, not Chromium or iOS WebKit. */
 export const needsMp3SampleTable = (id: string, userAgent: string) => /\.mp3$/i.test(id) && /Firefox\//.test(userAgent);
 
+/** Shared by the library and management players, including mobile/Firefox formats. */
+export const getPlaybackAudioUrl = (id: string) => {
+  const baseUrl = `/api/files/${encodeURIComponent(id)}/audio`;
+  if (typeof navigator === 'undefined') return baseUrl;
+  if (needsMp3SampleTable(id, navigator.userAgent)) return `${baseUrl}?format=mp4`;
+  const mobile = /Android|webOS|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+    || (/Macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+  return mobile ? `${baseUrl}?format=mobile` : baseUrl;
+};
+
 /** The media clock is authoritative; cached/decoded duration is only a startup fallback. */
 export const getPlayableDuration = (player: WaveSurfer, fallback = 0) => {
   for (const value of [player.getMediaElement().duration, player.getDuration(), fallback]) {

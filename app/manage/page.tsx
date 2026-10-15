@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { mutateRecording, type RecordingMutation, type MetadataChanges } from '@/lib/recording-mutations';
 
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
@@ -856,6 +857,9 @@ export default function ManagePage() {
             Back
           </button>
           <h1 className="text-3xl font-bold">Manage Files</h1>
+          <Link href="/manage/preview" className="ml-auto rounded border border-accent/30 bg-accent/10 px-3 py-2 text-sm text-accent transition hover:bg-accent/20">
+            Preview new design
+          </Link>
         </div>
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <button

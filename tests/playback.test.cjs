@@ -18,7 +18,7 @@ require.extensions['.ts'] = (mod, filename) => {
   }).outputText, filename);
 };
 const load = name => require(path.join(root, name));
-const { getPlayableDuration, seekToProgress, seekAndPlay, playSafely, needsMp3SampleTable } = load('lib/playback.ts');
+const { getPlayableDuration, seekToProgress, seekAndPlay, playSafely, needsMp3SampleTable, getPlaybackAudioUrl } = load('lib/playback.ts');
 const { isValidWaveformCache, WAVEFORM_CACHE_VERSION } = load('lib/waveform.ts');
 const { readAudioRange } = load('lib/audio-range.ts');
 test('sample table workaround targets Firefox MP3 playback only', () => {
@@ -27,6 +27,23 @@ test('sample table workaround targets Firefox MP3 playback only', () => {
     assert.equal(needsMp3SampleTable('track.mp3', ua), false);
   }
   assert.equal(needsMp3SampleTable('track.wav', 'Firefox/158.0'), false);
+});
+test('shared audio URLs retain desktop, Firefox, phone and iPad streaming formats', t => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  t.after(() => {
+    if (original) Object.defineProperty(globalThis, 'navigator', original);
+    else delete globalThis.navigator;
+  });
+  for (const [userAgent, maxTouchPoints, suffix] of [
+    ['Chrome/140.0 Safari/537.36', 0, ''],
+    ['Gecko/20100101 Firefox/158.0', 0, '?format=mp4'],
+    ['iPhone Mobile Safari/605.1.15', 1, '?format=mobile'],
+    ['Macintosh Safari/605.1.15', 5, '?format=mobile'],
+    ['Macintosh Safari/605.1.15', 0, ''],
+  ]) {
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { userAgent, maxTouchPoints } });
+    assert.equal(getPlaybackAudioUrl('track one.mp3'), `/api/files/track%20one.mp3/audio${suffix}`);
+  }
 });
 test('media duration overrides stale cached duration and seeks consistently', () => {
   const media = new EventTarget(); media.duration = 100;
