@@ -43,7 +43,7 @@ It combines browser-based batch uploads, waveform playback, metadata and collect
 - Play a temporary waveform preview before uploading.
 - Upload progress and status display.
 - Drop an optional Finder-tag JSON file with the audio; the JSON is selected automatically but the batch is not submitted automatically.
-- Optional Finder color-to-rating logic for each queued batch, disabled by default.
+- Finder import and color-to-rating logic remain implemented; the dedicated Finder controls are hidden from the upload UI for now. Manual batch and per-file ratings remain available.
 - Any authenticated user can attach a new version to an existing song project from its card. Versions retain their own source filename, uploader, upload date, notes, comments, ratings, and likes.
 
 ### Playback
@@ -303,10 +303,10 @@ Only the Admin can open **Upload** and create new top-level song projects.
 
 1. Drag supported audio anywhere onto the page or click the selection box.
 2. Optionally include one Finder JSON export in the same drop.
-3. Use **Bulk tagging** to apply metadata to every queued file.
+3. Use **Batch settings** to apply metadata to every queued file.
 4. Review each entry, listen to its preview, and adjust its tags, Finish, year, rating, or notes.
 5. Remove entries that should not be uploaded.
-6. Select **Upload All** and leave the page open until the request completes.
+6. Select **Upload all** and leave the page open until the request completes.
 
 The browser sends recording dates with the upload metadata. The server also performs the same filename-date detection as a fallback.
 
@@ -397,9 +397,9 @@ The repository also includes `Export Finder Tags.command` for a Finder-oriented 
 
 ### Apply Finder tags during upload
 
-Drop the JSON with the corresponding audio or select it in the Finder JSON area. Matching is case-insensitive by filename. Finder colors are always attached to matched queue entries.
+Drop the JSON with the corresponding audio. Matching is case-insensitive by filename. Finder colors are always attached to matched queue entries. The dedicated JSON picker and Finder color-rating controls are temporarily hidden in the redesigned upload UI.
 
-Enable **Use Finder Color-Rating logic** only when you want these batch-specific rating rules:
+The retained Finder color-rating implementation uses these rules when enabled; its UI switch is currently hidden:
 
 - Yellow → 2
 - Green → 3
