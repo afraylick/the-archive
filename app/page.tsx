@@ -5,6 +5,7 @@ import { mutateRecording, type MetadataChanges } from '@/lib/recording-mutations
 import { Fragment, memo, type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useWaveform } from '@/lib/use-waveform';
+import { useStableFilterResults } from '@/lib/use-stable-filter-results';
 import WaveSurfer from 'wavesurfer.js';
 import { getPlayableDuration as getWaveSurferPlayableDuration, getSeekTarget, seekToProgress as seekWaveSurferToProgress, seekAndPlay, playSafely, needsMp3SampleTable } from '@/lib/playback';
 import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
@@ -2739,7 +2740,7 @@ export default function Home() {
       .map(file => file.id)
   ), [files]);
 
-  const filteredFiles = useMemo(() => {
+  const matchingFiles = useMemo(() => {
     if (showActivity) {
       return files.filter(file => activityFileIds.has(file.id)).sort(compareFiles);
     }
@@ -2778,6 +2779,8 @@ export default function Home() {
     sortBy,
     sortDirection,
   }), [excludedAdamRatings, excludedCollections, excludedFinishes, excludedInstruments, excludedInteractionUsers, excludedVibes, excludedYears, likedOnly, randomSortSeed, randomTrackIds, searchNotes, searchQuery, selectedAdamRatings, selectedCollections, selectedFinishes, selectedInstruments, selectedInteractionUsers, selectedVibes, selectedYears, showActivity, sortBy, sortDirection, untaggedOnly]);
+
+  const filteredFiles = useStableFilterResults(files, matchingFiles, filterKey);
 
   const renderLimit = renderWindow.key === filterKey ? renderWindow.limit : INITIAL_RENDER_LIMIT;
 
@@ -3582,39 +3585,56 @@ export default function Home() {
         </div>
       </header>
       <div className="mx-auto flex max-w-[1800px] flex-col gap-4 p-3 pb-56 sm:p-4 sm:pb-36 md:flex-row">
-        <div className="md:hidden">
-          <button
-            type="button"
-            onClick={() => setShowMobileFilters(prev => !prev)}
-            className="flex w-full items-center justify-between rounded border border-border bg-muted/40 px-4 py-3 text-left font-medium text-foreground"
-            aria-expanded={showMobileFilters}
-          >
-            <span>Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}</span>
-            <span className="text-muted-foreground">{showMobileFilters ? '-' : '+'}</span>
-          </button>
-        </div>
-        <div className={`${showMobileFilters ? 'block' : 'hidden'} w-full rounded border border-border/60 bg-[#10181e]/95 p-3 pb-6 shadow-2xl shadow-black/20 md:sticky md:top-4 md:block md:max-h-[calc(100vh-2rem)] md:w-72 md:shrink-0 md:overflow-y-auto md:rounded-none md:border-0 md:bg-transparent md:p-0 md:pr-3 md:pb-44 md:shadow-none`}>
-          <div className="relative mb-4">
-            <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2">
-              <SidebarIcon name="search" />
-            </span>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search songs"
-              className="h-12 w-full rounded-xl border border-border/55 bg-[#131a1f]/86 pl-12 pr-28 text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground/70 shadow-[inset_0_1px_rgba(255,255,255,0.03)] focus:border-accent/55"
-            />
-            <label className="absolute right-3 top-1/2 flex -translate-y-1/2 cursor-pointer items-center gap-1.5 text-[11px] font-medium text-muted-foreground/70 transition hover:text-muted-foreground" title="Include notes in search">
+        <div className="w-full md:sticky md:top-4 md:max-h-[calc(100vh-2rem)] md:w-72 md:shrink-0 md:overflow-y-auto md:pr-3 md:pb-44">
+          <div className="mb-4 grid grid-cols-[minmax(0,3fr)_minmax(0,1fr)] gap-2 md:block">
+            <div className="relative min-w-0">
+              <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2">
+                <SidebarIcon name="search" />
+              </span>
               <input
-                type="checkbox"
-                checked={searchNotes}
-                onChange={(event) => setSearchNotes(event.target.checked)}
-                className="h-3.5 w-3.5 rounded accent-accent"
+                type="text"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search songs"
+                aria-label="Search songs"
+                className="h-12 w-full rounded-xl border border-border/55 bg-[#131a1f]/86 pl-12 pr-3 text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground/70 shadow-[inset_0_1px_rgba(255,255,255,0.03)] focus:border-accent/55 md:pr-28"
               />
-              Include Notes
-            </label>
+              <label className="absolute right-3 top-1/2 hidden -translate-y-1/2 cursor-pointer items-center gap-1.5 text-[11px] font-medium text-muted-foreground/70 transition hover:text-muted-foreground md:flex" title="Include notes in search">
+                <input
+                  type="checkbox"
+                  checked={searchNotes}
+                  onChange={(event) => setSearchNotes(event.target.checked)}
+                  className="h-3.5 w-3.5 rounded accent-accent"
+                />
+                Include Notes
+              </label>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowMobileFilters(prev => !prev)}
+              className={`flex h-12 min-w-0 items-center justify-center gap-2 rounded-xl transition hover:bg-muted/20 md:hidden ${showMobileFilters ? 'bg-muted/20 text-foreground' : 'text-muted-foreground'}`}
+              aria-label={`Filters${activeFilterCount > 0 ? ` (${activeFilterCount} active)` : ''}`}
+              aria-expanded={showMobileFilters}
+              aria-controls="library-filters"
+            >
+              <svg className="h-5 w-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 5h16l-6 7v6l-4 2v-8L4 5Z" />
+              </svg>
+              {activeFilterCount > 0 && (
+                <span className="text-xs font-medium leading-none text-muted-foreground/70">{activeFilterCount}</span>
+              )}
+            </button>
           </div>
+          <div id="library-filters" className={`${showMobileFilters ? 'block' : 'hidden'} rounded border border-border/60 bg-[#10181e]/95 p-3 pb-6 shadow-2xl shadow-black/20 md:block md:rounded-none md:border-0 md:bg-transparent md:p-0 md:shadow-none`}>
+          <label className="mb-3 flex min-h-11 cursor-pointer items-center gap-2 px-2 text-sm text-muted-foreground md:hidden">
+            <input
+              type="checkbox"
+              checked={searchNotes}
+              onChange={(event) => setSearchNotes(event.target.checked)}
+              className="h-4 w-4 accent-accent"
+            />
+            Include notes in search
+          </label>
           <div className="rounded-t-xl border border-b-0 border-border/55 bg-[#131a1f]/86 p-0 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
             <button
               type="button"
@@ -4029,6 +4049,7 @@ export default function Home() {
               </button>
               <SidebarIcon name="vibes" />
             </div>
+          </div>
           </div>
         </div>
         <div className="flex-1 md:pl-4">
