@@ -33,6 +33,7 @@ const isMobilePlaybackDevice = () => {
 
 const getPlaybackAudioUrl = (id: string) => {
   const baseUrl = `/api/files/${encodeURIComponent(id)}/audio`;
+  if (/\.mp3$/i.test(id)) return `${baseUrl}?format=pcm`;
   return isMobilePlaybackDevice() ? `${baseUrl}?format=mobile` : baseUrl;
 };
 
