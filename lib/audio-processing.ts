@@ -5,9 +5,8 @@ export const runAudioJob = <T,>(task: () => Promise<T>) => getTaskLimiter('audio
 export const MAX_AUDIO_SECONDS = 4 * 60 * 60;
 
 /** Called inside runAudioJob; no shell, bounded diagnostics/output and wall time. */
-export const runFfmpeg = (args: string[], onData?: (chunk: Buffer) => void, timeoutMs = 120000, signal?: AbortSignal) => (
+export const runFfmpeg = (args: string[], onData?: (chunk: Buffer) => void, timeoutMs = 120000) => (
   new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) { reject(new DOMException('Audio request cancelled', 'AbortError')); return; }
     const child = spawn(process.env.ARCHIVE_FFMPEG_PATH || 'ffmpeg', [
       '-nostdin', '-hide_banner', '-v', 'error', '-threads', '1', ...args,
     ], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -19,8 +18,6 @@ export const runFfmpeg = (args: string[], onData?: (chunk: Buffer) => void, time
       child.kill('SIGKILL');
     };
     const timer = setTimeout(() => stop(new Error('Audio processing timed out')), timeoutMs);
-    const abort = () => stop(new DOMException('Audio request cancelled', 'AbortError'));
-    signal?.addEventListener('abort', abort, { once: true });
     child.stdout.on('data', (chunk: Buffer) => {
       if (failure) return;
       try {
@@ -36,10 +33,9 @@ export const runFfmpeg = (args: string[], onData?: (chunk: Buffer) => void, time
     });
     child.stdout.on('error', stop);
     child.stderr.on('error', stop);
-    child.on('error', error => { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(error); });
+    child.on('error', error => { clearTimeout(timer); reject(error); });
     child.on('close', code => {
       clearTimeout(timer);
-      signal?.removeEventListener('abort', abort);
       if (failure) reject(failure);
       else if (code !== 0) reject(new Error(diagnostics.toString('utf8').trim() || `ffmpeg exited with code ${code}`));
       else resolve();

@@ -366,10 +366,6 @@ Stage 4 uses waveform cache version 6. Earlier caches are ignored because mobile
 
 Playback, waveform seeking, comment positions, and Media Session use the media duration once available, with cached duration only as a startup fallback. Real silent recordings are valid waveforms. After rollout, verify a representative recording on desktop and a physical iPhone/Android device, including seeking, switching versions, and background playback.
 
-MP3 playback with a current waveform cache uses a virtual PCM WAV stream (`format=pcm`) for accurate native seeking across browsers. Each range request decodes only its requested window on the server; responses and working buffers are capped at four MiB. No generated audio files or full-track browser buffers are created. WAV metadata uses the sample-count duration from the waveform cache; refresh missing or outdated waveforms to enable this path. Original downloads retain the uploaded MP3 bytes.
-
-PCM playback uses stereo 16-bit audio at 48 kHz, approximately 1.54 Mbps (192 KB/s), with additional server CPU work per range. It requires `ffmpeg`, shares the existing bounded audio-processing queue, and cancels processing when the request is aborted. Files without a current waveform cache retain their original playback path. This trades bandwidth and short server decode jobs for precise seeking without persistent storage or full-file browser decoding.
-
 
 If server-side generation fails, the browser may generate a compatible cache after decoding the audio. Installing `ffmpeg` provides the most reliable behavior across the supported formats.
 

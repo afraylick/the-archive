@@ -2,8 +2,6 @@ import { getArchiveIndex } from '@/lib/archive-index';
 import { readAudioRange } from '@/lib/audio-range';
 import { NextRequest, NextResponse } from 'next/server';
 import { runAudioJob, runFfmpeg } from '@/lib/audio-processing';
-import { streamPcmPlayback } from '@/lib/pcm-playback';
-import { WAVEFORM_CACHE_VERSION } from '@/lib/waveform';
 import { getSessionUser } from '@/lib/auth';
 import { ensureDir, getAudioContentType, getSafeDownloadName, getTranscodedDir, getUploadPath, isSafeStorageId } from '@/lib/storage';
 import fs from 'fs';
@@ -14,8 +12,6 @@ interface AudioFileRecord {
   id: string;
   name?: string;
   originalName?: string;
-  waveformDuration?: number;
-  waveformCacheVersion?: number;
 }
 
 const AUDIO_CACHE_CONTROL = 'private, max-age=86400, stale-while-revalidate=604800';
@@ -139,10 +135,6 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const downloadName = req.nextUrl.searchParams.get('download') === '1'
       ? file.originalName || file.name || id
       : undefined;
-
-    if (!downloadName && req.nextUrl.searchParams.get('format') === 'pcm' && file.waveformCacheVersion === WAVEFORM_CACHE_VERSION && file.waveformDuration) {
-      return await streamPcmPlayback(filePath, file.waveformDuration, req);
-    }
 
     if (wantsMobileAudio) {
       try {

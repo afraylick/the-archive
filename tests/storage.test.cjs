@@ -332,37 +332,26 @@ test('audio ranges serve exact suffix bytes and reject unsatisfiable requests', 
   }
 });
 
-test('PCM playback serves bounded time ranges and leaves original downloads unchanged', async t => {
+test('MP3 playback streams originals even for stale PCM URLs without invoking ffmpeg', async t => {
   await setup();
-  const id = 'precise.mp3';
+  const id = 'fixture.mp3';
+  const bytes = Buffer.from(Array.from({ length: 100 }, (_, i) => i));
   save([{ ...fixture, id, waveformDuration: 10, waveformCacheVersion: 6 }]);
-  const original = Buffer.from('original compressed audio');
-  fs.writeFileSync(storage.getUploadPath(id), original);
-  const processing = load('lib/audio-processing.ts');
-  let calls = 0;
-  t.mock.method(processing, 'runFfmpeg', async (args, onData) => {
-    calls++;
-    const filter = args[args.indexOf('-af') + 1];
-    const match = /start_sample=(\d+):end_sample=(\d+)/.exec(filter);
-    onData(Buffer.alloc((Number(match[2]) - Number(match[1])) * 4, 7));
-  });
+  fs.writeFileSync(storage.getUploadPath(id), bytes);
+  t.mock.method(load('lib/audio-processing.ts'), 'runFfmpeg', async () => { throw new Error('Playback must not invoke ffmpeg'); });
   const ctx = { params: Promise.resolve({ id }) };
+  for (const query of ['', '?format=pcm', '?format=mobile', '?download=1']) {
+    const response = await audioRoute.GET(request(`/api/files/${id}/audio${query}`), ctx);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'audio/mpeg');
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
+  }
   const req = request(`/api/files/${id}/audio?format=pcm`);
-  req.headers.set('range', 'bytes=44-143');
-  const response = await audioRoute.GET(req, ctx);
-  assert.equal(response.status, 206);
-  assert.equal(response.headers.get('content-type'), 'audio/wav');
-  assert.equal(response.headers.get('content-range'), 'bytes 44-143/1920044');
-  assert.deepEqual(Buffer.from(await response.arrayBuffer()), Buffer.alloc(100, 7));
-  assert.equal(calls, 1);
-  const probe = request(`/api/files/${id}/audio?format=pcm`); probe.headers.set('range', 'bytes=0-1');
-  assert.deepEqual(Buffer.from(await (await audioRoute.GET(probe, ctx)).arrayBuffer()), Buffer.from('RI'));
-  assert.equal(calls, 1, 'metadata probes do not decode audio');
-  const download = await audioRoute.GET(request(`/api/files/${id}/audio?format=pcm&download=1`), ctx);
-  assert.deepEqual(Buffer.from(await download.arrayBuffer()), original);
-  assert.match(download.headers.get('content-disposition'), /^attachment;/);
-  assert.equal(calls, 1);
-  assert.deepEqual(fs.readdirSync(storage.getTranscodedDir()), [], 'PCM playback never creates cached audio');
+  req.headers.set('range', 'bytes=20-39');
+  const range = await audioRoute.GET(req, ctx);
+  assert.equal(range.status, 206);
+  assert.equal(range.headers.get('content-range'), 'bytes 20-39/100');
+  assert.deepEqual(Buffer.from(await range.arrayBuffer()), bytes.subarray(20, 40));
 });
 
 test('metadata index, waveform isolation and invalidation', async () => {
