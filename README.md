@@ -90,6 +90,10 @@ It combines browser-based batch uploads, waveform playback, metadata and collect
 
 ### Administration
 
+- Management dashboard at `/manage` with inline recording-type changes and a metadata editor using the library's cached waveform and audio stream.
+- Open **Collections**, then **Rename** on a collection to update its name across all recordings and versions. Bulk **Add to collection** preserves existing memberships.
+- **Maintenance → Advanced tools** provides the stems, variation, rating, Finder-tag, full-export, and deletion controls.
+- **Members & access** at `/users` provides a searchable account directory, member activity, name edits, password resets, and account creation or deletion.
 - Rename song projects and retain the original filename.
 - Add or remove instrument and vibe tags from the main library.
 - Edit Admin notes, Finish, year, ratings, and variation details.
@@ -107,10 +111,11 @@ It combines browser-based batch uploads, waveform playback, metadata and collect
 
 ### User management
 
-- A single Admin account on clean installations.
+- A single protected Owner account on clean installations; existing installations automatically recognize the original administrator (`adam`) as Owner.
 - Admin-created member accounts; there is no public registration flow.
 - Editable display names without changing the stable internal IDs used by ratings, likes, comments, and upload history.
-- Admin-controlled password changes.
+- Owners can promote Members to Admin or demote Admins from **Members & access → Access role**.
+- Admins can manage Member accounts and their own name/password, but cannot change roles or edit, reset passwords for, or delete other Admin or Owner accounts.
 - Per-user summaries for rating count and average, likes, comments, rated songs, liked songs, and commented songs.
 - Password-only login: the submitted password identifies the account, so every account must use a unique password.
 - Signed, HTTP-only session cookies with a 30-day lifetime.
@@ -124,24 +129,23 @@ It combines browser-based batch uploads, waveform playback, metadata and collect
 
 ## Accounts and permissions
 
-The application has two roles: Admin and member. Clean installations contain one Admin. Accounts created through **Manage Users** are members.
+The application has three roles: Owner, Admin, and Member. The original administrator's stable ID (`adam`) automatically receives Owner access when this version is deployed, including existing production installations and renamed accounts. Passwords, session cookies, and interaction history are preserved. New accounts start as Members.
 
-| Capability | Admin | Member |
-| --- | --- | --- |
-| Browse, filter, play, and download audio | Yes | Yes |
-| Download attached stems | Yes | Yes |
-| Rate and like recordings | Yes | Yes, for their own account |
-| Add comments and delete their own comments | Yes | Yes |
-| Add or remove recordings from collections | Yes | Yes |
-| Upload a version to an existing song project | Yes | Yes |
-| Upload new song projects in bulk | Yes | No |
-| Rename projects and edit tags or Admin notes | Yes | No |
-| Edit another user's rating | Yes | No |
-| Manage stems, waveforms, collections, and files | Yes | No |
-| View archive-wide activity and user summaries | Yes | No |
-| Create, rename, update, or delete users | Yes | No |
+| Capability | Owner | Admin | Member |
+| --- | --- | --- | --- |
+| Browse, filter, play, and download audio or stems | Yes | Yes | Yes |
+| Rate, like, and comment; delete own comments | Yes | Yes | Yes |
+| Update recording collections or upload alternate versions | Yes | Yes | Yes |
+| Upload new song projects in bulk | Yes | Yes | No |
+| Edit projects, tags, notes, or another user's rating | Yes | Yes | No |
+| Manage stems, waveforms, collections, and files | Yes | Yes | No |
+| View archive-wide activity and user summaries | Yes | Yes | No |
+| Create and manage Member accounts | Yes | Yes | No |
+| Edit own name and password | Yes | Yes | No |
+| Manage other Admin or Owner accounts | Yes | No | No |
+| Promote Members to Admin or demote Admins | Yes | No | No |
 
-The Admin account cannot be deleted. Deleting a custom member also removes that member's ratings, likes, and comments, so back up the archive before deleting an account whose history may be needed.
+Only Owners change roles. Owner access is protected from demotion and deletion. Built-in legacy accounts cannot be deleted. Deleting a custom account also removes its ratings, likes, and comments, so back up the archive before deleting an account whose history may be needed.
 
 ## Requirements
 
@@ -178,7 +182,7 @@ These steps describe the application setup itself and are independent of any par
    openssl rand -base64 48
    ```
 
-4. Copy `.env.example` to the environment file used by your runtime and set the storage, secret, and explicit initial Admin password:
+4. Copy `.env.example` to the environment file used by your runtime and set the storage, secret, and explicit initial Owner password:
 
    ```dotenv
    ARCHIVE_AUTH_SECRET="replace-with-the-generated-secret"
@@ -204,13 +208,13 @@ These steps describe the application setup itself and are independent of any par
 A fresh archive is initialized with:
 
 - Archive title: `the archive`
-- Account: `Admin`
+- Account: `Owner`
 - Initial password: explicitly configured by the operator; there is no built-in password
 - Instrument choices: Guitar, Vocals, Bass, Drums, and Synth
 - Vibe choices: none
 - Finish filtering: no automatic selection, so all recordings are shown
 
-The default Admin's stable internal ID is `adam` for data-schema compatibility. Changing the display name on the Users page does not change that ID or any existing history.
+The default Owner's stable internal ID is `adam` for data-schema compatibility. Changing the display name on the Users page does not change that ID or any existing history.
 
 ## Configuration
 

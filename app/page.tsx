@@ -2441,6 +2441,7 @@ export default function Home() {
   const [loadError, setLoadError] = useState(false);
   const [files, setFiles] = useState<AudioFile[]>([]);
   const [currentUser, setCurrentUser] = useState<ArchiveUser | null>(null);
+  const [showLogout, setShowLogout] = useState(false);
   const [accountUsers, setAccountUsers] = useState<ArchiveUser[]>([]);
   const [archiveName, setArchiveName] = useState('the archive');
   const [selectedInstruments, setSelectedInstruments] = useState<string[]>([]);
@@ -3532,11 +3533,17 @@ export default function Home() {
           </div>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-end">
-          <div className="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+          <div className="flex flex-wrap justify-center gap-2 sm:justify-end">
             {currentUser && (
-              <span className="col-span-2 inline-flex h-10 items-center justify-center rounded-full border border-border/65 bg-muted/35 px-3 text-center text-sm text-foreground sm:col-span-1">
-                {currentUser.name.slice(0, 2).toUpperCase()}
-              </span>
+              <button
+                type="button"
+                onClick={() => { if (showLogout) void logout(); else setShowLogout(true); }}
+                onBlur={() => setShowLogout(false)}
+                onKeyDown={event => { if (event.key === 'Escape') setShowLogout(false); }}
+                className="inline-flex h-10 min-w-20 max-w-40 items-center justify-center rounded-full border border-border/65 bg-muted/35 px-3 text-center text-sm text-foreground transition hover:border-accent/40 focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                <span className="truncate" aria-live="polite">{showLogout ? 'Logout' : currentUser.name.trim().split(/\s+/)[0]}</span>
+              </button>
             )}
             {currentUser?.isAdmin && (
               <>
@@ -3547,12 +3554,6 @@ export default function Home() {
                 Manage
               </Link>
               <Link
-                href="/users"
-                className="rounded border border-border/50 bg-muted/35 px-3 py-2 text-center text-sm text-muted-foreground transition hover:border-accent/40 hover:text-foreground"
-              >
-                Users
-              </Link>
-              <Link
                 href="/upload"
                   className="rounded border border-accent/55 bg-accent/85 px-3 py-2 text-center text-sm text-accent-foreground shadow-sm shadow-accent/10 transition hover:bg-accent"
                 >
@@ -3560,13 +3561,6 @@ export default function Home() {
                 </Link>
               </>
             )}
-            <button
-              type="button"
-              onClick={logout}
-              className="rounded border border-border/50 bg-muted/35 px-3 py-2 text-sm text-muted-foreground transition hover:border-accent/40 hover:text-foreground"
-            >
-              Logout
-            </button>
           </div>
         </div>
       </header>
@@ -3983,7 +3977,7 @@ export default function Home() {
                 className="h-4 w-4 accent-accent"
               />
             </label>
-            {currentUser?.id === 'adam' && (
+            {currentUser?.isAdmin && (
               <label className="flex min-h-16 cursor-pointer items-center gap-4 px-5 text-sm font-medium text-foreground transition hover:bg-muted/20">
                 <SidebarIcon name="untagged" />
                 <span className="min-w-0 flex-1">Untagged songs</span>

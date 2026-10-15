@@ -6,13 +6,14 @@ import {
   getPublicUsers,
   getSessionUser,
   getUserById,
-  isPasscodeInUse,
   renameUser,
   setUserPasscode,
+  setUserRole,
   type UserId,
 } from '@/lib/auth';
 import fs from 'fs';
 import { getDataFilePath } from '@/lib/storage';
+import { canEditAccount, canChangeAccountRole, canDeleteAccount } from '@/lib/roles';
 
 interface AudioComment {
   userId?: string;
@@ -59,6 +60,11 @@ export async function GET(req: NextRequest) {
 
     return {
       ...account,
+      permissions: {
+        canEdit: canEditAccount(user, account),
+        canChangeRole: canChangeAccountRole(user, account),
+        canDelete: canDeleteAccount(user, account),
+      },
       stats: {
         ratingCount: ratedSongs.length,
         averageRating: ratedSongs.length
@@ -84,23 +90,37 @@ export async function PATCH(req: NextRequest) {
   }
 
   try {
-    const { userId, passcode, name } = await req.json() as { userId?: UserId; passcode?: string; name?: string };
-    if (!userId || !getUserById(userId)) {
+    const body = await req.json();
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !['userId', 'passcode', 'name', 'role'].includes(key))) {
+      return NextResponse.json({ error: 'Invalid account update' }, { status: 400 });
+    }
+    const { userId, passcode, name, role } = body;
+    const target = typeof userId === 'string' ? getUserById(userId) : undefined;
+    if (!target) {
       return NextResponse.json({ error: 'User is required' }, { status: 400 });
     }
-    if (passcode?.trim() && name?.trim()) {
-      return NextResponse.json({ error: 'Update the user name and password separately' }, { status: 400 });
+    const actor = getSessionUser(req);
+    if (!actor?.isAdmin) return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+    if (Object.keys(body).filter(key => key !== 'userId').length !== 1) {
+      return NextResponse.json({ error: 'Update name, password, and role separately' }, { status: 400 });
+    }
+    if ('role' in body) {
+      if (!canChangeAccountRole(actor, target)) return NextResponse.json({ error: 'Only Owners can change member roles; Owner roles are protected' }, { status: 403 });
+      if (role !== 'admin' && role !== 'member') return NextResponse.json({ error: 'Role must be Admin or Member' }, { status: 400 });
+      return NextResponse.json({ message: 'Role updated', user: setUserRole(actor.id, userId, role) });
+    }
+    if (!canEditAccount(actor, target)) {
+      return NextResponse.json({ error: 'Only Owners can manage other Admin or Owner accounts' }, { status: 403 });
+    }
+    if ((name !== undefined && typeof name !== 'string') || (passcode !== undefined && typeof passcode !== 'string')) {
+      return NextResponse.json({ error: 'Name and password must be text' }, { status: 400 });
     }
     if (name?.trim()) {
       const renamedUser = renameUser(userId, name);
       return NextResponse.json({ message: 'User name updated', user: renamedUser });
     }
     if (passcode?.trim()) {
-      if (await isPasscodeInUse(passcode.trim(), userId)) {
-        return NextResponse.json({ error: 'Password is already in use' }, { status: 409 });
-      }
-
-      await setUserPasscode(userId, passcode.trim());
+      await setUserPasscode(userId, passcode.trim(), actor.id);
       return NextResponse.json({ message: 'Password updated' });
     }
 
@@ -120,9 +140,16 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { name, passcode } = await req.json() as { name?: string; passcode?: string };
-    const createdUser = await createUser(name || '', passcode || '');
-    return NextResponse.json({ user: createdUser }, { status: 201 });
+    const body = await req.json();
+    if (!body || typeof body.name !== 'string' || typeof body.passcode !== 'string' || Object.keys(body).some(key => !['name', 'passcode'].includes(key))) return NextResponse.json({ error: 'New accounts must be created as Members' }, { status: 400 });
+    const { name, passcode } = body;
+    const createdUser = await createUser(name || '', passcode || '', user.id);
+    const actor = getSessionUser(req);
+    return NextResponse.json({ user: { ...createdUser, permissions: {
+      canEdit: Boolean(actor && canEditAccount(actor, createdUser)),
+      canChangeRole: Boolean(actor && canChangeAccountRole(actor, createdUser)),
+      canDelete: Boolean(actor && canDeleteAccount(actor, createdUser)),
+    } } }, { status: 201 });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'User creation failed' },
@@ -139,9 +166,12 @@ export async function DELETE(req: NextRequest) {
 
   try {
     const { userId } = await req.json() as { userId?: UserId };
-    if (!userId || !getUserById(userId)) {
+    const target = userId && getUserById(userId);
+    if (!target) {
       return NextResponse.json({ error: 'User is required' }, { status: 400 });
     }
+    const actor = getSessionUser(req);
+    if (!actor || !canDeleteAccount(actor, target)) return NextResponse.json({ error: 'You cannot delete this account' }, { status: 403 });
 
     deleteUser(userId);
     const files = readFiles().map(file => ({

@@ -5,7 +5,7 @@ import WaveSurfer from 'wavesurfer.js';
 import { useWaveform } from '@/lib/use-waveform';
 import { isValidWaveformCache } from '@/lib/waveform';
 import { getPlayableDuration, getPlaybackAudioUrl } from '@/lib/playback';
-import s from './preview.module.css';
+import s from './management.module.css';
 
 const formatTime = (seconds: number) => `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
 

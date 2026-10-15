@@ -425,3 +425,23 @@ test('simultaneous mobile ranges share one transcode and release its slot', asyn
   assert.equal(calls, 1);
   assert.equal(globalThis.archiveTranscodes.size, 0);
 });
+
+const collectionRoute = load('app/api/collections/route.ts');
+const recordingCollectionsRoute = load('app/api/files/[id]/collections/route.ts');
+test('collection names persist across projects and variations', async () => {
+  await setup();
+  save([
+    { ...fixture, notes: 'Keep notes', collections: ['Demos, 2026', 'Other'] },
+    { ...fixture, id: 'version.wav', projectId: fixture.id, collections: ['Demos, 2026', 'Renamed'] },
+    { ...fixture, id: 'unrelated.wav', collections: ['Unrelated'] },
+  ]);
+  const response = await collectionRoute.PATCH(request('/api/collections', 'PATCH', { collection: 'Demos, 2026', name: 'Renamed' }));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).filesUpdated, 2);
+  assert.deepEqual(read().map(file => file.collections), [['Renamed', 'Other'], ['Renamed'], ['Unrelated']]);
+  assert.equal(read()[0].notes, 'Keep notes');
+  const assigned = await recordingCollectionsRoute.PUT(request('/api/files/fixture.wav/collections', 'PUT', { collections: ['Renamed', 'Other', 'New, collection'] }), context);
+  assert.equal(assigned.status, 200);
+  assert.deepEqual(read()[0].collections, ['Renamed', 'Other', 'New, collection']);
+  assert.deepEqual(read()[1].collections, ['Renamed']);
+});

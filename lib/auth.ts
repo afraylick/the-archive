@@ -6,6 +6,7 @@ import path from 'path';
 import type { NextRequest } from 'next/server';
 import { getArchiveSettings } from './archive-settings';
 import { getStorageRoot } from './storage';
+import { BUILT_IN_USER_IDS, canEditAccount, canChangeAccountRole, type UserRole } from './roles';
 
 export type UserId = string;
 
@@ -13,6 +14,7 @@ export interface ArchiveUser {
   id: UserId;
   name: string;
   isAdmin: boolean;
+  role: UserRole;
 }
 
 export const SESSION_COOKIE = 'archive_session';
@@ -20,15 +22,15 @@ const DEFAULT_DEV_SECRET = 'songie-local-dev-secret';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 
 const LEGACY_USERS: ArchiveUser[] = [
-  { id: 'adam', name: 'Adam', isAdmin: true },
-  { id: 'maurer', name: 'Maurer', isAdmin: false },
-  { id: 'wills', name: 'Wills', isAdmin: false },
-  { id: 'jordi', name: 'Jordi', isAdmin: false },
-  { id: 'roland', name: 'Roland', isAdmin: false },
+  { id: 'adam', name: 'Adam', isAdmin: true, role: 'owner' },
+  { id: 'maurer', name: 'Maurer', isAdmin: false, role: 'member' },
+  { id: 'wills', name: 'Wills', isAdmin: false, role: 'member' },
+  { id: 'jordi', name: 'Jordi', isAdmin: false, role: 'member' },
+  { id: 'roland', name: 'Roland', isAdmin: false, role: 'member' },
 ];
 
 const CLEAN_USERS: ArchiveUser[] = [
-  { id: 'adam', name: 'Admin', isAdmin: true },
+  { id: 'adam', name: 'Owner', isAdmin: true, role: 'owner' },
 ];
 
 const isProduction = () => process.env.NODE_ENV === 'production';
@@ -115,7 +117,7 @@ const readCustomUsers = () => {
   const storageUsers = readJsonFile<ArchiveUser[]>(getAccountsFile(), []);
   const usersById = new Map<string, ArchiveUser>();
 
-  if (![legacyUsers, storageUsers].every(users => Array.isArray(users) && users.every(user => user && typeof user.id === 'string' && typeof user.name === 'string' && typeof user.isAdmin === 'boolean'))) throw new Error('Invalid account storage');
+  if (![legacyUsers, storageUsers].every(users => Array.isArray(users) && users.every(user => user && typeof user.id === 'string' && typeof user.name === 'string' && typeof user.isAdmin === 'boolean' && (user.role === undefined || ['owner', 'admin', 'member'].includes(user.role))))) throw new Error('Invalid account storage');
 
   [...legacyUsers, ...storageUsers]
     .filter(user => user.id && user.name)
@@ -140,13 +142,19 @@ const getAllUsers = () => {
   return [
     ...builtInUsers.filter(user => !customIds.has(user.id)),
     ...customUsers,
-  ];
+  ].map(user => {
+    // The original production administrator remains the Owner even when a
+    // legacy display-name override stores isAdmin:false or has no role field.
+    const role: UserRole = user.id === 'adam' ? 'owner' : user.role || (user.isAdmin ? 'admin' : 'member');
+    return { ...user, role, isAdmin: role !== 'member' };
+  });
 };
 
 export const getPublicUsers = () => getAllUsers().map(user => ({
   id: user.id,
   name: user.name,
   isAdmin: user.isAdmin,
+  role: user.role,
 }));
 
 const readPasswordHashes = () => {
@@ -217,12 +225,20 @@ const passcodeInUse = async (passcode: string, exceptUserId?: string) => {
 };
 export const isPasscodeInUse = (passcode: string, exceptUserId?: string) => authLimiter().run(() => passcodeInUse(passcode, exceptUserId));
 
-export const setUserPasscode = (userId: UserId, passcode: string) => authLimiter().run(async () => {
+export const setUserPasscode = (userId: UserId, passcode: string, actorId?: UserId) => authLimiter().run(async () => {
+  const checkAccess = () => {
+    const target = getUserById(userId);
+    if (!target) throw new Error('User not found');
+    if (actorId) {
+      const actor = getUserById(actorId);
+      if (!actor || !canEditAccount(actor, target)) throw new Error('You cannot manage this account');
+    }
+  };
+  checkAccess();
   const cleanPasscode = validatePasscode(passcode);
-  if (!getUserById(userId)) throw new Error('User not found');
   if (await passcodeInUse(cleanPasscode, userId)) throw new Error('Password is already in use');
   const hashed = await hashPasscode(cleanPasscode);
-  if (!getUserById(userId)) throw new Error('User not found');
+  checkAccess();
   const hashes = readPasswordHashes();
   hashes[userId] = hashed;
   writePasswordHashes(hashes);
@@ -245,13 +261,16 @@ const getUserIdFromName = (name: string) => {
   return id;
 };
 
-export const createUser = (name: string, passcode: string) => authLimiter().run(async () => {
+export const createUser = (name: string, passcode: string, actorId?: UserId) => authLimiter().run(async () => {
+  const checkAccess = () => { if (actorId && !getUserById(actorId)?.isAdmin) throw new Error('Admin access required'); };
+  checkAccess();
   const cleanName = name.trim();
   if (!cleanName) throw new Error('User name is required');
   const cleanPasscode = validatePasscode(passcode);
   if (await passcodeInUse(cleanPasscode)) throw new Error('Password is already in use');
   const hashed = await hashPasscode(cleanPasscode);
-  const user: ArchiveUser = { id: getUserIdFromName(cleanName), name: cleanName, isAdmin: false };
+  checkAccess();
+  const user: ArchiveUser = { id: getUserIdFromName(cleanName), name: cleanName, isAdmin: false, role: 'member' };
   const hashes = readPasswordHashes();
   hashes[user.id] = hashed;
   writePasswordHashes(hashes);
@@ -279,8 +298,23 @@ export const renameUser = (userId: UserId, name: string) => {
   return renamedUser;
 };
 
+export const setUserRole = (actorId: UserId, userId: UserId, role: 'admin' | 'member') => {
+  const actor = getUserById(actorId);
+  const target = getUserById(userId);
+  if (!actor || !target || !canChangeAccountRole(actor, target)) throw new Error('Only Owners can change member roles');
+  if (role !== 'admin' && role !== 'member') throw new Error('Role must be Admin or Member');
+  const updated = { ...target, role, isAdmin: role === 'admin' };
+  const stored = readCustomUsers();
+  const index = stored.findIndex(user => user.id === userId);
+  if (index < 0) stored.push(updated);
+  else stored[index] = updated;
+  writeCustomUsers(stored);
+  return updated;
+};
+
 export const deleteUser = (userId: UserId) => {
-  if (userId === 'adam') throw new Error('The Admin account cannot be deleted');
+  if (getUserById(userId)?.role === 'owner') throw new Error('Owner accounts cannot be deleted');
+  if (BUILT_IN_USER_IDS.has(userId)) throw new Error('Built-in accounts cannot be deleted');
 
   const customUsers = readCustomUsers();
   const nextUsers = customUsers.filter(user => user.id !== userId);

@@ -192,3 +192,96 @@ test('WAV sample callback exceptions reject without escaping the stream', async 
   t.mock.method(Buffer.prototype, 'readInt16LE', () => { throw new Error('Injected sample error'); });
   await assert.rejects(waveform.generateServerWaveform(target), /Injected sample error/);
 });
+
+const usersRoute = load('app/api/users/route.ts');
+const proxy = load('proxy.ts').proxy;
+const accountRequest = (actorId, method, body) => new NextRequest('http://test.local/api/users', {
+  method,
+  headers: { cookie: `archive_session=${auth.createSessionToken(actorId)}`, 'content-type': 'application/json' },
+  ...(body ? { body: JSON.stringify(body) } : {}),
+});
+
+test('Owner migration and role authorization', async t => {
+  await t.test('existing production administrator becomes Owner without rewriting credentials or history', async () => {
+    fresh();
+    await auth.setUserPasscode('adam', 'original-production-password');
+    const token = auth.createSessionToken('adam');
+    json.writeJsonAtomic(file('accounts.json'), [{ id: 'adam', name: 'Custom production name', isAdmin: true }]);
+    fs.writeFileSync(file('data.json'), '[{"id":"keep","ratings":{"adam":5},"comments":[{"userId":"adam","text":"Keep"}]}]');
+    const credentials = fs.readFileSync(file('users.json'));
+    const history = fs.readFileSync(file('data.json'));
+    const owner = auth.getUserFromSessionToken(token);
+    assert.equal(owner.role, 'owner'); assert.equal(owner.isAdmin, true); assert.equal(owner.name, 'Custom production name');
+    assert.equal(auth.getPublicUsers().find(user => user.id === 'adam').role, 'owner');
+    assert.deepEqual(fs.readFileSync(file('users.json')), credentials);
+    assert.deepEqual(fs.readFileSync(file('data.json')), history);
+    // The stable production Owner cannot lose access to a stale stored role override.
+    json.writeJsonAtomic(file('accounts.json'), [{ id: 'adam', name: 'Custom production name', isAdmin: false, role: 'member' }]);
+    assert.equal(auth.getUserFromSessionToken(token).role, 'owner');
+    assert.equal(auth.getUserFromSessionToken(token).isAdmin, true);
+  });
+
+  await t.test('only Owners promote or demote; existing sessions use current permissions', async () => {
+    fresh(); await auth.setUserPasscode('adam', 'owner-password');
+    const first = await auth.createUser('First Admin', 'first-password');
+    const second = await auth.createUser('Second Admin', 'second-password');
+    const member = await auth.createUser('Member', 'member-password');
+    fs.writeFileSync(file('data.json'), '[]');
+    const existingToken = auth.createSessionToken(first.id);
+    const patch = (actor, userId, role) => usersRoute.PATCH(accountRequest(actor, 'PATCH', { userId, role }));
+    assert.equal((await patch(member.id, member.id, 'admin')).status, 403);
+    assert.equal((await patch('adam', first.id, 'admin')).status, 200);
+    assert.equal((await patch('adam', second.id, 'admin')).status, 200);
+    assert.equal(auth.getUserFromSessionToken(existingToken).role, 'admin');
+    const access = await (await usersRoute.GET(accountRequest(first.id, 'GET'))).json();
+    assert.equal(access.users.find(user => user.id === 'adam').permissions.canEdit, false);
+    assert.equal(access.users.find(user => user.id === second.id).permissions.canChangeRole, false);
+    assert.equal(access.users.find(user => user.id === member.id).permissions.canEdit, true);
+    for (const target of [member.id, first.id, second.id, 'adam']) {
+      assert.equal((await patch(first.id, target, target === member.id ? 'admin' : 'member')).status, 403);
+    }
+    assert.equal((await patch('adam', 'adam', 'member')).status, 403);
+    assert.equal((await patch('adam', member.id, 'owner')).status, 400);
+    assert.equal((await usersRoute.PATCH(accountRequest('adam', 'PATCH', { userId: member.id, isAdmin: true }))).status, 400);
+    assert.equal((await usersRoute.PATCH(accountRequest('adam', 'PATCH', { userId: member.id, name: 'Changed', role: 'admin' }))).status, 400);
+    assert.equal((await usersRoute.POST(accountRequest(first.id, 'POST', { name: 'Injected', passcode: 'injected-password', role: 'owner' }))).status, 400);
+    assert.equal((await patch('adam', first.id, 'member')).status, 200);
+    assert.equal(auth.getUserFromSessionToken(existingToken).isAdmin, false);
+    const staleRequest = new NextRequest('http://test.local/api/users', { headers: { cookie: `archive_session=${existingToken}` } });
+    assert.equal((await usersRoute.GET(staleRequest)).status, 403);
+    assert.equal(proxy(staleRequest).status, 403);
+    const stored = JSON.parse(fs.readFileSync(file('accounts.json')));
+    assert.equal(stored.find(user => user.id === first.id).role, 'member');
+    assert.equal(stored.find(user => user.id === second.id).role, 'admin');
+  });
+
+  await t.test('Admins cannot take over or delete other Admins or the Owner', async () => {
+    fresh(); await auth.setUserPasscode('adam', 'owner-password');
+    const admin = await auth.createUser('Admin', 'admin-password');
+    const peer = await auth.createUser('Peer', 'peer-password');
+    const member = await auth.createUser('Member', 'member-password');
+    auth.setUserRole('adam', admin.id, 'admin'); auth.setUserRole('adam', peer.id, 'admin');
+    fs.writeFileSync(file('data.json'), '[]');
+    for (const target of [peer.id, 'adam']) {
+      assert.equal((await usersRoute.PATCH(accountRequest(admin.id, 'PATCH', { userId: target, name: 'Taken over' }))).status, 403);
+      assert.equal((await usersRoute.PATCH(accountRequest(admin.id, 'PATCH', { userId: target, passcode: 'taken-over-password' }))).status, 403);
+      assert.equal((await usersRoute.DELETE(accountRequest(admin.id, 'DELETE', { userId: target }))).status, 403);
+    }
+    assert.equal((await usersRoute.PATCH(accountRequest(admin.id, 'PATCH', { userId: admin.id, name: 'Renamed Admin' }))).status, 200);
+    assert.equal((await usersRoute.PATCH(accountRequest(admin.id, 'PATCH', { userId: member.id, name: 'Renamed Member' }))).status, 200);
+    assert.equal((await usersRoute.PATCH(accountRequest('adam', 'PATCH', { userId: peer.id, passcode: 'owner-reset-password' }))).status, 200);
+    assert.equal((await usersRoute.DELETE(accountRequest('adam', 'DELETE', { userId: 'adam' }))).status, 403);
+    assert.equal((await usersRoute.DELETE(accountRequest('adam', 'DELETE', { userId: peer.id }))).status, 200);
+  });
+
+  await t.test('password commits recheck permissions after a concurrent promotion', async () => {
+    fresh(); await auth.setUserPasscode('adam', 'owner-password');
+    const admin = await auth.createUser('Admin', 'admin-password');
+    const member = await auth.createUser('Member', 'member-password');
+    auth.setUserRole('adam', admin.id, 'admin');
+    const reset = auth.setUserPasscode(member.id, 'replacement-password', admin.id);
+    auth.setUserRole('adam', member.id, 'admin');
+    await assert.rejects(reset, /cannot manage/);
+    assert.equal(await auth.verifyPasscode(member.id, 'member-password'), true);
+  });
+});

@@ -1,0 +1,70 @@
+.workspace { display: grid; grid-template-columns: minmax(0,1fr) 360px; gap: 24px; align-items: start; }
+.count { color: #75899c; font-size: 10px; }
+.state { padding: 30px 0; color: #93a8bc; }
+.state p { margin-bottom: 15px; }
+.table { width: 100%; border-collapse: collapse; text-align: left; }
+.table th { padding: 12px 12px; background: #ffffff02; border-block: 1px solid #ffffff08; color: #6d7e91; font-size: 9px; letter-spacing: 1px; font-weight: 500; white-space: nowrap; }
+.table td { padding: 20px 12px; border-bottom: 1px solid #ffffff09; }
+.table th:first-child, .table td:first-child { padding-left: 21px; }
+.table th:last-child, .table td:last-child { padding-right: 18px; }
+.table tbody tr:hover { background: #ffffff03; }
+.table .selected { background: #3680e90e; box-shadow: inset 2px 0 #438cec; }
+.member { display: flex; align-items: center; gap: 12px; text-align: left; min-width: 145px; }
+.member > span:last-child { min-width: 0; }
+.member strong { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; font-weight: 400; color: #dce5ef; overflow-wrap: anywhere; }
+.member strong small { font-size: 8px; color: #6d91bc; border: 1px solid #3680e926; border-radius: 3px; padding: 1px 4px; }
+.member > span > span { display: block; margin-top: 5px; color: #6d8196; font-size: 10px; }
+.adminAvatar { border-color: #41658c; background: #1a2c42; color: #9fc2f4; }
+.badge { display: inline-block; border: 1px solid #ffffff0b; border-radius: 4px; background: #ffffff03; color: #9eafbf; font-size: 9px; padding: 4px 7px; white-space: nowrap; }
+.adminBadge { border-color: #3680e92e; background: #3680e912; color: #89b5f5; }
+.number { font-size: 12px; color: #bbc9d7; font-variant-numeric: tabular-nums; }
+.average { display: block; font-size: 9px; color: #75879a; margin-top: 6px; }
+.open { padding: 8px; color: #6887a6; }
+.open:hover { color: #a5c9fa; }
+.details { border: 1px solid #ffffff0d; border-radius: 9px; background: linear-gradient(120deg,#151f29b0,#10181ed0); overflow: hidden; min-width: 0; }
+.detailHead { display: flex; align-items: center; gap: 15px; padding: 24px 22px; border-bottom: 1px solid #ffffff09; }
+.largeAvatar { width: 48px; height: 48px; font-size: 15px; border-radius: 12px; background: #1c2d43; border-color: #355679; color: #b9d4fb; }
+.detailHead h2 { font-size: 21px; color: #e0e8f1; font-weight: 400; line-height: 1.3; margin: 7px 0 9px; overflow-wrap: anywhere; }
+.detailBody { padding: 22px 20px 0; }
+.editForm { margin-bottom: 23px; }
+.editForm label { display: block; font-size: 10px; color: #9eb2c7; margin-bottom: 9px; }
+.editForm :is(input,select) { width: 100%; min-width: 0; padding: 10px; color: #d5e0ed; background: #0c151e; border: 1px solid #2a3a4a; border-radius: 5px; font-size: 12px; }
+.editForm input::placeholder { color: #60768e; }
+.inputAction { display: flex; align-items: center; gap: 7px; }
+.inputAction button { padding-inline: 10px; }
+.passwordAction { display: flex; gap: 10px; justify-content: space-between; align-items: center; margin-top: 10px; }
+.editForm small { display: block; font-size: 9px; color: #758ca2; line-height: 1.6; }
+.editForm > small { margin-top: 8px; }
+.passwordAction button { font-size: 10px; }
+.activityHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 20px 20px; }
+.activityHead h3 { font-size: 13px; font-weight: 400; color: #d1deeb; }
+.activityHead > span { font-size: 9px; color: #768a9f; }
+.activityTabs { gap: 17px; padding-inline: 20px; }
+.activityTabs button { font-size: 10px; gap: 5px; }
+.activityList { padding: 5px 20px 18px; }
+.track { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #ffffff07; padding: 13px 0; color: #aabdd1; font-size: 11px; }
+.track:hover { color: #91bcfa; }
+.trackIcon { width: 27px; height: 29px; display: grid; place-content: center; background: #3680e90d; border: 1px solid #3680e91b; border-radius: 4px; color: #6e92bc; flex-shrink: 0; }
+.track > span:nth-child(2) { flex: 1; overflow-wrap: anywhere; }
+.track b { color: #c6ad7e; font-size: 12px; font-weight: 400; white-space: nowrap; }
+.track b small { color: #738496; font-size: 9px; }
+.track > svg { color: #4f6d8e; flex-shrink: 0; }
+.noActivity { padding: 25px 0; color: #71869a; font-size: 11px; }
+.deleteArea { border-top: 1px solid #ffffff0a; padding: 17px 20px; }
+.dangerLink { color: #cb9292; font-size: 10px; padding-block: 5px; }
+.dangerLink:hover { color: #f4b5b5; }
+.dialogFields { margin-top: 26px; }
+.deleteWarning { font-size: 12px; line-height: 1.7; color: #9eafbf; margin: 15px 0 25px; }
+.dangerButton { background: #853d43; border: 1px solid #b9656b; padding: 10px 13px; border-radius: 6px; color: #fff; font-size: 11px; }
+.errorToast { border-color: #995c65; }
+.errorToast > svg { color: #dfa0a0; }
+@media (min-width:1600px) { .workspace { grid-template-columns: minmax(0,1fr) 390px; gap: 28px; } .table td { padding-block: 23px; } }
+@media (max-width:1200px) { .workspace { grid-template-columns: minmax(0,1fr) 320px; gap: 16px; } .table th, .table td { padding-inline: 9px; } .table th:nth-child(4), .table td:nth-child(4), .table th:nth-child(5), .table td:nth-child(5) { display: none; } .activityTabs { gap: 12px; } }
+@media (max-width:1000px) { .workspace { grid-template-columns: minmax(0,1fr); } .details { width: 100%; } .table th:nth-child(4), .table td:nth-child(4), .table th:nth-child(5), .table td:nth-child(5) { display: table-cell; } }
+@media (max-width:760px) { .table { min-width: 440px; } .table th, .table td { padding: 15px 9px; } .table th:first-child, .table td:first-child { padding-left: 15px; } .table th:nth-child(2), .table td:nth-child(2) { display: none; } .table th { font-size: 8px; letter-spacing: .5px; } .member { min-width: 130px; gap: 9px; } .member strong { font-size: 12px; } .editForm :is(input,select) { font-size: 16px; } .inputAction button { padding-block: 12px; } }
+
+.editForm input:disabled { opacity: .55; }
+.editForm > small { margin-top: 9px; }
+
+.memberTabs { overflow-x: auto; }
+.memberTabs button { flex-shrink: 0; }

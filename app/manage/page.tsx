@@ -1,1297 +1,285 @@
 'use client';
 
 import Link from 'next/link';
-import { mutateRecording, type RecordingMutation, type MetadataChanges } from '@/lib/recording-mutations';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { mutateRecording } from '@/lib/recording-mutations';
+import {
+  allManagedRecordings, collectionNames, defaultRecording, hasManagedWaveform,
+  metadataEdits, projectInCollection, recordingTags, renameManagedCollection,
+  replaceManagedRecording, type ManagedRecording,
+} from '@/lib/management';
+import AdvancedTools from './advanced-tools';
+import Icon from './manage-icon';
+import RecordingPlayer from './recording-player';
+import s from './management.module.css';
 
-import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
-import WaveSurfer from 'wavesurfer.js';
-import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
-
-interface AudioFile {
-  waveformAvailable?: boolean;
-  id: string;
-  projectId?: string;
-  defaultVersionId?: string;
-  uploadedBy?: string;
-  uploadedByName?: string;
-  uploads?: AudioFile[];
-  name: string;
-  originalName?: string;
-  instrument?: string;
-  vibe?: string;
-  instruments?: string[];
-  vibes?: string[];
-  finish?: string;
-  collections?: string[];
-  colorTags?: string[];
-  waveformPeaks?: number[][];
-  waveformDuration?: number;
-  waveformCacheVersion?: number;
-  year?: number;
-  createdAt?: string;
-  ratings?: Record<string, number>;
-  likedBy?: string[];
-  stems?: StemAttachment;
-  myRating: number;
-  userRating: number;
-  notes?: string;
-  comments: {
-    id?: string;
-    text: string;
-    timestamp?: number;
-    userId?: string;
-    userName?: string;
-    createdAt?: string;
-  }[];
-  uploadedAt: string;
-}
-
-interface StemAttachment {
-  id: string;
-  name: string;
-  uploadedAt: string;
-}
-
-interface WaveformGenerationResponse {
-  waveformPeaks: number[][];
-  waveformDuration: number;
-  waveformCacheVersion: number;
-}
-
-interface ArchiveUser {
-  id: string;
-  name: string;
-  isAdmin: boolean;
-}
-
+type Section = 'Library' | 'Collections' | 'Activity' | 'Maintenance';
+type Editor = { initial: ManagedRecording; name: string; instruments: string; vibes: string; finish: string; year: string; notes: string; collections: string[]; defaultVersionId: string };
 const FINISH_OPTIONS = ['Tracked', 'Recorder', 'Voice Memo'];
-const FINDER_COLOR_HEX: Record<string, string> = {
-  gray: '#8e8e93',
-  green: '#34c759',
-  purple: '#af52de',
-  blue: '#0a84ff',
-  yellow: '#ffd60a',
-  red: '#ff453a',
-  orange: '#ff9f0a',
-};
-const TAG_LABELS: Record<string, string> = {
-  'electric guitar': 'E. Guitar',
-  'e. guitar': 'E. Guitar',
-  'acoustic guitar': 'Acoustic',
-};
+const splitTags = (value: string) => Array.from(new Set(value.split(',').map(tag => tag.trim()).filter(Boolean)));
+const formatDuration = (seconds?: number) => seconds ? `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}` : '—';
+const formatDate = (value?: string) => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
 
-const displayTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag.replace(/\b\w/g, char => char.toUpperCase());
-const normalizeTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag;
-const formatCsvDate = (value: string | undefined) => {
-  if (!value) return '';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toISOString();
-};
-
-const formatShortDate = (value: string | undefined) => {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat('en-US', {
-    month: '2-digit',
-    day: '2-digit',
-    year: '2-digit',
-  }).format(date);
-};
-
-const csvCell = (value: unknown) => {
-  const text = value === undefined || value === null ? '' : String(value);
-  return `"${text.replace(/"/g, '""')}"`;
-};
-
-let waveformAudioContext: AudioContext | null = null;
-
-const getWaveformAudioContext = () => {
-  waveformAudioContext ??= new AudioContext();
-  return waveformAudioContext;
-};
-
-const getTags = (file: AudioFile, pluralKey: 'instruments' | 'vibes', singularKey: 'instrument' | 'vibe') => {
-  const tags = file[pluralKey];
-  if (Array.isArray(tags) && tags.length > 0) return tags.filter(Boolean).map(normalizeTag);
-  const tag = file[singularKey];
-  return tag ? [normalizeTag(tag)] : [];
-};
-
-const getAllManagedFiles = (projects: AudioFile[]) => projects.flatMap(project => [project, ...(project.uploads || [])]);
-
-const findManagedFile = (projects: AudioFile[], id: string) => (
-  getAllManagedFiles(projects).find(file => file.id === id)
-);
-
-const replaceManagedFile = (projects: AudioFile[], updatedFile: Partial<AudioFile> & { id: string }) => projects.map(project => {
-  if (project.id === updatedFile.id) {
-    return { ...project, ...updatedFile, uploads: project.uploads };
-  }
-  if (!project.uploads?.some(upload => upload.id === updatedFile.id)) return project;
-  return {
-    ...project,
-    uploads: project.uploads.map(upload => upload.id === updatedFile.id ? { ...upload, ...updatedFile } : upload),
-  };
-});
-
-const removeManagedFile = (projects: AudioFile[], id: string) => projects
-  .filter(project => project.id !== id)
-  .map(project => ({
-    ...project,
-    defaultVersionId: project.defaultVersionId === id ? project.id : project.defaultVersionId,
-    uploads: project.uploads?.filter(upload => upload.id !== id),
-  }));
-
-const mapManagedFiles = (projects: AudioFile[], mapper: (file: AudioFile) => AudioFile) => projects.map(project => ({
-  ...mapper(project),
-  uploads: project.uploads?.map(mapper),
-}));
-
-const hasAvailableWaveform = (file: AudioFile) => hasCachedWaveform(file) || (file.waveformAvailable && file.waveformCacheVersion === WAVEFORM_CACHE_VERSION);
-const hasCachedWaveform = (file: AudioFile) => isValidWaveformCache(file.waveformPeaks, file.waveformDuration, file.waveformCacheVersion);
-
-const createWaveformPeaks = (audioBuffer: AudioBuffer) => {
-  const peaks: number[] = [];
-  const samplesPerPeak = audioBuffer.length / WAVEFORM_PEAK_LENGTH;
-
-  for (let i = 0; i < WAVEFORM_PEAK_LENGTH; i++) {
-    const start = Math.floor(i * samplesPerPeak);
-    const end = Math.max(start + 1, Math.ceil((i + 1) * samplesPerPeak));
-    let peak = 0;
-
-    for (let sampleIndex = start; sampleIndex < end && sampleIndex < audioBuffer.length; sampleIndex++) {
-      for (let channelIndex = 0; channelIndex < audioBuffer.numberOfChannels; channelIndex++) {
-        const sample = audioBuffer.getChannelData(channelIndex)[sampleIndex] || 0;
-        if (Math.abs(sample) > Math.abs(peak)) {
-          peak = sample;
-        }
-      }
-    }
-
-    peaks.push(roundWaveformPeak(peak));
-  }
-
-  return [peaks];
-};
-
-const getRatingColor = (rating: number) => {
-  const colors = {
-    1: 'text-yellow-500',
-    2: 'text-lime-500',
-    3: 'text-green-500',
-    4: 'text-teal-500',
-    5: 'text-blue-500',
-  };
-  return colors[rating as keyof typeof colors] || 'text-yellow-400';
-};
-
-const StarIcon = ({ filled }: { filled: boolean }) => (
-  <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
-    <path
-      d="M12 3.5l2.58 5.23 5.77.84-4.18 4.07.99 5.75L12 16.68l-5.16 2.71.99-5.75-4.18-4.07 5.77-.84L12 3.5z"
-      fill={filled ? 'currentColor' : 'none'}
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
-
-const RatingInput = ({ value, onChange }: { value: number; onChange: (rating: number) => void }) => {
-  const [hoveredRating, setHoveredRating] = useState(0);
-  const displayedRating = hoveredRating || value;
-
-  return (
-    <div className="flex items-center">
-      {[1, 2, 3, 4, 5].map(star => (
-        <button
-          key={star}
-          type="button"
-          onClick={() => onChange(star)}
-          onMouseEnter={() => setHoveredRating(star)}
-          onMouseLeave={() => setHoveredRating(0)}
-          className={`inline-flex h-6 w-5 items-center justify-center ${star <= displayedRating ? getRatingColor(displayedRating) : 'text-muted-foreground'}`}
-        >
-          <StarIcon filled={star <= displayedRating} />
-        </button>
-      ))}
-    </div>
-  );
-};
-
-const ManageWaveform = ({
-  file,
-  activeWaveSurferRef,
-  onWaveformRegenerated,
-}: {
-  file: AudioFile;
-  activeWaveSurferRef: MutableRefObject<WaveSurfer | null>;
-  onWaveformRegenerated: (file: AudioFile, waveformPeaks: number[][], waveformDuration: number) => Promise<void>;
-}) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const wavesurferRef = useRef<WaveSurfer | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [hasPreview, setHasPreview] = useState(false);
-  const [status, setStatus] = useState('Click waveform to load full song and refresh cache');
-  const latestFileRef = useRef(file);
-  const pendingLoad = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-    latestFileRef.current = file;
-  }, [file]);
-
-  useEffect(() => {
-    return () => {
-      pendingLoad.current?.abort();
-      if (activeWaveSurferRef.current === wavesurferRef.current) {
-        activeWaveSurferRef.current = null;
-      }
-      wavesurferRef.current?.destroy();
-      wavesurferRef.current = null;
-    };
-  }, [activeWaveSurferRef]);
-
-  const togglePlayer = async () => {
-    if (wavesurferRef.current) {
-      if (activeWaveSurferRef.current && activeWaveSurferRef.current !== wavesurferRef.current) {
-        activeWaveSurferRef.current.pause();
-      }
-      activeWaveSurferRef.current = wavesurferRef.current;
-      void wavesurferRef.current.playPause().catch(() => setStatus('Playback failed. Try again.'));
-      return;
-    }
-
-    if (!containerRef.current || pendingLoad.current) return;
-    const controller = new AbortController();
-    pendingLoad.current = controller;
-
-    setStatus('Loading full song...');
-    try {
-      const response = await fetch(`/api/files/${encodeURIComponent(file.id)}/waveform`, { signal: controller.signal });
-      if (response.ok) latestFileRef.current = { ...latestFileRef.current, ...await response.json() };
-    } catch { /* Explicit preview can still decode the original audio. */ }
-    pendingLoad.current = null;
-    if (controller.signal.aborted || !containerRef.current) return;
-    const cachedWaveform = hasCachedWaveform(latestFileRef.current);
-    const wavesurfer = WaveSurfer.create({
-      container: containerRef.current,
-      waveColor: '#a3a3a3',
-      progressColor: '#5e9ec5',
-      height: 116,
-      interact: true,
-      dragToSeek: true,
-      backend: cachedWaveform ? 'MediaElement' : 'WebAudio',
-      url: `/api/files/${encodeURIComponent(file.id)}/audio`,
-      peaks: cachedWaveform ? latestFileRef.current.waveformPeaks : undefined,
-      duration: cachedWaveform ? latestFileRef.current.waveformDuration : undefined,
-    });
-
-    wavesurferRef.current = wavesurfer;
-    setHasPreview(true);
-
-    wavesurfer.on('ready', () => {
-      setStatus('Playing');
-      if (activeWaveSurferRef.current && activeWaveSurferRef.current !== wavesurfer) {
-        activeWaveSurferRef.current.pause();
-      }
-      activeWaveSurferRef.current = wavesurfer;
-      void wavesurfer.play().catch(() => setStatus('Playback failed. Try again.'));
-    });
-
-    wavesurfer.on('play', () => {
-      setIsPlaying(true);
-      setStatus('Playing');
-    });
-
-    wavesurfer.on('pause', () => {
-      setIsPlaying(false);
-      setStatus('Ready');
-    });
-
-    wavesurfer.on('finish', () => {
-      setIsPlaying(false);
-      setStatus('Ready');
-    });
-
-    wavesurfer.on('decode', async (duration: number) => {
-      if (cachedWaveform) return; // Supplied peaks are not a newly decoded recording.
-      try {
-        setStatus('Refreshing waveform...');
-        const decodedData = wavesurfer.getDecodedData();
-        if (!decodedData) return;
-
-        const waveformPeaks = createWaveformPeaks(decodedData);
-        if (!waveformPeaks[0]?.length || duration <= 0) return;
-
-        await onWaveformRegenerated(latestFileRef.current, waveformPeaks, decodedData.duration);
-        setStatus(wavesurfer.isPlaying() ? 'Playing' : 'Ready');
-      } catch (error) {
-        console.error('Failed to refresh manage waveform for', latestFileRef.current.id, error);
-        setStatus('Player loaded, waveform refresh failed');
-      }
-    });
-
-    wavesurfer.on('error', (error: Error) => {
-      console.error('Manage WaveSurfer error for', file.id, error);
-      setStatus('Preview failed');
-    });
-  };
-
-  return (
-    <div className="mt-3 w-full">
-      <div
-        className="relative min-h-32 overflow-hidden rounded border border-border/60 bg-background/60 p-2 transition hover:border-accent/50"
-      >
-        <div ref={containerRef} className="min-h-28 w-full" />
-        {!hasPreview && (
-          <button
-            type="button"
-            onClick={togglePlayer}
-            className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground transition hover:text-foreground"
-          >
-            Click to load full song
-          </button>
-        )}
-      </div>
-      <div className="mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span>{status}</span>
-        {hasPreview && (
-          <button
-            type="button"
-            onClick={togglePlayer}
-            className="rounded border border-border px-2 py-1 transition hover:border-accent hover:text-foreground"
-          >
-            {isPlaying ? 'Pause' : 'Play'}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-};
+async function requestJson<T>(url: string, method: string, body?: unknown): Promise<T> {
+  const response = await fetch(url, { method, ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.error || 'Request failed.');
+  return data as T;
+}
 
 export default function ManagePage() {
-  const [loadError, setLoadError] = useState(false);
-  const [files, setFiles] = useState<AudioFile[]>([]);
-  const [accountUsers, setAccountUsers] = useState<ArchiveUser[]>([]);
+  const [files, setFiles] = useState<ManagedRecording[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [waveformProcessingId, setWaveformProcessingId] = useState<string | null>(null);
-  const [waveformBulkRunning, setWaveformBulkRunning] = useState(false);
-  const [waveformBulkStatus, setWaveformBulkStatus] = useState('');
-  const [stemUploadingId, setStemUploadingId] = useState<string | null>(null);
-  const [stemDeletingId, setStemDeletingId] = useState<string | null>(null);
-  const [finderTagImporting, setFinderTagImporting] = useState(false);
-  const [finderTagImportStatus, setFinderTagImportStatus] = useState('');
-  const [selectedCollection, setSelectedCollection] = useState('');
-  const [collectionName, setCollectionName] = useState('');
-  const [collectionStatus, setCollectionStatus] = useState('');
-  const [collectionBusy, setCollectionBusy] = useState(false);
-  const activeWaveSurferRef = useRef<WaveSurfer | null>(null);
-  const adminName = accountUsers.find(user => user.id === 'adam')?.name || 'Admin';
-  const accountNamesById = new Map(accountUsers.map(user => [user.id, user.name]));
+  const [loadError, setLoadError] = useState('');
+  const [archiveName, setArchiveName] = useState('the archive');
+  const [initials, setInitials] = useState('');
+  const [section, setSection] = useState<Section>('Library');
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [collectionFilter, setCollectionFilter] = useState('');
+  const [finish, setFinish] = useState('all');
+  const [sort, setSort] = useState('recent');
+  const [limit, setLimit] = useState(60);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [editing, setEditing] = useState<Editor | null>(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkCollection, setBulkCollection] = useState('');
+  const [renaming, setRenaming] = useState<{ original: string; name: string } | null>(null);
+  const [busy, setBusy] = useState('');
+  const [dialogError, setDialogError] = useState('');
+  const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const dialog = useRef<HTMLDialogElement>(null);
 
-  const fetchFiles = useCallback(() => {
-    fetch('/api/files?view=metadata')
-      .then(res => { if (!res.ok) throw new Error('Library unavailable'); return res.json(); })
-      .then(data => {
-        setFiles(data);
-        setLoading(false);
-        setLoadError(false);
-      }).catch(() => { setLoadError(true); setLoading(false); });
+  const refresh = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch('/api/files?view=metadata', { signal });
+    if (!response.ok) throw new Error('Library unavailable.');
+    const data: ManagedRecording[] = await response.json();
+    if (!signal?.aborted) { setFiles(data); setLoadError(''); setLoading(false); }
   }, []);
 
   useEffect(() => {
-    fetch('/api/session')
-      .then(res => res.json())
-      .then((data: { users: ArchiveUser[] }) => setAccountUsers(data.users));
-    fetchFiles();
-  }, [fetchFiles]);
-
-  const deleteFile = async (id: string) => {
-    const target = findManagedFile(files, id);
-    const isVariation = Boolean(target?.projectId);
-    const label = target?.originalName || target?.name || 'this file';
-    if (!confirm(isVariation
-      ? `Delete the variation "${label}"? The main song will not be deleted.`
-      : `Delete the song project "${label}" and all of its variations?`
-    )) return;
-    try {
-      const res = await fetch(`/api/files/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      if (res.ok) {
-        setFiles(prev => removeManagedFile(prev, id));
-      } else {
-        alert('Failed to delete');
+    const controller = new AbortController();
+    void refresh(controller.signal).catch(() => { if (!controller.signal.aborted) { setLoadError('Library unavailable.'); setLoading(false); } });
+    fetch('/api/session', { signal: controller.signal }).then(response => response.json()).then(data => {
+      if (!controller.signal.aborted) {
+        setArchiveName(data.settings?.archiveName || 'the archive');
+        setInitials((data.user?.name || '').slice(0, 2).toUpperCase());
       }
-    } catch {
-      alert('Error deleting file');
-    }
-  };
+    }).catch(() => {});
+    return () => controller.abort();
+  }, [refresh]);
 
-  const resetFriendRatings = async (id: string) => {
+  const modalOpen = Boolean(editing || bulkOpen || renaming);
+  useEffect(() => { if (modalOpen) dialog.current?.showModal(); else dialog.current?.close(); }, [modalOpen]);
+  useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(null), 6500); return () => clearTimeout(timer); }, [notice]);
+  useEffect(() => setLimit(60), [query, filter, collectionFilter, finish, sort]);
+
+  const allFiles = useMemo(() => allManagedRecordings(files), [files]);
+  const collections = useMemo(() => collectionNames(files), [files]);
+  const missingTags = files.filter(file => !recordingTags(file, 'instruments').length || !recordingTags(file, 'vibes').length);
+  const missingWaves = allFiles.filter(file => !hasManagedWaveform(file));
+  const needsAttention = files.filter(file => missingTags.includes(file) || !hasManagedWaveform(defaultRecording(file)));
+  const finishOptions = Array.from(new Set([...FINISH_OPTIONS, ...allFiles.map(file => file.finish || '').filter(Boolean)]));
+  const visible = useMemo(() => files.filter(file => {
+    const versions = [file, ...(file.uploads || [])];
+    const search = query.trim().toLowerCase();
+    return (!search || versions.some(recording => [recording.name, recording.originalName, recording.notes, ...(recording.collections || []), ...recordingTags(recording, 'instruments'), ...recordingTags(recording, 'vibes')].filter(Boolean).join(' ').toLowerCase().includes(search)))
+      && (finish === 'all' || file.finish === finish)
+      && (!collectionFilter || projectInCollection(file, collectionFilter))
+      && (filter === 'all' || (filter === 'attention' && (!recordingTags(file, 'instruments').length || !recordingTags(file, 'vibes').length || !hasManagedWaveform(defaultRecording(file)))) || (filter === 'tags' && (!recordingTags(file, 'instruments').length || !recordingTags(file, 'vibes').length)) || (filter === 'waveforms' && !hasManagedWaveform(defaultRecording(file))) || (filter === 'stems' && file.stems));
+  }).sort((a, b) => sort === 'name' ? a.name.localeCompare(b.name) : sort === 'versions' ? (b.uploads?.length || 0) - (a.uploads?.length || 0) : (Date.parse(b.uploadedAt || '') || 0) - (Date.parse(a.uploadedAt || '') || 0)), [files, query, finish, collectionFilter, filter, sort]);
+  const recent = useMemo(() => [...allFiles].sort((a, b) => (Date.parse(b.uploadedAt || '') || 0) - (Date.parse(a.uploadedAt || '') || 0)).slice(0, 20), [allFiles]);
+  const brand = archiveName.trim().split(/\s+/);
+  const brandAccent = brand.pop();
+
+  function notify(text: string, error = false) { setNotice({ text, error }); }
+  function commit(id: string, changes: Partial<ManagedRecording>) { setFiles(current => replaceManagedRecording(current, id, changes)); }
+  function showLibrary(nextFilter = 'all', collection = '') { setSection('Library'); setFilter(nextFilter); setCollectionFilter(collection); setFinish('all'); setQuery(''); }
+  function closeDialog() { if (busy) return; setEditing(null); setBulkOpen(false); setRenaming(null); setDialogError(''); }
+  function edit(file: ManagedRecording) {
+    setDialogError('');
+    setEditing({ initial: file, name: file.name, instruments: recordingTags(file, 'instruments').join(', '), vibes: recordingTags(file, 'vibes').join(', '), finish: file.finish || '', year: String(file.year || ''), notes: file.notes || '', collections: [...(file.collections || [])], defaultVersionId: defaultRecording(file).id });
+  }
+
+  async function changeType(file: ManagedRecording, value: string) {
+    setBusy(file.id);
+    try { commit(file.id, await mutateRecording<ManagedRecording>(file.id, { operation: 'metadata', changes: { finish: value } })); notify('Type saved.'); }
+    catch (error) { notify(error instanceof Error ? error.message : 'Type update failed.', true); }
+    finally { setBusy(''); }
+  }
+
+  async function saveEditor() {
+    if (!editing) return;
+    setBusy('editor'); setDialogError('');
+    const draft = editing;
+    let latest = draft.initial;
     try {
-      await saveFile(id, { operation: 'reset-member-ratings' }, 'Failed to reset ratings');
-    } catch {
-      alert('Error resetting ratings');
-    }
-  };
-
-  const saveFile = async (id: string, mutation: RecordingMutation, errorMessage: string) => {
-    try {
-      const changes = await mutateRecording<AudioFile>(id, mutation);
-      setFiles(prev => replaceManagedFile(prev, { id, ...changes }));
-    } catch {
-      throw new Error(errorMessage);
-    }
-  };
-
-  const refreshWaveformFromPreview = async (file: AudioFile, waveformPeaks: number[][], waveformDuration: number) => {
-    await saveFile(
-      file.id, { operation: 'waveform', waveform: {
-        waveformPeaks, waveformDuration, waveformCacheVersion: WAVEFORM_CACHE_VERSION,
-      } },
-      'Failed to save refreshed waveform'
-    );
-  };
-
-  const cullWaveform = async (file: AudioFile) => {
-    setWaveformProcessingId(file.id);
-    try {
-      await saveFile(
-        file.id, { operation: 'waveform', waveform: null },
-        'Failed to cull waveform'
-      );
-    } catch {
-      alert('Failed to cull waveform');
-    } finally {
-      setWaveformProcessingId(null);
-    }
-  };
-
-  const regenerateWaveform = async (file: AudioFile, showError = true) => {
-    setWaveformProcessingId(file.id);
-    try {
-      const serverRes = await fetch(`/api/files/${encodeURIComponent(file.id)}/waveform`, {
-        method: 'POST',
-      });
-
-      if (serverRes.ok) {
-        const waveformData = await serverRes.json() as WaveformGenerationResponse;
-        setFiles(prev => replaceManagedFile(prev, {
-          id: file.id, waveformPeaks: waveformData.waveformPeaks,
-          waveformDuration: waveformData.waveformDuration, waveformCacheVersion: waveformData.waveformCacheVersion,
-        }));
-        return true;
+      const after = { ...draft.initial, name: draft.name.trim(), notes: draft.notes, finish: draft.finish, year: draft.year ? Number(draft.year) : undefined, instruments: splitTags(draft.instruments), vibes: splitTags(draft.vibes), ...(draft.defaultVersionId === defaultRecording(draft.initial).id ? {} : { defaultVersionId: draft.defaultVersionId }) };
+      const changes = metadataEdits(draft.initial, after);
+      if (Object.keys(changes).length) {
+        const committed = await mutateRecording<ManagedRecording>(draft.initial.id, { operation: 'metadata', changes });
+        commit(draft.initial.id, committed); latest = { ...latest, ...committed };
       }
-
-      const res = await fetch(`/api/files/${encodeURIComponent(file.id)}/audio`);
-      if (!res.ok) throw new Error('Failed to load audio file');
-
-      const audioContext = getWaveformAudioContext();
-      if (audioContext.state === 'suspended') {
-        await audioContext.resume();
+      if (JSON.stringify(draft.collections) !== JSON.stringify(draft.initial.collections || [])) {
+        const data = await requestJson<{ collections: string[] }>(`/api/files/${encodeURIComponent(draft.initial.id)}/collections`, 'PUT', { collections: draft.collections });
+        commit(draft.initial.id, data); latest = { ...latest, ...data };
       }
-
-      const audioBuffer = await audioContext.decodeAudioData(await res.arrayBuffer());
-      await saveFile(
-        file.id, { operation: 'waveform', waveform: {
-          waveformPeaks: createWaveformPeaks(audioBuffer),
-          waveformDuration: audioBuffer.duration,
-          waveformCacheVersion: WAVEFORM_CACHE_VERSION,
-        } },
-        'Failed to save waveform'
-      );
-      return true;
+      setEditing(null); notify('Saved.');
     } catch (error) {
-      console.error('Failed to regenerate waveform for', file.id, error);
-      if (showError) alert('Failed to regenerate waveform');
-      return false;
-    } finally {
-      setWaveformProcessingId(null);
-    }
-  };
+      setEditing(current => current ? { ...current, initial: latest } : current);
+      setDialogError(error instanceof Error ? error.message : 'Save failed.');
+    } finally { setBusy(''); }
+  }
 
-  const cullAllWaveforms = async () => {
-    if (!confirm('Cull all cached waveforms? Audio files will not be deleted.')) return;
-    const managedFiles = getAllManagedFiles(files);
-    setWaveformBulkRunning(true);
+  async function addToCollection() {
+    const name = bulkCollection.trim();
+    if (!name) return;
+    setBusy('bulk'); setDialogError('');
+    const failed: string[] = [];
+    for (const id of selected) {
+      const file = allFiles.find(recording => recording.id === id);
+      if (!file) continue;
+      try {
+        const data = await requestJson<{ collections: string[] }>(`/api/files/${encodeURIComponent(id)}/collections`, 'PUT', { collections: Array.from(new Set([...(file.collections || []), name])) });
+        commit(id, data);
+      } catch { failed.push(id); }
+    }
+    setBusy(''); setSelected(failed);
+    if (failed.length) setDialogError(`${failed.length} recording(s) could not be updated. Retry to finish.`);
+    else { setBulkOpen(false); setBulkCollection(''); notify('Collection updated.'); }
+  }
+
+  async function renameCollection() {
+    if (!renaming || !renaming.name.trim() || renaming.name.trim() === renaming.original) return;
+    setBusy('rename'); setDialogError('');
     try {
-      setWaveformBulkStatus(`Culled 0/${managedFiles.length}`);
-      for (let i = 0; i < managedFiles.length; i++) {
-        await saveFile(
-          managedFiles[i].id, { operation: 'waveform', waveform: null },
-          'Failed to cull waveform'
-        );
-        setWaveformBulkStatus(`Culled ${i + 1}/${managedFiles.length}`);
-      }
-    } catch {
-      alert('Failed to cull all waveforms');
-    } finally {
-      setWaveformBulkRunning(false);
-      setWaveformBulkStatus('');
+      const data = await requestJson<{ collection: string; filesUpdated: number }>('/api/collections', 'PATCH', { collection: renaming.original, name: renaming.name.trim() });
+      setFiles(current => renameManagedCollection(current, renaming.original, data.collection));
+      setCollectionFilter(current => current === renaming.original ? data.collection : current);
+      setRenaming(null); notify(`Collection renamed on ${data.filesUpdated} recording(s).`);
+    } catch (error) { setDialogError(error instanceof Error ? error.message : 'Rename failed.'); }
+    finally { setBusy(''); }
+  }
+
+  async function rebuildWaveforms(targets: ManagedRecording[]) {
+    setBusy('waveforms'); let failures = 0;
+    for (const [index, file] of targets.entries()) {
+      notify(`Rebuilding waveforms ${index + 1}/${targets.length}`);
+      try {
+        const data = await requestJson<{ waveformDuration: number; waveformCacheVersion: number }>(`/api/files/${encodeURIComponent(file.id)}/waveform`, 'POST');
+        commit(file.id, { waveformAvailable: true, waveformDuration: data.waveformDuration, waveformCacheVersion: data.waveformCacheVersion });
+      } catch { failures++; }
     }
-  };
+    setBusy(''); notify(failures ? `${failures} waveform(s) could not be rebuilt.` : 'Waveforms rebuilt.', Boolean(failures));
+  }
 
-  const regenerateAllWaveforms = async () => {
-    const managedFiles = getAllManagedFiles(files);
-    setWaveformBulkRunning(true);
-    let failed = 0;
-    try {
-      setWaveformBulkStatus(`Generated 0/${managedFiles.length}`);
-      for (let i = 0; i < managedFiles.length; i++) {
-        if (!await regenerateWaveform(managedFiles[i], false)) failed++;
-        setWaveformBulkStatus(`Processed ${i + 1}/${managedFiles.length}; ${failed} failed`);
-      }
-    } finally {
-      setWaveformBulkRunning(false);
-      setWaveformBulkStatus(`Finished: ${managedFiles.length - failed} generated; ${failed} failed. Existing waveforms are preserved on failure.`);
-    }
-  };
+  function exportCsv() {
+    const rows = [['Title', 'Original filename', 'Instruments', 'Vibes', 'Type', 'Year', 'Collections', 'Notes', 'ID'], ...visible.flatMap(project => [project, ...(project.uploads || [])]).map(file => [file.name, file.originalName || '', recordingTags(file, 'instruments').join('; '), recordingTags(file, 'vibes').join('; '), file.finish || '', file.year || '', (file.collections || []).join('; '), file.notes || '', file.id])];
+    const url = URL.createObjectURL(new Blob([rows.map(row => row.map(cell => `"${String(cell).replaceAll('"', '""')}"`).join(',')).join('\n')], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a'); link.href = url; link.download = `archive-export-${new Date().toISOString().slice(0, 10)}.csv`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 
-  const updateRating = async (id: string, userId: string, rating: number) => {
-    try {
-      const file = findManagedFile(files, id);
-      if (!file) return;
-      const res = await fetch(`/api/files/${encodeURIComponent(id)}/rating`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, rating }),
-      });
-      if (res.ok) {
-        const ratingData = await res.json() as Pick<AudioFile, 'ratings' | 'myRating' | 'userRating'>;
-        const updatedFile = { id: file.id, ...ratingData };
-        setFiles(prev => replaceManagedFile(prev, updatedFile));
-      } else {
-        alert('Failed to update rating');
-      }
-    } catch {
-      alert('Error updating rating');
-    }
-  };
-
-  const updateFinish = async (file: AudioFile, finish: string) => {
-    try {
-      await saveFile(file.id, { operation: 'metadata', changes: { finish: file.finish === finish ? '' : finish } }, 'Failed to update finish');
-    } catch {
-      alert('Failed to update finish');
-    }
-  };
-
-  const updateYear = async (file: AudioFile, value: string) => {
-    const year = Number(value);
-    if (!Number.isInteger(year) || year < 1900 || year > 2100) {
-      alert('Enter a valid year');
-      return;
-    }
-
-    if (file.year === year) return;
-
-    try {
-      await saveFile(
-        file.id, { operation: 'metadata', changes: { year } },
-        'Failed to update year'
-      );
-    } catch {
-      alert('Failed to update year');
-    }
-  };
-
-  const uploadStems = async (file: AudioFile, zipFile: File | null) => {
-    if (!zipFile) return;
-    if (!zipFile.name.toLowerCase().endsWith('.zip')) {
-      alert('Please choose a ZIP file');
-      return;
-    }
-
-    setStemUploadingId(file.id);
-    const formData = new FormData();
-    formData.append('file', zipFile);
-
-    try {
-      const res = await fetch(`/api/files/${encodeURIComponent(file.id)}/stems`, {
-        method: 'POST',
-        body: formData,
-      });
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => null) as { error?: string } | null;
-        throw new Error(errorData?.error || 'Upload failed');
-      }
-      const data = await res.json() as { stems: StemAttachment };
-      setFiles(prev => replaceManagedFile(prev, { id: file.id, stems: data.stems }));
-    } catch (error) {
-      alert(error instanceof Error ? error.message : 'Failed to upload stems ZIP');
-    } finally {
-      setStemUploadingId(null);
-    }
-  };
-
-  const deleteStems = async (file: AudioFile) => {
-    if (!file.stems) return;
-    if (!confirm(`Delete stems ZIP for "${file.name}"?`)) return;
-
-    setStemDeletingId(file.id);
-    try {
-      const res = await fetch(`/api/files/${encodeURIComponent(file.id)}/stems`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => null) as { error?: string } | null;
-        throw new Error(errorData?.error || 'Stem deletion failed');
-      }
-      setFiles(prev => replaceManagedFile(prev, { id: file.id, stems: undefined }));
-    } catch (error) {
-      alert(error instanceof Error ? error.message : 'Failed to delete stems ZIP');
-    } finally {
-      setStemDeletingId(null);
-    }
-  };
-
-  const deleteAll = async () => {
-    const confirmation = prompt('Type DELETE to permanently delete ALL files.');
-    if (confirmation !== 'DELETE') return;
-    try {
-      const responses = await Promise.all(files.map(file => fetch(`/api/files/${encodeURIComponent(file.id)}`, { method: 'DELETE' })));
-      if (responses.some(res => !res.ok)) {
-        throw new Error('Some files could not be deleted');
-      }
-      setFiles([]);
-    } catch (error) {
-      alert(error instanceof Error ? error.message : 'Error deleting files');
-      fetchFiles(); // Refresh in case of partial failure
-    }
-  };
-
-  const renameCollection = async () => {
-    const name = collectionName.trim();
-    if (!selectedCollection || !name || name === selectedCollection) return;
-
-    setCollectionBusy(true);
-    setCollectionStatus('');
-    try {
-      const res = await fetch('/api/collections', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ collection: selectedCollection, name }),
-      });
-      const data = await res.json().catch(() => null) as { error?: string; filesUpdated?: number } | null;
-      if (!res.ok) throw new Error(data?.error || 'Collection rename failed');
-
-      setFiles(prev => mapManagedFiles(prev, file => ({
-        ...file,
-        collections: Array.from(new Set((file.collections || []).map(collection => collection === selectedCollection ? name : collection))),
-      })));
-      setSelectedCollection(name);
-      setCollectionName('');
-      setCollectionStatus(`Renamed on ${data?.filesUpdated || 0} song${data?.filesUpdated === 1 ? '' : 's'}.`);
-    } catch (error) {
-      setCollectionStatus(error instanceof Error ? error.message : 'Collection rename failed');
-    } finally {
-      setCollectionBusy(false);
-    }
-  };
-
-  const deleteCollection = async () => {
-    if (!selectedCollection) return;
-    if (!confirm(`Delete the collection "${selectedCollection}"? Songs in it will not be deleted.`)) return;
-
-    setCollectionBusy(true);
-    setCollectionStatus('');
-    try {
-      const res = await fetch('/api/collections', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ collection: selectedCollection }),
-      });
-      const data = await res.json().catch(() => null) as { error?: string; filesUpdated?: number } | null;
-      if (!res.ok) throw new Error(data?.error || 'Collection deletion failed');
-
-      setFiles(prev => mapManagedFiles(prev, file => ({
-        ...file,
-        collections: (file.collections || []).filter(collection => collection !== selectedCollection),
-      })));
-      setSelectedCollection('');
-      setCollectionName('');
-      setCollectionStatus(`Deleted from ${data?.filesUpdated || 0} song${data?.filesUpdated === 1 ? '' : 's'}.`);
-    } catch (error) {
-      setCollectionStatus(error instanceof Error ? error.message : 'Collection deletion failed');
-    } finally {
-      setCollectionBusy(false);
-    }
-  };
-
-  const exportCsv = () => {
-    const userIds = accountUsers.map(user => user.id);
-    const userNamesById = new Map(accountUsers.map(user => [user.id, user.name]));
-    const headers = [
-      'name',
-      'originalName',
-      'notes',
-      'likedBy',
-      ...userIds.map(userId => `rating:${userNamesById.get(userId) || userId}`),
-      'comments',
-      'collections',
-      'hasStems',
-      'stemsName',
-      'instruments',
-      'vibes',
-      'finish',
-      'year',
-      'recordedAt',
-      'uploadedAt',
-      'finderColorTags',
-      'waveformCached',
-      'waveformDuration',
-      'id',
-    ];
-
-    const rows = getAllManagedFiles(files).map(file => {
-      const comments = (file.comments || []).map(comment => {
-        const userName = (comment.userId ? userNamesById.get(comment.userId) : '') || comment.userName || comment.userId || 'Unknown';
-        const timecode = typeof comment.timestamp === 'number' ? ` @${comment.timestamp.toFixed(2)}s` : '';
-        const createdAt = comment.createdAt ? ` (${formatCsvDate(comment.createdAt)})` : '';
-        return `${userName}${timecode}${createdAt}: ${comment.text}`;
-      }).join('\n');
-
-      return [
-        file.name,
-        file.originalName || '',
-        file.notes || '',
-        (file.likedBy || []).map(userId => userNamesById.get(userId) || userId).join('; '),
-        ...userIds.map(userId => file.ratings?.[userId] || ''),
-        comments,
-        (file.collections || []).join('; '),
-        file.stems ? 'yes' : 'no',
-        file.stems?.name || '',
-        getTags(file, 'instruments', 'instrument').map(displayTag).join('; '),
-        getTags(file, 'vibes', 'vibe').map(displayTag).join('; '),
-        file.finish || '',
-        file.year || '',
-        formatCsvDate(file.createdAt),
-        formatCsvDate(file.uploadedAt),
-        (file.colorTags || []).join('; '),
-        hasAvailableWaveform(file) ? 'yes' : 'no',
-        file.waveformDuration || '',
-        file.id,
-      ];
-    });
-
-    const csv = [headers, ...rows].map(row => row.map(csvCell).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `the-archive-export-${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-  };
-
-  const importFinderTags = async (metadataFile: File | null) => {
-    if (!metadataFile) return;
-
-    setFinderTagImporting(true);
-    setFinderTagImportStatus('');
-    const formData = new FormData();
-    formData.append('file', metadataFile);
-
-    try {
-      const res = await fetch('/api/finder-tags/import', {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await res.json().catch(() => null) as {
-        error?: string;
-        matched?: number;
-        updated?: number;
-        ambiguous?: number;
-        skipped?: number;
-      } | null;
-      if (!res.ok) {
-        throw new Error(data?.error || 'Finder tag import failed');
-      }
-
-      setFinderTagImportStatus(
-        `Finder tags updated: ${data?.updated || 0} matched, ${data?.skipped || 0} skipped, ${data?.ambiguous || 0} ambiguous`
-      );
-      fetchFiles();
-    } catch (error) {
-      setFinderTagImportStatus(error instanceof Error ? error.message : 'Finder tag import failed');
-    } finally {
-      setFinderTagImporting(false);
-    }
-  };
-
-  const filteredFiles = files.filter(file => {
-    const normalizedSearch = searchQuery.trim().toLowerCase();
-    if (!normalizedSearch) return true;
-
-    return [file, ...(file.uploads || [])].some(candidate => (
-      candidate.name.toLowerCase().includes(normalizedSearch) ||
-      (candidate.originalName || '').toLowerCase().includes(normalizedSearch) ||
-      (candidate.notes || '').toLowerCase().includes(normalizedSearch) ||
-      getTags(candidate, 'instruments', 'instrument').some(tag => tag.toLowerCase().includes(normalizedSearch)) ||
-      getTags(candidate, 'vibes', 'vibe').some(tag => tag.toLowerCase().includes(normalizedSearch)) ||
-      (candidate.finish || '').toLowerCase().includes(normalizedSearch) ||
-      String(candidate.year || '').includes(normalizedSearch)
-    ));
-  });
-  const collectionOptions = Array.from(new Set(getAllManagedFiles(files).flatMap(file => file.collections || []))).sort((a, b) => a.localeCompare(b));
-  const waveformBulkProgress = waveformBulkStatus.match(/(\d+)\/(\d+)/);
-  const waveformBulkDone = waveformBulkProgress ? Number(waveformBulkProgress[1]) : 0;
-  const waveformBulkTotal = waveformBulkProgress ? Number(waveformBulkProgress[2]) : 0;
-  const waveformBulkPercent = waveformBulkTotal > 0 ? Math.min(100, Math.max(0, (waveformBulkDone / waveformBulkTotal) * 100)) : 0;
-
-  if (loadError) return <div role="alert">Library could not be loaded. <button onClick={fetchFiles}>Retry</button></div>;
-  if (loading) return <div className="bg-background text-foreground min-h-screen flex items-center justify-center">Loading...</div>;
-
-  return (
-    <div className="bg-background text-foreground min-h-screen">
-      <div className="container mx-auto p-4">
-        <div className="mb-4 flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => window.location.href = '/'}
-            className="rounded border border-border px-3 py-2 text-sm text-muted-foreground transition hover:text-foreground"
-          >
-            Back
-          </button>
-          <h1 className="text-3xl font-bold">Manage Files</h1>
-          <Link href="/manage/preview" className="ml-auto rounded border border-accent/30 bg-accent/10 px-3 py-2 text-sm text-accent transition hover:bg-accent/20">
-            Preview new design
-          </Link>
-        </div>
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <button
-            onClick={deleteAll}
-            className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition"
-            disabled={files.length === 0}
-          >
-            Delete All Files
-          </button>
-          <button
-            onClick={cullAllWaveforms}
-            className="rounded bg-muted px-4 py-2 text-muted-foreground transition hover:bg-muted/80"
-            disabled={files.length === 0 || waveformBulkRunning}
-          >
-            Cull All Waveforms
-          </button>
-          <button
-            onClick={regenerateAllWaveforms}
-            className="rounded bg-accent px-4 py-2 text-accent-foreground transition hover:bg-accent/80 disabled:opacity-50"
-            disabled={files.length === 0 || waveformBulkRunning}
-          >
-            Regenerate All Waveforms
-          </button>
-          <button
-            type="button"
-            onClick={exportCsv}
-            className="rounded border border-border px-4 py-2 text-sm text-muted-foreground transition hover:border-accent hover:text-foreground"
-            disabled={files.length === 0}
-          >
-            Export CSV
-          </button>
-          <label className={`cursor-pointer rounded border border-border px-4 py-2 text-sm text-muted-foreground transition hover:border-accent hover:text-foreground ${
-            finderTagImporting ? 'opacity-50' : ''
-          }`}>
-            {finderTagImporting ? 'Importing Finder Tags...' : 'Import Finder Tags'}
-            <input
-              type="file"
-              accept="application/json,.json"
-              className="hidden"
-              disabled={finderTagImporting}
-              onChange={(event) => {
-                void importFinderTags(event.target.files?.[0] || null);
-                event.currentTarget.value = '';
-              }}
-            />
-          </label>
-          {waveformBulkStatus && (
-            <div className="flex min-w-44 items-center gap-2 text-sm text-muted-foreground">
-              <span>{waveformBulkStatus}</span>
-              <div className="h-1.5 min-w-20 flex-1 overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full rounded-full bg-accent transition-[width] duration-200"
-                  style={{ width: `${waveformBulkPercent}%` }}
-                />
+  return <div className={`archive-shell ${s.shell}`}>
+    <header className={s.header}>
+      <Link href="/" className={s.back}><Icon name="back" size={15}/> Back to archive</Link>
+      <Link href="/" className={s.brand} aria-label="Archive homepage">
+        <svg viewBox="0 0 120 44" aria-hidden="true"><path d="M4 22h11l5-9 6 18 7-28 8 38 8-26 6 11 5-16 5 30 8-36 7 27 6-14 5 5h24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/><path d="M4 22h112" stroke="#dce7f3" strokeWidth="2"/></svg>
+        <span>{brand.join(' ')}{brand.length ? ' ' : ''}<em>{brandAccent}</em></span>
+      </Link>
+      <div className={s.headerActions}>{initials && <span className={s.avatar}>{initials}</span>}</div>
+    </header>
+    <div className={s.layout}>
+      <aside className={s.sidebar}>
+        <div className={s.sideLabel}>WORKSPACE</div>
+        <nav aria-label="Management sections">{(['Library', 'Collections', 'Activity', 'Maintenance'] as Section[]).map(item => <button key={item} className={`${s.navItem} ${section === item ? s.navActive : ''}`} onClick={() => { setSection(item); if (showAdvanced && item !== 'Maintenance') { setShowAdvanced(false); void refresh().catch(() => notify('Refresh failed.', true)); } }} aria-current={section === item ? 'page' : undefined}><Icon name={item.toLowerCase()}/><span>{item}</span>{item === 'Library' ? <small>{files.length}</small> : item === 'Maintenance' && needsAttention.length > 0 ? <span className={s.navDot}/> : null}</button>)}</nav>
+        <div className={s.sideLabel}>ADMINISTRATION</div>
+        <Link href="/users" className={s.navItem}><Icon name="users"/><span>Members & access</span><Icon name="arrow" size={13}/></Link>
+        <button className={s.navItem} onClick={() => { setSection('Maintenance'); setShowAdvanced(true); }}><Icon name="shield"/><span>Advanced tools</span><Icon name="arrow" size={13}/></button>
+      </aside>
+      <main className={s.main}>
+        <div className={s.heading}><h1>Management</h1><Link href="/upload" className={s.primary}><Icon name="plus"/> Upload recordings</Link></div>
+        {loading && <p role="status">Loading recordings…</p>}
+        {loadError && <p role="alert">{loadError} <button className={s.secondary} onClick={() => void refresh().catch(() => setLoadError('Library unavailable.'))}>Retry</button></p>}
+        <div className={s.stats}>{[
+          { label: 'Song projects', value: files.length, sub: `${allFiles.length} recordings across all versions`, icon: 'music', action: 'all' },
+          { label: 'Collections', value: collections.length, icon: 'collections', action: 'collections' },
+          { label: 'With stems', value: files.filter(file => file.stems).length, icon: 'library', action: 'stems' },
+          { label: 'Needs attention', value: needsAttention.length, icon: 'maintenance', action: 'attention' },
+        ].map(stat => <button key={stat.label} className={`${s.stat} ${stat.action === 'attention' ? s.attentionStat : ''}`} onClick={() => stat.action === 'collections' ? setSection('Collections') : showLibrary(stat.action)}><div><span>{stat.label}</span><Icon name={stat.icon}/></div><strong>{stat.value.toString().padStart(2, '0')}</strong>{stat.sub && <p>{stat.sub}</p>}</button>)}</div>
+        <div className={`${s.contentGrid} ${section === 'Maintenance' && showAdvanced ? s.expanded : ''}`}>
+          <section className={s.content} aria-label={section}>
+            <div className={s.sectionHead}><h2>{section === 'Library' ? collectionFilter || 'Recordings' : section}</h2>{section === 'Library' && <button className={s.secondary} onClick={exportCsv}><Icon name="export" size={15}/>Export CSV</button>}</div>
+            {section === 'Library' && <>
+              <div className={s.tabs} role="group" aria-label="Library views">{[['all', 'All recordings', files.length], ['attention', 'Needs attention', needsAttention.length], ['stems', 'With stems', files.filter(file => file.stems).length]].map(([value, label, count]) => <button key={value} onClick={() => setFilter(String(value))} className={filter === value ? s.tabActive : ''}>{label}<span>{count}</span></button>)}</div>
+              <div className={s.toolbar}>
+                <label className={s.search}><Icon name="search" size={17}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search recordings, tags, notes…" aria-label="Search recordings"/>{query && <button onClick={() => setQuery('')} aria-label="Clear search"><Icon name="close" size={14}/></button>}</label>
+                <select aria-label="Filter by recording type" value={finish} onChange={event => setFinish(event.target.value)}><option value="all">All types</option>{finishOptions.map(type => <option key={type}>{type}</option>)}</select>
+                <select aria-label="Sort recordings" value={sort} onChange={event => setSort(event.target.value)}><option value="recent">Recently added</option><option value="name">Title A–Z</option><option value="versions">Most versions</option></select>
               </div>
-            </div>
-          )}
-          {finderTagImportStatus && (
-            <span className="text-sm text-muted-foreground">{finderTagImportStatus}</span>
-          )}
-        </div>
-        <div className="mb-4 rounded border border-border bg-card p-4">
-          <div className="mb-3">
-            <h2 className="font-semibold">Manage Collections</h2>
-            <p className="text-xs text-muted-foreground">Renaming or deleting a collection updates every song that uses it.</p>
-          </div>
-          <div className="flex flex-col gap-2 md:flex-row md:items-center">
-            <select
-              value={selectedCollection}
-              onChange={(event) => {
-                setSelectedCollection(event.target.value);
-                setCollectionName('');
-                setCollectionStatus('');
-              }}
-              disabled={collectionOptions.length === 0 || collectionBusy}
-              className="min-w-56 rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent disabled:opacity-50"
-            >
-              <option value="">{collectionOptions.length > 0 ? 'Choose a collection' : 'No collections yet'}</option>
-              {collectionOptions.map(collection => <option key={collection} value={collection}>{displayTag(collection)}</option>)}
-            </select>
-            <input
-              type="text"
-              value={collectionName}
-              onChange={(event) => setCollectionName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  void renameCollection();
-                }
-              }}
-              placeholder="New collection name"
-              disabled={!selectedCollection || collectionBusy}
-              className="min-w-0 flex-1 rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent disabled:opacity-50 md:max-w-sm"
-            />
-            <button
-              type="button"
-              onClick={() => void renameCollection()}
-              disabled={!selectedCollection || !collectionName.trim() || collectionName.trim() === selectedCollection || collectionBusy}
-              className="rounded bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground transition hover:bg-accent/80 disabled:opacity-50"
-            >
-              Rename
-            </button>
-            <button
-              type="button"
-              onClick={() => void deleteCollection()}
-              disabled={!selectedCollection || collectionBusy}
-              className="rounded bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:opacity-50"
-            >
-              Delete Collection
-            </button>
-          </div>
-          {collectionStatus && <p className="mt-2 text-sm text-muted-foreground">{collectionStatus}</p>}
-        </div>
-        <div className="mb-4">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search songs"
-            className="w-full rounded border border-border bg-background p-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent md:max-w-md"
-          />
-        </div>
-        <div className="space-y-4">
-          {filteredFiles.map(file => (
-            <div key={file.id} className="border border-border p-4 rounded-lg shadow-md bg-card">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div className="min-w-0">
-                  <h2 className="break-words text-lg font-semibold sm:text-xl">{file.name}</h2>
-                  {(file.uploads || []).length > 0 && (
-                    <label className="my-2 block max-w-md">
-                      <span className="mb-1 block text-xs font-medium text-muted-foreground">Default version when the page loads</span>
-                      <select
-                        value={file.defaultVersionId || file.id}
-                        onChange={async (event) => {
-                          try {
-                            await saveFile(file.id, { operation: 'metadata', changes: { defaultVersionId: event.target.value } }, 'Failed to update default version');
-                          } catch {
-                            alert('Failed to update default version');
-                          }
-                        }}
-                        className="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
-                      >
-                        <option value={file.id}>Original recording</option>
-                        {(file.uploads || []).map(variation => (
-                          <option key={variation.id} value={variation.id}>
-                            {variation.originalName || 'Uploaded variation'} · {(variation.uploadedBy ? accountNamesById.get(variation.uploadedBy) : '') || variation.uploadedByName || variation.uploadedBy || 'Unknown'}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-                  <p className="text-muted-foreground">Instrument: {getTags(file, 'instruments', 'instrument').map(displayTag).join(', ') || 'None'}</p>
-                  <p className="text-muted-foreground">Vibe: {getTags(file, 'vibes', 'vibe').map(displayTag).join(', ') || 'None'}</p>
-                  <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
-                    <span>Finish:</span>
-                    {FINISH_OPTIONS.map(option => (
-                      <button
-                        key={option}
-                        type="button"
-                        onClick={() => updateFinish(file, option)}
-                        className={`rounded px-3 py-2 text-xs transition sm:px-2 sm:py-1 ${
-                          file.finish === option
-                            ? 'bg-accent text-accent-foreground'
-                            : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                        }`}
-                      >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
-                  <label className="flex max-w-40 items-center gap-2 text-muted-foreground">
-                    <span>Year:</span>
-                    <input
-                      type="number"
-                      min="1900"
-                      max="2100"
-                      defaultValue={file.year || ''}
-                      onBlur={(event) => void updateYear(file, event.currentTarget.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.currentTarget.blur();
-                        }
-                      }}
-                      className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
-                    />
-                  </label>
-                  {(file.colorTags || []).length > 0 && (
-                    <div className="flex items-center gap-2 text-muted-foreground">
-                      <span>Finder Tags:</span>
-                      <div className="flex">
-                        {(file.colorTags || []).filter(color => FINDER_COLOR_HEX[color]).map(color => (
-                          <span
-                            key={color}
-                            className="-ml-1 first:ml-0 h-3.5 w-3.5 rounded-full border border-background"
-                            style={{ backgroundColor: FINDER_COLOR_HEX[color] }}
-                            title={color}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  <p className="text-muted-foreground">
-                    Waveform: {hasAvailableWaveform(file) ? 'Cached' : 'Not cached'}
-                  </p>
-                  <p className="text-muted-foreground">
-                    Stems: {file.stems ? file.stems.name : 'None'}
-                  </p>
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <span>{adminName}&apos;s Rating:</span>
-                    <RatingInput value={file.ratings?.adam || file.myRating} onChange={(rating) => updateRating(file.id, 'adam', rating)} />
-                  </div>
-                  <div className="mt-1 grid gap-1 text-muted-foreground sm:grid-cols-2">
-                    {accountUsers.filter(user => user.id !== 'adam' && (file.ratings?.[user.id] || 0) > 0).map(user => (
-                      <div key={user.id} className="flex items-center gap-2">
-                        <span>{user.name}:</span>
-                        <RatingInput value={file.ratings?.[user.id] || 0} onChange={(rating) => updateRating(file.id, user.id, rating)} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="w-full lg:max-w-xl lg:flex-1">
-                  <div className="flex flex-wrap gap-2 lg:justify-end">
-                    <label className="cursor-pointer rounded bg-muted px-3 py-2 text-sm text-muted-foreground transition hover:bg-muted/80">
-                      {stemUploadingId === file.id ? 'Uploading...' : file.stems ? 'Replace Stems ZIP' : 'Upload Stems ZIP'}
-                      <input
-                        type="file"
-                        accept=".zip,application/zip,application/x-zip-compressed"
-                        className="hidden"
-                        disabled={stemUploadingId === file.id}
-                        onChange={(event) => uploadStems(file, event.target.files?.[0] || null)}
-                      />
-                    </label>
-                    {file.stems && (
-                      <button
-                        type="button"
-                        onClick={() => deleteStems(file)}
-                        className="rounded bg-red-500 px-3 py-2 text-sm text-white hover:bg-red-600 disabled:opacity-50"
-                        disabled={stemDeletingId === file.id}
-                      >
-                        {stemDeletingId === file.id ? 'Deleting Stems...' : 'Delete Stems'}
-                      </button>
-                    )}
-                    <button
-                      onClick={() => cullWaveform(file)}
-                      className="rounded bg-muted px-3 py-2 text-sm text-muted-foreground hover:bg-muted/80 disabled:opacity-50"
-                      disabled={waveformProcessingId === file.id || !hasAvailableWaveform(file)}
-                    >
-                      Cull Waveform
-                    </button>
-                    <button
-                      onClick={() => regenerateWaveform(file)}
-                      className="rounded bg-accent px-3 py-2 text-sm text-accent-foreground hover:bg-accent/80 disabled:opacity-50"
-                      disabled={waveformProcessingId === file.id}
-                    >
-                      {waveformProcessingId === file.id ? 'Working...' : 'Regenerate Waveform'}
-                    </button>
-                    <button
-                      onClick={() => resetFriendRatings(file.id)}
-                      className="rounded bg-yellow-500 px-3 py-2 text-sm text-white hover:bg-yellow-600"
-                    >
-                      Reset Friend Ratings
-                    </button>
-                    <button
-                      onClick={() => deleteFile(file.id)}
-                      className="rounded bg-red-500 px-3 py-2 text-sm text-white hover:bg-red-600"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                  <ManageWaveform
-                    file={file}
-                    activeWaveSurferRef={activeWaveSurferRef}
-                    onWaveformRegenerated={refreshWaveformFromPreview}
-                  />
-                </div>
+              {collectionFilter && <div className={s.bulkBar}><span>Collection: {collectionFilter}</span><button onClick={() => setCollectionFilter('')}>Clear collection</button></div>}
+              {selected.length > 0 && <div className={s.bulkBar}><span><strong>{selected.length}</strong> selected</span><button disabled={Boolean(busy)} onClick={() => { setDialogError(''); setBulkOpen(true); }}><Icon name="collections" size={15}/>Add to collection</button><button disabled={Boolean(busy)} onClick={() => void rebuildWaveforms(files.filter(file => selected.includes(file.id)).map(defaultRecording))}>Rebuild waveforms</button><button onClick={() => setSelected([])} aria-label="Clear selection"><Icon name="close" size={15}/></button></div>}
+              <div className={s.tableScroll}><table className={s.table}>
+                <thead><tr><th><input type="checkbox" aria-label="Select all visible recordings" checked={visible.length > 0 && visible.every(file => selected.includes(file.id))} onChange={event => setSelected(event.target.checked ? Array.from(new Set([...selected, ...visible.map(file => file.id)])) : selected.filter(id => !visible.some(file => file.id === id)))}/></th><th>RECORDING</th><th>TYPE / YEAR</th><th>DURATION</th><th>STATUS</th><th><span className={s.srOnly}>Edit</span></th></tr></thead>
+                <tbody>{visible.slice(0, limit).map(file => <tr key={file.id} className={selected.includes(file.id) ? s.selectedRow : ''}>
+                  <td><input type="checkbox" aria-label={`Select ${file.name}`} checked={selected.includes(file.id)} onChange={event => setSelected(current => event.target.checked ? [...current, file.id] : current.filter(id => id !== file.id))}/></td>
+                  <td><button className={s.songTitle} onClick={() => edit(file)}>{file.name}</button><div className={s.songTags}>{[...recordingTags(file, 'instruments'), ...recordingTags(file, 'vibes')].slice(0, 3).map((tag, index) => <span key={`${tag}:${index}`}>{tag}</span>)}<small>{1 + (file.uploads?.length || 0)} {file.uploads?.length ? 'versions' : 'version'}</small></div></td>
+                  <td><select className={s.inlineType} aria-label={`Type for ${file.name}`} value={file.finish || ''} disabled={Boolean(busy)} onChange={event => void changeType(file, event.target.value)}><option value="">Unspecified</option>{finishOptions.map(type => <option key={type}>{type}</option>)}</select><small className={s.year}>{file.year || '—'}</small></td>
+                  <td><span className={s.type}>{formatDuration(defaultRecording(file).waveformDuration)}</span></td>
+                  <td>{!hasManagedWaveform(defaultRecording(file)) ? <span className={s.warning}>Missing waveform</span> : missingTags.includes(file) ? <span className={s.warning}>Needs tags</span> : <span className={s.ready}><span/>Ready</span>}{file.stems && <small className={s.stems}>Stems attached</small>}</td>
+                  <td><button className={s.editButton} aria-label={`Edit ${file.name}`} onClick={() => edit(file)}><Icon name="arrow" size={16}/></button></td>
+                </tr>)}</tbody>
+              </table></div>
+              {!loading && !loadError && !visible.length && <div className={s.empty}><Icon name="search" size={28}/><h3>No recordings found</h3><button className={s.secondary} onClick={() => showLibrary()}>Clear filters</button></div>}
+              <footer className={s.tableFooter}><span>Showing {Math.min(limit, visible.length)} of {visible.length} projects</span>{visible.length > limit && <button className={s.textLink} onClick={() => setLimit(value => value + 60)}>Load more</button>}</footer>
+            </>}
+            {section === 'Collections' && <div className={s.collectionGrid}>
+              {collections.map(collection => <article key={collection} className={s.collectionCard}>
+                <div className={s.collectionArt}><Icon name="collections" size={28}/></div><h3>{collection}</h3><p>{files.filter(file => projectInCollection(file, collection)).length} projects</p>
+                <div className={s.collectionActions}><button className={s.secondary} onClick={() => showLibrary('all', collection)}>Open</button><button className={s.renameButton} aria-label={`Rename collection ${collection}`} disabled={Boolean(busy)} onClick={() => { setDialogError(''); setRenaming({ original: collection, name: collection }); }}>Rename</button></div>
+              </article>)}
+              {!collections.length && <p className={s.sectionHint}>No collections. Select recordings in Library to add one.</p>}
+            </div>}
+            {section === 'Activity' && <div className={s.activityList}>{recent.map(file => <div key={file.id} className={s.activity}><span className={s.avatar}><Icon name="music" size={14}/></span><div><p>Uploaded <button onClick={() => edit(file)}>{file.name}</button></p><small>{[file.uploadedByName, formatDate(file.uploadedAt)].filter(Boolean).join(' · ')}</small></div></div>)}</div>}
+            {section === 'Maintenance' && <>
+              <div className={s.maintenanceList}>
+                <div className={s.maintenanceItem}><Icon name="activity" size={26}/><div><h3>Waveform cache</h3><p>{allFiles.length - missingWaves.length} of {allFiles.length} cached</p></div><button className={s.secondary} disabled={Boolean(busy) || !missingWaves.length} onClick={() => void rebuildWaveforms(missingWaves)}>Rebuild missing</button></div>
+                <div className={s.maintenanceItem}><Icon name="export" size={26}/><div><h3>Metadata export</h3></div><button className={s.secondary} onClick={exportCsv}>Export CSV</button></div>
+                <div className={s.maintenanceItem}><Icon name="shield" size={26}/><div><h3>Advanced tools</h3><p>Stems, variations, ratings, Finder tags, and deletion.</p></div><button className={s.secondary} disabled={Boolean(busy)} aria-expanded={showAdvanced} onClick={() => { setShowAdvanced(value => !value); if (showAdvanced) void refresh().catch(() => notify('Refresh failed.', true)); }}>{showAdvanced ? 'Hide tools' : 'Open tools'}</button></div>
               </div>
-              {(file.uploads || []).length > 0 && (
-                <div className="mt-5 border-t border-border/70 pt-4">
-                  <div className="mb-3 flex items-center gap-2">
-                    <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-muted-foreground">Variations</h3>
-                    <span className="rounded-full bg-accent/10 px-2 py-0.5 text-xs text-accent">{file.uploads?.length}</span>
-                  </div>
-                  <div className="space-y-3">
-                    {(file.uploads || []).map(variation => (
-                      <div key={variation.id} className="ml-0 rounded-md border border-border/70 bg-background/45 p-3 sm:ml-5 sm:p-4">
-                        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                          <form
-                            className="min-w-0 flex-1"
-                            onSubmit={async (event) => {
-                              event.preventDefault();
-                              const formData = new FormData(event.currentTarget);
-                              try {
-                                const changes: MetadataChanges = {};
-                                const originalName = String(formData.get('originalName') || '').trim() || variation.originalName;
-                                const notes = String(formData.get('notes') || '');
-                                if (originalName !== variation.originalName) changes.originalName = originalName;
-                                if (notes !== (variation.notes || '')) changes.notes = notes;
-                                if (Object.keys(changes).length) await saveFile(variation.id, { operation: 'metadata', changes }, 'Failed to save variation');
-                              } catch {
-                                alert('Failed to save variation');
-                              }
-                            }}
-                          >
-                            <div className="mb-3 flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                              <h4 className="break-words font-semibold text-foreground">{variation.originalName || 'Uploaded variation'}</h4>
-                              <span className="text-xs text-muted-foreground">
-                                Uploaded by {(variation.uploadedBy ? accountNamesById.get(variation.uploadedBy) : '') || variation.uploadedByName || variation.uploadedBy || 'Unknown'}{formatShortDate(variation.uploadedAt) ? ` on ${formatShortDate(variation.uploadedAt)}` : ''}
-                              </span>
-                            </div>
-                            <div className="grid gap-3 sm:grid-cols-2">
-                              <label className="block">
-                                <span className="mb-1 block text-xs font-medium text-muted-foreground">Variation file name</span>
-                                <input
-                                  name="originalName"
-                                  type="text"
-                                  defaultValue={variation.originalName || ''}
-                                  maxLength={255}
-                                  className="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
-                                />
-                              </label>
-                              <label className="block sm:row-span-2">
-                                <span className="mb-1 block text-xs font-medium text-muted-foreground">Notes</span>
-                                <textarea
-                                  name="notes"
-                                  defaultValue={variation.notes || ''}
-                                  maxLength={10000}
-                                  placeholder="Variation notes"
-                                  className="min-h-24 w-full resize-y rounded border border-border bg-background px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-accent"
-                                />
-                              </label>
-                              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                                <span>Finish:</span>
-                                {FINISH_OPTIONS.map(option => (
-                                  <button
-                                    key={option}
-                                    type="button"
-                                    onClick={() => updateFinish(variation, option)}
-                                    className={`rounded px-2 py-1 text-xs transition ${
-                                      variation.finish === option
-                                        ? 'bg-accent text-accent-foreground'
-                                        : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                                    }`}
-                                  >
-                                    {option}
-                                  </button>
-                                ))}
-                              </div>
-                              <div className="flex flex-wrap items-center gap-4 sm:col-span-2">
-                                <label className="flex max-w-40 items-center gap-2 text-sm text-muted-foreground">
-                                  <span>Year:</span>
-                                  <input
-                                    type="number"
-                                    min="1900"
-                                    max="2100"
-                                    defaultValue={variation.year || ''}
-                                    onBlur={(event) => void updateYear(variation, event.currentTarget.value)}
-                                    onKeyDown={(event) => {
-                                      if (event.key === 'Enter') event.currentTarget.blur();
-                                    }}
-                                    className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
-                                  />
-                                </label>
-                                <button type="submit" className="rounded bg-accent px-3 py-2 text-sm font-semibold text-accent-foreground transition hover:bg-accent/80">
-                                  Save Changes
-                                </button>
-                              </div>
-                            </div>
-                          </form>
-                          <div className="w-full lg:max-w-xl lg:flex-1">
-                            <div className="flex flex-wrap gap-2 lg:justify-end">
-                              <button
-                                type="button"
-                                onClick={() => cullWaveform(variation)}
-                                className="rounded bg-muted px-3 py-2 text-sm text-muted-foreground hover:bg-muted/80 disabled:opacity-50"
-                                disabled={waveformProcessingId === variation.id || !hasAvailableWaveform(variation)}
-                              >
-                                Cull Waveform
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => regenerateWaveform(variation)}
-                                className="rounded bg-accent px-3 py-2 text-sm text-accent-foreground hover:bg-accent/80 disabled:opacity-50"
-                                disabled={waveformProcessingId === variation.id}
-                              >
-                                {waveformProcessingId === variation.id ? 'Working...' : 'Regenerate Waveform'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => resetFriendRatings(variation.id)}
-                                className="rounded bg-yellow-500 px-3 py-2 text-sm text-white hover:bg-yellow-600"
-                              >
-                                Reset Friend Ratings
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => deleteFile(variation.id)}
-                                className="rounded bg-red-500 px-3 py-2 text-sm text-white hover:bg-red-600"
-                              >
-                                Delete Variation
-                              </button>
-                            </div>
-                            <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm text-muted-foreground">
-                              <span>Waveform: {hasAvailableWaveform(variation) ? 'Cached' : 'Not cached'}</span>
-                              <span className="flex items-center gap-2">
-                                {adminName}&apos;s Rating:
-                                <RatingInput value={variation.ratings?.adam || variation.myRating} onChange={(rating) => updateRating(variation.id, 'adam', rating)} />
-                              </span>
-                            </div>
-                            <div className="mt-1 grid gap-1 text-sm text-muted-foreground sm:grid-cols-2">
-                              {accountUsers.filter(user => user.id !== 'adam' && (variation.ratings?.[user.id] || 0) > 0).map(user => (
-                                <div key={user.id} className="flex items-center gap-2">
-                                  <span>{user.name}:</span>
-                                  <RatingInput value={variation.ratings?.[user.id] || 0} onChange={(rating) => updateRating(variation.id, user.id, rating)} />
-                                </div>
-                              ))}
-                            </div>
-                            <ManageWaveform
-                              file={variation}
-                              activeWaveSurferRef={activeWaveSurferRef}
-                              onWaveformRegenerated={refreshWaveformFromPreview}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
+              {showAdvanced && <div className={s.advanced}><AdvancedTools/></div>}
+            </>}
+          </section>
+          <aside className={s.rightRail}>
+            <section className={s.health}><div className={s.railHeading}><Icon name="shield"/><h2>Archive health</h2><span className={s.liveDot}/></div><div className={s.healthNumber}>{Math.round(files.length ? (files.length - needsAttention.length) / files.length * 100 : 0)}<span>%</span><small>Complete</small></div><div className={s.progress}><span style={{ width: `${files.length ? (files.length - needsAttention.length) / files.length * 100 : 0}%` }}/></div><button onClick={() => showLibrary('tags')}><span className={s.amberDot}/><span>Missing tags</span><b>{missingTags.length}</b><Icon name="arrow" size={13}/></button><button onClick={() => showLibrary('waveforms')}><span className={s.amberDot}/><span>Projects missing waveforms</span><b>{files.filter(file => !hasManagedWaveform(defaultRecording(file))).length}</b><Icon name="arrow" size={13}/></button></section>
+            <section className={s.railCard}><div className={s.railHeading}><Icon name="activity"/><h2>Recent recordings</h2></div>{recent.slice(0, 3).map(file => <button key={file.id} className={s.recentItem} onClick={() => edit(file)}><span className={s.activityDot}/><span><b>{file.name}</b><small>{formatDate(file.uploadedAt)}</small></span></button>)}<button className={s.textLink} onClick={() => setSection('Activity')}>View all<Icon name="arrow" size={13}/></button></section>
+          </aside>
         </div>
-      </div>
+      </main>
     </div>
-  );
+    <dialog ref={dialog} className={s.dialog} aria-labelledby="management-dialog-title" onCancel={event => { event.preventDefault(); closeDialog(); }} onClick={event => { if (event.target === event.currentTarget) closeDialog(); }}>
+      <form onSubmit={event => { event.preventDefault(); if (busy) return; if (editing) void saveEditor(); else if (renaming) void renameCollection(); else void addToCollection(); }}>
+        <div className={s.dialogHead}><span className={s.eyebrow}>{editing ? 'RECORDING DETAILS' : renaming ? 'COLLECTION' : 'BULK EDIT'}</span><button type="button" disabled={Boolean(busy)} onClick={closeDialog} aria-label="Close editor"><Icon name="close"/></button></div>
+        <h2 id="management-dialog-title">{editing ? editing.initial.name : renaming ? 'Rename collection' : 'Add to collection'}</h2>
+        {dialogError && <p className={s.dialogError} role="alert">{dialogError}</p>}
+        {editing ? <>
+          <p className={s.dialogIntro}>{editing.initial.uploads?.length ? `${1 + editing.initial.uploads.length} versions` : '1 version'}</p>
+          <RecordingPlayer key={editing.defaultVersionId} recordingId={editing.defaultVersionId}/>
+          <label>Song title<input required maxLength={255} value={editing.name} onChange={event => setEditing({ ...editing, name: event.target.value })}/></label>
+          <div className={s.formGrid}><label>Instruments<input value={editing.instruments} onChange={event => setEditing({ ...editing, instruments: event.target.value })}/></label><label>Vibes<input value={editing.vibes} onChange={event => setEditing({ ...editing, vibes: event.target.value })}/></label><label>Type<select value={editing.finish} onChange={event => setEditing({ ...editing, finish: event.target.value })}><option value="">Unspecified</option>{finishOptions.map(type => <option key={type}>{type}</option>)}</select></label><label>Year<input type="number" min="1900" max="2100" step="1" required={Boolean(editing.initial.year)} value={editing.year} onChange={event => setEditing({ ...editing, year: event.target.value })}/></label></div>
+          {Boolean(editing.initial.uploads?.length) && <label>Default version<select value={editing.defaultVersionId} onChange={event => setEditing({ ...editing, defaultVersionId: event.target.value })}>{[editing.initial, ...(editing.initial.uploads || [])].map(version => <option key={version.id} value={version.id}>{version.name}{version.id === editing.initial.id ? ' (original)' : ''}</option>)}</select></label>}
+          <fieldset className={s.collectionPicker}><legend>Collections</legend>{collections.map(collection => <label key={collection}><input type="checkbox" checked={editing.collections.includes(collection)} onChange={event => setEditing({ ...editing, collections: event.target.checked ? [...editing.collections, collection] : editing.collections.filter(value => value !== collection) })}/>{collection}</label>)}{!collections.length && <small>No collections.</small>}</fieldset>
+          <label>Notes<textarea rows={3} maxLength={10000} value={editing.notes} onChange={event => setEditing({ ...editing, notes: event.target.value })}/></label>
+        </> : renaming ? <>
+          <p className={s.dialogIntro}>{files.filter(file => projectInCollection(file, renaming.original)).length} projects · all versions updated</p>
+          <label>Collection name<input required autoFocus maxLength={80} value={renaming.name} onChange={event => setRenaming({ ...renaming, name: event.target.value })}/></label>
+        </> : <>
+          <p className={s.dialogIntro}>{selected.length} recordings selected</p><label>Collection<input required autoFocus maxLength={80} list="management-collections" value={bulkCollection} onChange={event => setBulkCollection(event.target.value)}/></label>
+        </>}
+        <datalist id="management-collections">{collections.map(collection => <option key={collection} value={collection}/>)}</datalist>
+        <div className={s.dialogFooter}><button type="button" className={s.secondary} disabled={Boolean(busy)} onClick={closeDialog}>Cancel</button><button type="submit" className={s.primary} disabled={Boolean(busy) || Boolean(renaming && (!renaming.name.trim() || renaming.name.trim() === renaming.original))}>{busy ? 'Saving…' : editing ? 'Save changes' : renaming ? 'Rename collection' : 'Add to collection'}</button></div>
+      </form>
+    </dialog>
+    {notice && <div className={s.toast} role={notice.error ? 'alert' : 'status'}><Icon name={notice.error ? 'close' : 'check'}/><span>{notice.text}</span><button onClick={() => setNotice(null)} aria-label="Dismiss notification"><Icon name="close" size={15}/></button></div>}
+  </div>;
 }
