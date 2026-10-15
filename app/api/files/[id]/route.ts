@@ -3,7 +3,7 @@ import { readArchive, writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser, type UserId } from '@/lib/auth';
 import fs from 'fs';
-import { cleanupStorageFile, getDataFilePath, getIndexedMp3CachePath, getStemPath, getUploadPath, isSafeStorageId } from '@/lib/storage';
+import { cleanupStorageFile, getDataFilePath, getStemPath, getUploadPath, isSafeStorageId } from '@/lib/storage';
 import { isValidWaveformCache, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
 
 interface AudioFileRecord {
@@ -150,10 +150,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
       );
     writeJsonAtomic(dataFile, remainingData);
     for (const record of recordsToDelete) {
-      if (isSafeStorageId(record.id)) {
-        cleanupStorageFile(getUploadPath(record.id));
-        cleanupStorageFile(getIndexedMp3CachePath(record.id));
-      }
+      if (isSafeStorageId(record.id)) cleanupStorageFile(getUploadPath(record.id));
       if (record.stems?.id && isSafeStorageId(record.stems.id)) cleanupStorageFile(getStemPath(record.stems.id));
     }
     return NextResponse.json({ message: 'Deleted successfully' });

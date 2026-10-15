@@ -5,9 +5,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
-const os = require('node:os');
-const { spawnSync } = require('node:child_process');
-const { createHash } = require('node:crypto');
 const { test } = require('node:test');
 const root = path.resolve(__dirname, '..');
 const ts = require('typescript');
@@ -21,7 +18,7 @@ require.extensions['.ts'] = (mod, filename) => {
   }).outputText, filename);
 };
 const load = name => require(path.join(root, name));
-const { getPlayableDuration, seekToProgress, playSafely } = load('lib/playback.ts');
+const { getPlayableDuration, seekToProgress, seekAndPlay, playSafely } = load('lib/playback.ts');
 const { isValidWaveformCache, WAVEFORM_CACHE_VERSION } = load('lib/waveform.ts');
 const { readAudioRange } = load('lib/audio-range.ts');
 test('media duration overrides stale cached duration and seeks consistently', () => {
@@ -57,72 +54,45 @@ test('byte ranges distinguish unsupported syntax from unsatisfiable ranges', () 
   assert.equal(readAudioRange('bytes=999999999999999999999-', 100), 'unsatisfiable');
 });
 
-test('long unindexed VBR MP3 gets an accurate timeline without re-encoding audio', async t => {
-  if (spawnSync('ffmpeg', ['-version']).status !== 0 || spawnSync('ffprobe', ['-version']).status !== 0) {
-    t.skip('ffmpeg/ffprobe are not installed'); return;
-  }
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'songie-mp3-timing-'));
-  const previousStorage = process.env.ARCHIVE_STORAGE_DIR;
-  process.env.ARCHIVE_STORAGE_DIR = scratch;
-  t.after(() => {
-    if (previousStorage === undefined) delete process.env.ARCHIVE_STORAGE_DIR;
-    else process.env.ARCHIVE_STORAGE_DIR = previousStorage;
-    fs.rmSync(scratch, { recursive: true, force: true });
-  });
-  const source = path.join(scratch, 'long-vbr.mp3');
-  const encoded = spawnSync('ffmpeg', [
-    '-nostdin', '-v', 'error', '-f', 'lavfi', '-i',
-    'aevalsrc=if(between(t\\,120\\,480)\\,random(0)*1.2-0.6\\,0):s=44100:d=600',
-    '-codec:a', 'libmp3lame', '-q:a', '4', '-write_xing', '0', source,
-  ]);
-  assert.equal(encoded.status, 0, encoded.stderr.toString());
-  const duration = file => {
-    const result = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', file]);
-    assert.equal(result.status, 0, result.stderr.toString());
-    return Number(result.stdout.toString());
+const streamedPlayer = () => {
+  const media = new EventTarget();
+  Object.assign(media, { duration: 3600, currentTime: 0, seeking: false });
+  const events = new Map();
+  const plays = []; const progress = [];
+  const player = {
+    getMediaElement: () => media, getDuration: () => media.duration,
+    pause: () => {},
+    setTime: time => { media.currentTime = time; media.seeking = true; },
+    getRenderer: () => ({ renderProgress: value => progress.push(value) }),
+    play: async () => plays.push(media.currentTime),
+    on: (name, listener) => events.set(name, listener),
+    un: (name, listener) => { if (events.get(name) === listener) events.delete(name); },
   };
-  const decode = file => {
-    const result = spawnSync('ffmpeg', ['-nostdin', '-v', 'error', '-i', file, '-ac', '1', '-ar', '8000', '-f', 's16le', 'pipe:1'], { maxBuffer: 32 * 1024 * 1024 });
-    assert.equal(result.status, 0, result.stderr.toString());
-    return result.stdout;
-  };
-  const originalBytes = fs.readFileSync(source);
-  const originalPcm = decode(source);
-  const decodedDuration = originalPcm.length / (8000 * 2);
-  assert.ok(Math.abs(duration(source) - decodedDuration) > 5, 'fixture must reproduce duration estimation drift');
-  const { getIndexedMp3Path } = load('lib/indexed-audio.ts');
-  const [indexed, duplicate] = await Promise.all([
-    getIndexedMp3Path(source, 'long-vbr.mp3'), getIndexedMp3Path(source, 'long-vbr.mp3'),
-  ]);
-  assert.equal(indexed, duplicate);
-  assert.ok(Math.abs(duration(indexed) - decodedDuration) < 0.15, 'frame-count duration must match decoded waveform duration');
-  t.diagnostic(`Duration: estimated ${duration(source).toFixed(3)}s; decoded ${decodedDuration.toFixed(3)}s; indexed ${duration(indexed).toFixed(3)}s`);
-  const hash = bytes => createHash('sha256').update(bytes).digest('hex');
-  const audioHash = file => {
-    const result = spawnSync('ffmpeg', ['-nostdin', '-v', 'error', '-i', file, '-map', '0:a:0', '-codec:a', 'copy', '-f', 'hash', '-hash', 'sha256', 'pipe:1']);
-    assert.equal(result.status, 0, result.stderr.toString());
-    return result.stdout.toString();
-  };
-  assert.equal(audioHash(indexed), audioHash(source), 'compressed audio packets must be identical');
-  const indexedPcm = decode(indexed);
-  assert.ok(Math.abs(indexedPcm.length - originalPcm.length) / 16000 < 0.05, 'encoder padding must not introduce timeline drift');
-  const firstSound = pcm => {
-    for (let i = 0; i < pcm.length; i += 2) if (Math.abs(pcm.readInt16LE(i)) > 100) return i / 16000;
-    return Infinity;
-  };
-  assert.ok(Math.abs(firstSound(indexedPcm) - firstSound(originalPcm)) < 0.05, 'audio onset must stay aligned with cached waveform');
-  const seekPeak = (file, time) => {
-    const result = spawnSync('ffmpeg', ['-nostdin', '-v', 'error', '-ss', String(time), '-i', file, '-t', '2', '-ac', '1', '-ar', '8000', '-f', 's16le', 'pipe:1']);
-    assert.equal(result.status, 0, result.stderr.toString());
-    assert.equal(result.stdout.length, 2 * 8000 * 2, 'seek must return two seconds of audio');
-    let peak = 0;
-    for (let i = 0; i < result.stdout.length; i += 2) peak = Math.max(peak, Math.abs(result.stdout.readInt16LE(i)));
-    return peak;
-  };
-  assert.ok(seekPeak(indexed, 200) > 100, 'indexed seek at 3:20 must reach the audible section');
-  assert.equal(seekPeak(indexed, 490), 0, 'indexed seek at 8:10 must reach the silence after 8:00');
-  assert.equal(hash(fs.readFileSync(source)), hash(originalBytes), 'uploaded recording must remain unchanged');
-  const indexedMtime = fs.statSync(indexed).mtimeMs;
-  assert.equal(await getIndexedMp3Path(source, 'long-vbr.mp3'), indexed);
-  assert.equal(fs.statSync(indexed).mtimeMs, indexedMtime, 'subsequent playback reuses the indexed copy');
+  return { player, media, events, plays, progress };
+};
+test('streamed click waits for seek completion and reconciles the actual position', async () => {
+  const { player, media, plays, progress } = streamedPlayer();
+  const pending = seekAndPlay(player, .5);
+  assert.equal(media.currentTime, 1800);
+  assert.deepEqual(plays, []);
+  media.currentTime = 1800.25; media.seeking = false;
+  media.dispatchEvent(new Event('seeked'));
+  await pending;
+  assert.deepEqual(plays, [1800.25]);
+  assert.deepEqual(progress, [1800.25 / 3600]);
+});
+test('rapid clicks supersede pending playback; destroying a player cancels a seek', async () => {
+  const { player, media, plays, events } = streamedPlayer();
+  const first = seekAndPlay(player, .25);
+  const latest = seekAndPlay(player, .75);
+  await first;
+  assert.deepEqual(plays, []);
+  media.seeking = false; media.dispatchEvent(new Event('seeked'));
+  await latest;
+  assert.deepEqual(plays, [2700]);
+  const destroyed = seekAndPlay(player, .1);
+  events.get('destroy')();
+  media.dispatchEvent(new Event('seeked'));
+  await destroyed;
+  assert.deepEqual(plays, [2700]);
 });

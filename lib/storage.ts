@@ -7,7 +7,6 @@ export const getDataFilePath = () => path.join(getStorageRoot(), 'data.json');
 export const getUploadsDir = () => path.join(getStorageRoot(), 'uploads');
 export const getStemsDir = () => path.join(getStorageRoot(), 'stems');
 export const getTranscodedDir = () => path.join(getStorageRoot(), 'transcoded');
-export const getIndexedMp3CachePath = (id: string) => path.join(getTranscodedDir(), `${id}.indexed-v1.mp3`);
 
 export const ensureDir = (dir: string) => {
   if (!fs.existsSync(dir)) {

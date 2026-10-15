@@ -6,7 +6,7 @@ import { Fragment, memo, type Dispatch, type SetStateAction, useCallback, useEff
 import Link from 'next/link';
 import { useWaveform } from '@/lib/use-waveform';
 import WaveSurfer from 'wavesurfer.js';
-import { getPlayableDuration as getWaveSurferPlayableDuration, seekToProgress as seekWaveSurferToProgress, playSafely } from '@/lib/playback';
+import { getPlayableDuration as getWaveSurferPlayableDuration, getSeekTarget, seekToProgress as seekWaveSurferToProgress, seekAndPlay, playSafely } from '@/lib/playback';
 import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
 
 interface AudioFile {
@@ -159,7 +159,7 @@ const isMobilePlaybackDevice = () => {
 
 const getPlaybackAudioUrl = (id: string) => {
   const baseUrl = `/api/files/${encodeURIComponent(id)}/audio`;
-  return `${baseUrl}?format=${isMobilePlaybackDevice() ? 'mobile' : 'playback'}`;
+  return isMobilePlaybackDevice() ? `${baseUrl}?format=mobile` : baseUrl;
 };
 
 const normalizeTag = (tag: string) => TAG_LABELS[tag.toLowerCase()] || tag;
@@ -613,7 +613,7 @@ const AudioCard = memo(function AudioCard({
     const timelineDuration = hasCachedWaveform(latestFileRef.current)
       ? latestFileRef.current.waveformDuration || 0
       : durationRef.current || 0;
-    const seekState = seekWaveSurferToProgress(
+    const seekState = getSeekTarget(
       wavesurfer,
       progress,
       timelineDuration
@@ -630,7 +630,7 @@ const AudioCard = memo(function AudioCard({
     }
 
     pendingPlaybackRef.current = null;
-    void playSafely(wavesurfer);
+    void seekAndPlay(wavesurfer, seekState.progress, timelineDuration);
   }, []);
 
   const handleTagRowWheel = (event: React.WheelEvent<HTMLDivElement>) => {
@@ -724,14 +724,14 @@ const AudioCard = memo(function AudioCard({
       const timelineDuration = hasCachedWaveform(latestFileRef.current)
         ? latestFileRef.current.waveformDuration || 0
         : durationRef.current || 0;
-      const seekState = seekWaveSurferToProgress(
+      const seekState = getSeekTarget(
         wavesurfer,
         pendingPlayback.progress,
         timelineDuration
       );
       setDuration(seekState.duration);
       setCurrentTime(seekState.time);
-      void playSafely(wavesurfer);
+      void seekAndPlay(wavesurfer, seekState.progress, timelineDuration);
     };
 
     const handlePlay = () => {
@@ -780,6 +780,7 @@ const AudioCard = memo(function AudioCard({
     };
     const handleTimeUpdate = (time: number) => syncPlaybackUi(time);
     const handleSeeking = (time: number) => syncPlaybackUi(time, true);
+    const handleSeeked = () => syncPlaybackUi(mediaElement.currentTime, true);
     const handleWaveformWrapperClick = (event: MouseEvent) => {
       const wrapper = wavesurfer.getWrapper();
       const rect = wrapper.getBoundingClientRect();
@@ -822,6 +823,7 @@ const AudioCard = memo(function AudioCard({
     wavesurfer.on('decode', handleDecode);
     wavesurfer.getWrapper().addEventListener('click', handleWaveformWrapperClick);
     mediaElement.addEventListener('archiveplaybackerror', handleError);
+    mediaElement.addEventListener('seeked', handleSeeked);
     mediaElement.addEventListener('durationchange', applyMobileMetadataDuration);
     mediaElement.addEventListener('canplay', handleCanPlay);
     mediaElement.addEventListener('loadedmetadata', handleCanPlay);
@@ -829,6 +831,7 @@ const AudioCard = memo(function AudioCard({
     return () => {
       disposed = true;
       mediaElement.removeEventListener('archiveplaybackerror', handleError);
+      mediaElement.removeEventListener('seeked', handleSeeked);
       mediaElement.removeEventListener('durationchange', applyMobileMetadataDuration);
       wavesurfer.getWrapper().removeEventListener('click', handleWaveformWrapperClick);
       mediaElement.removeEventListener('canplay', handleCanPlay);
@@ -3186,11 +3189,9 @@ export default function Home() {
 
     const rect = event.currentTarget.getBoundingClientRect();
     const progress = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-    seekWaveSurferToProgress(
-      wavesurfer,
-      progress,
-      activeTrack && hasCachedWaveform(activeTrack) ? activeTrack.waveformDuration || 0 : 0
-    );
+    const fallback = activeTrack && hasCachedWaveform(activeTrack) ? activeTrack.waveformDuration || 0 : 0;
+    if (wavesurfer.isPlaying()) void seekAndPlay(wavesurfer, progress, fallback);
+    else seekWaveSurferToProgress(wavesurfer, progress, fallback);
     setProgress(progress * 100);
   }, [activeTrack]);
 

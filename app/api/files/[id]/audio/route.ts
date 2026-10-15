@@ -2,7 +2,6 @@ import { getArchiveIndex } from '@/lib/archive-index';
 import { readAudioRange } from '@/lib/audio-range';
 import { NextRequest, NextResponse } from 'next/server';
 import { runAudioJob, runFfmpeg } from '@/lib/audio-processing';
-import { getIndexedMp3Path } from '@/lib/indexed-audio';
 import { getSessionUser } from '@/lib/auth';
 import { ensureDir, getAudioContentType, getSafeDownloadName, getTranscodedDir, getUploadPath, isSafeStorageId } from '@/lib/storage';
 import fs from 'fs';
@@ -136,16 +135,6 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const downloadName = req.nextUrl.searchParams.get('download') === '1'
       ? file.originalName || file.name || id
       : undefined;
-
-    const wantsPlaybackAudio = wantsMobileAudio || req.nextUrl.searchParams.get('format') === 'playback';
-    if (!downloadName && wantsPlaybackAudio && path.extname(id).toLowerCase() === '.mp3') {
-      try {
-        const indexedPath = await getIndexedMp3Path(filePath, id);
-        return streamAudioFile(indexedPath, 'audio/mpeg', req.headers.get('range'));
-      } catch (error) {
-        console.error('MP3 playback indexing failed for', id, error);
-      }
-    }
 
     if (wantsMobileAudio) {
       try {

@@ -33,7 +33,7 @@ const isMobilePlaybackDevice = () => {
 
 const getPlaybackAudioUrl = (id: string) => {
   const baseUrl = `/api/files/${encodeURIComponent(id)}/audio`;
-  return `${baseUrl}?format=${isMobilePlaybackDevice() ? 'mobile' : 'playback'}`;
+  return isMobilePlaybackDevice() ? `${baseUrl}?format=mobile` : baseUrl;
 };
 
 const getRatingColor = (rating: number) => {

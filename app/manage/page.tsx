@@ -281,7 +281,7 @@ const ManageWaveform = ({
       interact: true,
       dragToSeek: true,
       backend: cachedWaveform ? 'MediaElement' : 'WebAudio',
-      url: `/api/files/${encodeURIComponent(file.id)}/audio?format=playback`,
+      url: `/api/files/${encodeURIComponent(file.id)}/audio`,
       peaks: cachedWaveform ? latestFileRef.current.waveformPeaks : undefined,
       duration: cachedWaveform ? latestFileRef.current.waveformDuration : undefined,
     });
