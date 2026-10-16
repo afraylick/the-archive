@@ -1,3 +1,5 @@
+import { recordingArchiveId } from '@/lib/archives';
+import { recordingAccess } from '@/lib/recording-access';
 import { writeJsonAtomic } from '@/lib/json-storage';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
@@ -14,11 +16,13 @@ interface AudioFileRecord {
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const accessError = recordingAccess(req, (await params).id, 'edit');
+  if (accessError) return accessError;
   const { id: sourceId } = await params;
 
   try {
     const user = getSessionUser(req);
-    if (!user?.isAdmin) {
+    if (!user) {
       return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
     }
     if (!isSafeStorageId(sourceId)) {
@@ -45,6 +49,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'Destination song not found' }, { status: 404 });
     }
 
+    const targetAccess = recordingAccess(req, targetProjectId, 'edit');
+    if (targetAccess) return targetAccess;
+    if (recordingArchiveId(source) !== recordingArchiveId(target)) return NextResponse.json({ error: 'Versions must stay in the same archive' }, { status: 400 });
     const linkedAt = new Date().toISOString();
     const movedIds: string[] = [];
     const updatedData = data.map(record => {

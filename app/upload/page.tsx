@@ -1,4 +1,7 @@
 'use client';
+import { archivePaletteStyle, type ArchivePaletteId } from '@/lib/archive-palettes';
+import { StorageMeter } from '../storage-meter';
+import { archiveUrl } from '@/lib/recording-url';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
@@ -380,6 +383,7 @@ export default function UploadPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const [archiveName, setArchiveName] = useState('the archive');
+  const [archivePalette, setArchivePalette] = useState<ArchivePaletteId>('blue');
   const [userName, setUserName] = useState('');
   const [queueSearch, setQueueSearch] = useState('');
   const [optionError, setOptionError] = useState('');
@@ -417,14 +421,18 @@ export default function UploadPage() {
   useEffect(() => {
     fetch('/api/session')
       .then(res => res.json())
-      .then((data: { user?: { name: string }; settings?: { archiveName?: string; defaultInstruments?: string[]; defaultVibes?: string[] } }) => {
-        setArchiveName(data.settings?.archiveName || 'the archive');
+      .then((data: { user?: { id: string; name: string }; settings?: { archiveName?: string; defaultInstruments?: string[]; defaultVibes?: string[] } }) => {
+        fetch('/api/archives').then(response => response.json()).then(result => {
+          const requested = new URL(archiveUrl('/api/upload'), window.location.origin).searchParams.get('archive');
+          const archive = result.archives?.find((a: { id: string }) => a.id === requested) || result.archives?.find((a: { ownerId: string }) => a.ownerId === data.user?.id);
+          if (archive) { setArchiveName(archive.name); setArchivePalette(archive.palette || 'blue'); }
+        }).catch(() => {});
         setUserName(data.user?.name || '');
         setInstrumentOptions(prev => Array.from(new Set([...prev, ...(data.settings?.defaultInstruments || [])])));
         setVibeOptions(prev => Array.from(new Set([...prev, ...(data.settings?.defaultVibes || [])])));
       }).catch(() => {});
 
-    fetch('/api/files?view=metadata')
+    fetch(archiveUrl('/api/files?view=metadata'))
       .then(res => { if (!res.ok) throw new Error('Saved tags unavailable.'); return res.json(); })
       .then((files: AudioFile[]) => {
         setInstrumentOptions(prev => Array.from(new Set([...prev, ...files.flatMap(file => getTags(file, 'instruments', 'instrument'))])));
@@ -651,7 +659,7 @@ export default function UploadPage() {
     try {
       await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
-        xhr.open('POST', '/api/upload');
+        xhr.open('POST', archiveUrl('/api/upload'));
 
         xhr.upload.onprogress = (event) => {
           if (event.lengthComputable && event.total > 0) {
@@ -673,6 +681,7 @@ export default function UploadPage() {
 
         xhr.onload = () => {
           if (xhr.status >= 200 && xhr.status < 300) {
+            window.dispatchEvent(new Event('storage-changed'));
             resolve();
             return;
           }
@@ -711,7 +720,7 @@ export default function UploadPage() {
     setFileEntries([]); setQueueSearch(''); setUploadError('');
   };
 
-  return <div {...getRootProps({ role: 'presentation', tabIndex: -1 })} className={`archive-shell ${s.shell} ${u.shell}`}>
+  return <div {...getRootProps({ role: 'presentation', tabIndex: -1 })} className={`archive-shell ${s.shell} ${u.shell}`} style={archivePaletteStyle(archivePalette)}>
     <input {...getInputProps({ 'aria-label': 'Choose audio files' })}/>
     {isDragActive && <div className={u.dropOverlay}><Icon name="music" size={36}/><strong>Drop audio files</strong></div>}
     <header className={s.header}>
@@ -730,6 +739,7 @@ export default function UploadPage() {
         <nav aria-label="Administration"><Link href="/users" className={s.navItem}><Icon name="users"/><span>Members & access</span><Icon name="arrow" size={13}/></Link></nav>
       </aside>
       <main className={`${s.main} ${u.main}`}>
+        <StorageMeter/>
         <div className={s.heading}><h1>Upload recordings</h1><div className={u.headingActions}><button type="button" className={s.secondary} disabled={uploading} onClick={openFilePicker}><Icon name="plus" size={15}/> Add files</button><button type="submit" form="upload-form" className={s.primary} disabled={!fileEntries.length || uploading}><UploadIcon/>{uploading ? 'Uploading…' : 'Upload all'}{fileEntries.length > 0 && <span className={u.buttonCount}>{fileEntries.length}</span>}</button></div></div>
         {uploadError && <div className={u.error} role="alert"><Icon name="close" size={16}/><span>{uploadError}</span><button type="button" aria-label="Dismiss error" onClick={() => setUploadError('')}><Icon name="close" size={14}/></button></div>}
         <form id="upload-form" onSubmit={handleSubmit}>

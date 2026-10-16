@@ -5,7 +5,7 @@ export interface AccountAccess {
   role: UserRole;
 }
 
-export const roleLabel = (role: UserRole) => ({ owner: 'Owner', admin: 'Admin', member: 'Member' })[role];
+export const roleLabel = (role: UserRole) => ({ owner: 'Owner', admin: 'Site Admin', member: 'Member' })[role];
 
 export const canEditAccount = (actor: AccountAccess, target: AccountAccess) => (
   actor.role === 'owner' || (actor.role === 'admin' && (target.role === 'member' || actor.id === target.id))

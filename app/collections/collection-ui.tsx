@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import type { ArchivePaletteId } from '@/lib/archive-palettes';
 import type { Collection } from '@/lib/collections';
 import s from './collections.module.css';
 
-export interface CollectionView extends Collection { songIds: string[]; canEdit: boolean; canManage: boolean }
+export interface CollectionView extends Collection { palette?: ArchivePaletteId; songIds: string[]; canEdit: boolean; canManage: boolean }
 interface Person { id: string; name: string }
 const jsonRequest = async (url: string, method = 'GET', body?: unknown) => {
   const response = await fetch(url, { method, ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
@@ -19,7 +20,7 @@ export function CollectionsPanel({ collections, selectedId, loading, error }: { 
   const router = useRouter();
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
-  const [visibility, setVisibility] = useState('public');
+  const [visibility, setVisibility] = useState('private');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState('');
   return <details className={s.panel}>
@@ -43,7 +44,7 @@ export function CollectionsPanel({ collections, selectedId, loading, error }: { 
       }}>
         <label>Name<input required maxLength={80} value={name} onChange={event => setName(event.target.value)} placeholder="Collection name" autoFocus/></label>
         <label>Visibility<select value={visibility} onChange={event => setVisibility(event.target.value)}><option value="public">Public</option><option value="private">Private</option></select></label>
-        <p className={s.hint}>{visibility === 'public' ? 'Everyone in the archive can listen and comment.' : 'Only you and the people you invite can open it.'}</p>
+        <p className={s.hint}>{visibility === 'public' ? 'Every account on this site can listen and comment, including people without source archive access.' : 'Only you and the people you invite can open it.'}</p>
         <button className={s.primary} disabled={busy || !name.trim()}>{busy ? 'Creating…' : 'Create collection'}</button>
         {failure && <p role="alert" className={s.error}>{failure}</p>}
       </form>}
@@ -58,7 +59,7 @@ export function CollectionHeader({ id, user, people, value, onChange }: { id: st
   const [busy, setBusy] = useState(false);
   const [settings, setSettings] = useState(false);
   const [name, setName] = useState('');
-  const [visibility, setVisibility] = useState<'public' | 'private'>('public');
+  const [visibility, setVisibility] = useState<'public' | 'private'>('private');
   const [members, setMembers] = useState<string[]>([]);
   const [text, setText] = useState('');
   const [picker, setPicker] = useState(false);
@@ -101,18 +102,18 @@ export function CollectionHeader({ id, user, people, value, onChange }: { id: st
         <button type="button" onClick={async () => { try { await navigator.clipboard.writeText(window.location.href); setCopied(true); window.setTimeout(() => setCopied(false), 2000); } catch { setError('Could not copy the link. You can copy it from the address bar.'); } }}>{copied ? 'Link copied' : 'Copy link'}</button>
         {collection.canEdit && <button className={s.primary} type="button" aria-expanded={picker} onClick={async () => {
           setPicker(!picker);
-          if (!songs) try { const files = await jsonRequest('/api/files?view=metadata'); setSongs(files.flatMap((file: { id: string; name: string; uploads?: { id: string; name: string }[] }) => [file, ...(file.uploads || []).map(upload => ({ ...upload, name: `${file.name} / ${upload.name}` }))])); } catch (error) { setError((error as Error).message); }
+          if (!songs) try { const files = await jsonRequest('/api/files?view=metadata&scope=accessible'); setSongs(files.flatMap((file: { id: string; name: string; archiveName?: string; uploads?: { id: string; name: string }[] }) => [{ ...file, name: `${file.archiveName || 'Archive'} / ${file.name}` }, ...(file.uploads || []).map(upload => ({ ...upload, name: `${file.name} / ${upload.name}` }))])); } catch (error) { setError((error as Error).message); }
         }}>{picker ? 'Done' : '+ Add songs'}</button>}
         {collection.canManage && <button type="button" aria-expanded={settings} onClick={() => { setName(collection.name); setVisibility(collection.visibility); setMembers(collection.memberIds); setSettings(!settings); }}>Sharing & settings</button>}
       </div>
     </div>
     {settings && <form className={s.settings} onSubmit={async event => { event.preventDefault(); if (await act('', 'PATCH', { name, visibility, memberIds: members })) setSettings(false); }}>
       <div className={s.settingsFields}><label>Name<input required maxLength={80} value={name} onChange={event => setName(event.target.value)}/></label><label>Visibility<select value={visibility} onChange={event => setVisibility(event.target.value as 'public' | 'private')}><option value="public">Public</option><option value="private">Private</option></select></label></div>
-      <p className={s.hint}>{visibility === 'private' ? 'Only you and invited members can see this collection and its chat.' : 'Everyone in the archive can open this collection. Invite people to help with the playlist.'}</p>
+      <p className={s.hint}>{visibility === 'private' ? 'Only you and invited members can see this collection and its chat.' : 'Every account on this site can open this collection. Invite people to help with the playlist.'}</p>
       <fieldset><legend>Invite people</legend><div className={s.members}>{people.filter(person => person.id !== collection.ownerId).map(person => <label key={person.id}><input type="checkbox" checked={members.includes(person.id)} onChange={event => setMembers(event.target.checked ? [...members, person.id] : members.filter(member => member !== person.id))}/>{person.name}</label>)}</div><p className={s.hint}>Invited members can add, remove, and reorder songs.</p></fieldset>
       <div className={s.actions}><button className={s.primary} disabled={busy}>Save changes</button><button type="button" onClick={() => setSettings(false)}>Cancel</button><button className={s.danger} type="button" disabled={busy} onClick={async () => { if (window.confirm(`Delete “${collection.name}” and its chat? Songs stay in the library.`) && await act('', 'DELETE')) router.push('/'); }}>Delete collection</button></div>
     </form>}
-    {picker && <div className={s.picker}><label>Find songs<input aria-label="Find songs to add" placeholder="Search the library…" value={query} onChange={event => setQuery(event.target.value)}/></label><div className={s.songChoices}>{songs === null ? <p className={s.hint}>Loading songs…</p> : songs.filter(song => song.name.toLowerCase().includes(query.trim().toLowerCase())).map(song => <div key={song.id}><span>{song.name}</span><button type="button" disabled={busy || collection.songIds.includes(song.id)} onClick={() => void act('', 'PATCH', { addSongId: song.id })}>{collection.songIds.includes(song.id) ? 'Added' : '+ Add'}</button></div>)}</div>{songs && !songs.some(song => song.name.toLowerCase().includes(query.trim().toLowerCase())) && <p className={s.hint}>No songs match your search.</p>}</div>}
+    {picker && <div className={s.picker}><p className={s.hint}>Songs from every archive you can browse. Adding a song gives collection listeners access to that recording and its notes, comments, and attachments.</p><label>Find songs<input aria-label="Find songs to add" placeholder="Search the library…" value={query} onChange={event => setQuery(event.target.value)}/></label><div className={s.songChoices}>{songs === null ? <p className={s.hint}>Loading songs…</p> : songs.filter(song => song.name.toLowerCase().includes(query.trim().toLowerCase())).map(song => <div key={song.id}><span>{song.name}</span><button type="button" disabled={busy || collection.songIds.includes(song.id)} onClick={() => void act('', 'PATCH', { addSongId: song.id })}>{collection.songIds.includes(song.id) ? 'Added' : '+ Add'}</button></div>)}</div>{songs && !songs.some(song => song.name.toLowerCase().includes(query.trim().toLowerCase())) && <p className={s.hint}>No songs match your search.</p>}</div>}
     <div className={s.chat}>
       <div className={s.chatHeading}><h2>Conversation</h2><span>{collection.comments.length} message{collection.comments.length === 1 ? '' : 's'}</span></div>
       <div ref={chatRef} className={s.messages} role="log" aria-label="Collection conversation" onScroll={event => { const node = event.currentTarget; wasAtBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 60; }}>

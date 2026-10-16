@@ -1,14 +1,17 @@
+import { trashRecording, TrashError } from '@/lib/trash';
+import { recordingAccess } from '@/lib/recording-access';
+import { archiveForRecording } from '@/lib/archives';
 import { getCreatedAtWithYear } from '@/lib/recorded-date';
 import { readArchive, writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser, type UserId } from '@/lib/auth';
-import fs from 'fs';
-import { cleanupStorageFile, getDataFilePath, getStemPath, getUploadPath, isSafeStorageId } from '@/lib/storage';
+import { getDataFilePath } from '@/lib/storage';
 import { isValidWaveformCache, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
 
 interface AudioFileRecord {
   id: string;
   projectId?: string;
+  trashedAt?: string;
   defaultVersionId?: string;
   variationType?: 'linked';
   linkedAt?: string;
@@ -56,9 +59,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return NextResponse.json({ error: 'Invalid mutation' }, { status: 400 });
     }
-    if (!user.isAdmin && (body.operation !== 'waveform' || body.waveform === null)) {
-      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
-    }
+    const accessError = recordingAccess(req, id, body.operation === 'waveform' && body.waveform !== null ? 'read' : 'edit');
+    if (accessError) return accessError;
     const data = readArchive<AudioFileRecord>();
     const index = data.findIndex(file => file.id === id);
     if (index < 0) return NextResponse.json({ error: 'File not found' }, { status: 404 });
@@ -82,7 +84,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           changes.year = value;
           changes.createdAt = getCreatedAtWithYear(current.createdAt, value);
         } else if (key === 'defaultVersionId') {
-          if (current.projectId || typeof value !== 'string' || !(value === id || data.some(file => file.id === value && file.projectId === id))) return invalid();
+          if (current.projectId || typeof value !== 'string' || !(value === id || data.some(file => file.id === value && file.projectId === id && !file.trashedAt))) return invalid();
           changes.defaultVersionId = value;
         } else return invalid();
       }
@@ -100,11 +102,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         changes.waveformCacheVersion = waveform.waveformCacheVersion;
       }
     } else if (body.operation === 'reset-member-ratings') {
-      const adminRating = current.ratings?.adam ?? current.myRating ?? current.rating ?? 0;
-      changes.ratings = { adam: adminRating };
+      const ownerId = archiveForRecording(current)?.ownerId || 'adam';
+      const adminRating = current.ratings?.[ownerId] ?? (ownerId === 'adam' ? current.myRating ?? current.rating ?? 0 : 0);
+      changes.ratings = { [ownerId]: adminRating };
       changes.myRating = adminRating;
       changes.userRating = 0;
-      changes.ratingUpdatedAt = current.ratingUpdatedAt?.adam ? { adam: current.ratingUpdatedAt.adam } : {};
+      changes.ratingUpdatedAt = current.ratingUpdatedAt?.[ownerId] ? { [ownerId]: current.ratingUpdatedAt[ownerId] } : {};
     } else return invalid();
     data[index] = { ...current, ...changes };
     if (body.operation === 'waveform' && body.waveform === null) {
@@ -120,41 +123,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  try {
-    const user = getSessionUser(req);
-    if (!user?.isAdmin) {
-      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
-    }
-
-    const dataFile = getDataFilePath();
-    let data: AudioFileRecord[] = [];
-    if (fs.existsSync(dataFile)) {
-      data = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
-    }
-    const index = data.findIndex((f) => f.id === id);
-    if (index === -1) {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
-    }
-    if (!isSafeStorageId(id)) {
-      return NextResponse.json({ error: 'Invalid file id' }, { status: 400 });
-    }
-    const recordToDelete = data[index];
-    const recordsToDelete = data.filter(file => file.id === id || file.projectId === id);
-    const deletedIds = new Set(recordsToDelete.map(record => record.id));
-    const remainingData = data
-      .filter(record => !deletedIds.has(record.id))
-      .map(record => recordToDelete.projectId === record.id && record.defaultVersionId === id
-        ? { ...record, defaultVersionId: record.id }
-        : record
-      );
-    writeJsonAtomic(dataFile, remainingData);
-    for (const record of recordsToDelete) {
-      if (isSafeStorageId(record.id)) cleanupStorageFile(getUploadPath(record.id));
-      if (record.stems?.id && isSafeStorageId(record.stems.id)) cleanupStorageFile(getStemPath(record.stems.id));
-    }
-    return NextResponse.json({ message: 'Deleted successfully' });
-  } catch {
-    return NextResponse.json({ error: 'Delete failed' }, { status: 500 });
-  }
+  const user = getSessionUser(req);
+  if (!user) return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+  try { return NextResponse.json(trashRecording((await params).id, user)); }
+  catch (error) { return NextResponse.json({ error: error instanceof TrashError ? error.message : 'Move to trash failed' }, { status: error instanceof TrashError ? error.status : 500 }); }
 }

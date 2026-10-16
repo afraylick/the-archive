@@ -26,6 +26,11 @@ process.env.ARCHIVE_AUTH_SECRET = 'isolated-storage-tests-only';
 delete process.env.ARCHIVE_ACCOUNT_CODES;
 after(() => { process.chdir(originalCwd); fs.rmSync(scratch, { recursive: true, force: true }); });
 const load = name => require(path.join(root, name));
+const grantLegacy = (...ids) => {
+  const archives = load('lib/archives.ts').readArchives();
+  archives[0].memberIds = [...new Set([...archives[0].memberIds, ...ids])];
+  json.writeJsonAtomic(path.join(storage.getStorageRoot(), 'archives.json'), archives);
+};
 const { NextRequest } = require('next/server');
 const storage = load('lib/storage.ts');
 const json = load('lib/json-storage.ts');
@@ -54,6 +59,7 @@ const setup = async () => {
   await auth.setUserPasscode('adam', 'fixture-admin-password');
   fs.writeFileSync(storage.getUploadPath(fixture.id), Buffer.alloc(100));
   save([fixture]);
+  load('lib/archives.ts').readArchives();
 };
 const addComment = async () => {
   const res = await commentsRoute.POST(request('/api/files/fixture.wav/comments', 'POST', { text: 'Concurrent comment' }), context);
@@ -129,7 +135,9 @@ test('archive persistence regressions', async t => {
     const processing = waveformRoute.POST(request('/waveform', 'POST'), context);
     await gate.waitFor(1);
     assert.equal((await deleteRoute.DELETE(request('/fixture', 'DELETE'), context)).status, 200);
-    gate.finish(); assert.equal((await processing).status, 404); assert.deepEqual(read(), []);
+    gate.finish(); assert.equal((await processing).status, 404);
+    assert.equal(read().length, 1); assert.equal(Boolean(read()[0].trashedAt), true);
+    assert.equal(read()[0].waveformPeaks, undefined);
   });
   await t.test('simultaneous batches preserve each other and concurrent comments', async t => {
     await setup(); const gate = pauseGeneration(t);
@@ -152,7 +160,8 @@ test('archive persistence regressions', async t => {
     await gate.waitFor(1);
     await deleteRoute.DELETE(request('/fixture', 'DELETE'), context);
     gate.finish(); assert.equal((await processing).status, 404);
-    assert.deepEqual(read(), []); assert.deepEqual(fs.readdirSync(storage.getUploadsDir()), []);
+    assert.equal(read().length, 1); assert.equal(Boolean(read()[0].trashedAt), true);
+    assert.deepEqual(fs.readdirSync(storage.getUploadsDir()), [fixture.id]);
   });
   await t.test('a failed atomic replacement preserves the original and removes temporary files', async t => {
     await setup(); const before = fs.readFileSync(storage.getDataFilePath(), 'utf8');
@@ -239,14 +248,15 @@ test('targeted edits and attachment lifecycle', async t => {
     fs.writeFileSync(storage.getUploadPath(variant.id), 'audio');
     const response = await deleteRoute.DELETE(request('/variation', 'DELETE'), { params: Promise.resolve({ id: variant.id }) });
     assert.equal(response.status, 200);
-    assert.equal(read().length, 1);
+    assert.equal(read().filter(record => !record.trashedAt).length, 1);
+    assert.equal(Boolean(read().find(record => record.id === variant.id).trashedAt), true);
     assert.equal(read()[0].defaultVersionId, fixture.id);
     assert.equal(read()[0].notes, 'keep');
     assert.equal(fs.existsSync(storage.getUploadPath(fixture.id)), true);
-    assert.equal(fs.existsSync(storage.getUploadPath(variant.id)), false);
+    assert.equal(fs.existsSync(storage.getUploadPath(variant.id)), true, 'trash retains original audio');
   });
   await t.test('members can cache waveforms but cannot edit metadata reset ratings or cull', async () => {
-    await setup(); const member = await auth.createUser('Member', 'member-password');
+    await setup(); const member = await auth.createUser('Member', 'member-password'); grantLegacy(member.id);
     for (const mutation of [{ operation: 'metadata', changes: { notes: 'no' } }, { operation: 'reset-member-ratings' }, { operation: 'waveform', waveform: null }]) {
       assert.equal((await patch(mutation, member.id)).status, 403);
     }
@@ -257,7 +267,7 @@ test('targeted edits and attachment lifecycle', async t => {
     assert.equal((await deleteRoute.PATCH(anonymous, context)).status, 401);
   });
   await t.test('proxy allows own-comment deletion and the route rejects other owners', async () => {
-    await setup(); const member = await auth.createUser('Member', 'member-password');
+    await setup(); const member = await auth.createUser('Member', 'member-password'); grantLegacy(member.id);
     await addComment();
     const adminComment = read()[0].comments[0].id;
     const posted = await commentsRoute.POST(request('/api/files/fixture.wav/comments', 'POST', { text: 'Member comment' }, member.id), context);
@@ -266,7 +276,7 @@ test('targeted edits and attachment lifecycle', async t => {
     assert.equal(proxy(ownRequest).status, 200);
     assert.equal((await commentsRoute.DELETE(ownRequest, context)).status, 200);
     assert.equal((await commentsRoute.DELETE(request('/api/files/fixture.wav/comments', 'DELETE', { commentId: adminComment }, member.id), context)).status, 403);
-    assert.equal(proxy(request('/api/files/fixture.wav', 'DELETE', undefined, member.id)).status, 403);
+    assert.equal(proxy(request('/api/files/fixture.wav', 'DELETE', undefined, member.id)).status, 200, 'the recording route enforces archive ownership');
     assert.equal((await deleteRoute.DELETE(request('/api/files/fixture.wav', 'DELETE', undefined, member.id), context)).status, 403);
   });
   await t.test('failed new attachment write preserves the original attachment', async t => {
@@ -308,12 +318,12 @@ test('targeted edits and attachment lifecycle', async t => {
     assert.equal(fs.existsSync(storage.getStemPath('old.zip')), true);
     assert.equal(fs.existsSync(storage.getUploadPath(fixture.id)), true);
   });
-  await t.test('cleanup failure cannot undo or misreport a committed project deletion', async t => {
+  await t.test('moving a project to trash retains metadata and audio without cleaning files', async t => {
     await setupStem();
     t.mock.method(console, 'error', () => {});
-    t.mock.method(fs, 'rmSync', () => { assert.deepEqual(read(), []); throw new Error('Cleanup unavailable'); });
+    t.mock.method(fs, 'rmSync', () => { throw new Error('Trash must not delete audio'); });
     assert.equal((await deleteRoute.DELETE(request('/fixture', 'DELETE'), context)).status, 200);
-    assert.deepEqual(read(), []);
+    assert.equal(read().length, 1); assert.equal(Boolean(read()[0].trashedAt), true);
     assert.equal(fs.existsSync(storage.getUploadPath(fixture.id)), true);
   });
 });
@@ -459,9 +469,10 @@ test('playlist privacy, sharing, ordering, and collaborative ratings', async t =
   const owner = await auth.createUser('Playlist owner', 'playlist-owner-password');
   const invited = await auth.createUser('Invited listener', 'playlist-invited-password');
   const outsider = await auth.createUser('Other listener', 'playlist-outsider-password');
+  grantLegacy(owner.id, invited.id, outsider.id);
   save([{ ...fixture, likedBy: [owner.id], ratings: { adam: 4, [owner.id]: 3, [invited.id]: 5, [outsider.id]: 2 } }, { ...fixture, id: 'second.wav', name: 'Second song' }]);
   fs.writeFileSync(storage.getUploadPath('second.wav'), 'audio');
-  const created = await collectionRoute.POST(request('/api/collections', 'POST', { name: 'New playlist' }, owner.id));
+  const created = await collectionRoute.POST(request('/api/collections', 'POST', { name: 'New playlist', visibility: 'public' }, owner.id));
   assert.equal(created.status, 201);
   const initial = (await created.json()).collection;
   assert.equal(initial.visibility, 'public');
@@ -470,7 +481,7 @@ test('playlist privacy, sharing, ordering, and collaborative ratings', async t =
   const update = (body, userId = owner.id) => collectionDetailRoute.PATCH(request('/collection', 'PATCH', body, userId), ctx);
   const detail = userId => collectionDetailRoute.GET(request('/collection', 'GET', undefined, userId), ctx);
   const list = async userId => (await (await collectionRoute.GET(request('/api/collections', 'GET', undefined, userId))).json()).collections;
-  await t.test('all members can create; public defaults are accessible but settings belong to the creator', async () => {
+  await t.test('all members can create; explicitly public collections are accessible but settings belong to the creator', async () => {
     assert.equal((await detail(outsider.id)).status, 200);
     assert.equal((await update({ name: 'Take over' }, outsider.id)).status, 403);
     assert.equal((await update({ addSongId: fixture.id }, outsider.id)).status, 403);
@@ -586,6 +597,7 @@ test('targeted playlist membership preserves other collections and works across 
   assert.equal((await patch(first, { addSongId: 'variation.wav' })).status, 200);
   const playlist = await (await libraryRoute.GET(request(`/api/files?view=metadata&collection=${first.id}`))).json();
   assert.equal(playlist[0].defaultVersionId, 'variation.wav');
-  assert.deepEqual(playlist[0].collections.sort(), ['Keep this membership', 'Second playlist']);
-  assert.deepEqual(playlist[0].uploads[0].collections, ['Renamed playlist']);
+  assert.equal(playlist[0].id, 'variation.wav');
+  assert.deepEqual(playlist[0].collections, ['Renamed playlist']);
+  assert.deepEqual(playlist[0].uploads, [], 'a shared version does not expose its unshared parent');
 });

@@ -187,7 +187,7 @@ export function streamMp3Container(filePath: string, container: VirtualMp4, rang
   const { header, sourceSize } = container;
   const size = header.length + sourceSize;
   const range = readAudioRange(rangeHeader, size);
-  const headers = { 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=86400', 'Vary': 'Cookie', 'Content-Type': 'audio/mp4' };
+  const headers = { 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, no-cache', 'Vary': 'Cookie', 'Content-Type': 'audio/mp4' };
   if (range === 'unsatisfiable') return new Response(null, { status: 416, headers: { ...headers, 'Cache-Control': 'no-store', 'Content-Range': `bytes */${size}` } });
   const { start, end } = range || { start: 0, end: size - 1 };
   async function* chunks() {

@@ -1,3 +1,4 @@
+import { recordingAccess } from '@/lib/recording-access';
 import { writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
@@ -10,6 +11,8 @@ interface AudioFileRecord {
 }
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const accessError = recordingAccess(req, (await params).id, 'read');
+  if (accessError) return accessError;
   const { id } = await params;
 
   try {

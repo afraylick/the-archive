@@ -1,4 +1,5 @@
 'use client';
+import { archivePaletteStyle, getArchivePalette, type ArchivePaletteId } from '@/lib/archive-palettes';
 
 import { mutateRecording, type MetadataChanges } from '@/lib/recording-mutations';
 
@@ -83,6 +84,9 @@ const RatingInput = ({ value, onChange }: { value: number; onChange: (rating: nu
 };
 
 interface AudioFile {
+  archivePalette?: ArchivePaletteId;
+  canEdit?: boolean;
+  archiveOwnerId?: string;
   id: string;
   uploads?: AudioFile[];
   name: string;
@@ -130,7 +134,9 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
   const [newComment, setNewComment] = useState('');
   const waveformRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
-  const adminName = accountUsers.find(user => user.id === 'adam')?.name || 'Admin';
+  const ownerId = file?.archiveOwnerId || 'adam';
+  const canRateOwner = currentUser?.id === ownerId || (ownerId === 'adam' && currentUser?.isAdmin && file?.canEdit);
+  const adminName = accountUsers.find(user => user.id === ownerId)?.name || 'Archive Admin';
 
   const handleUpdate = async () => {
     if (!file) return;
@@ -142,7 +148,7 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
         const committed = await mutateRecording<AudioFile>(id, { operation: 'metadata', changes });
         setFile(prev => prev ? { ...prev, ...committed } : prev);
       }
-      if (editMyRating !== (file.ratings?.adam ?? file.myRating)) await updateRating('adam', editMyRating);
+      if (canRateOwner && editMyRating !== (file.ratings?.[ownerId] ?? file.myRating)) await updateRating(ownerId, editMyRating);
     } catch {
       alert('Failed to update recording');
     }
@@ -158,7 +164,7 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
         setVibeOptions(prev => Array.from(new Set([...prev, ...(data.settings?.defaultVibes || [])])));
       });
 
-    fetch('/api/files?view=metadata')
+    fetch('/api/files?view=metadata&scope=accessible')
       .then(res => { if (!res.ok) throw new Error('Library unavailable'); return res.json(); })
       .then(async (files: AudioFile[]) => {
         const updatedFiles = files.map(f => ({ ...f, year: f.year || new Date().getFullYear() }));
@@ -174,7 +180,7 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
         if (f) {
           setEditInstruments(getTags(f, 'instruments', 'instrument'));
           setEditVibes(getTags(f, 'vibes', 'vibe'));
-          setEditMyRating(f.ratings?.adam || f.myRating);
+          setEditMyRating(f.ratings?.[f.archiveOwnerId || 'adam'] || f.myRating);
         }
       }).catch(() => setLoadError(true));
   }, [id]);
@@ -201,7 +207,8 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
   const playbackPeaks = file?.waveformPeaks;
   const playbackDuration = file?.waveformDuration;
   const playbackVersion = file?.waveformCacheVersion;
-  const playbackFile = useMemo(() => playbackId ? ({ id: playbackId, waveformPeaks: playbackPeaks, waveformDuration: playbackDuration, waveformCacheVersion: playbackVersion }) : null, [playbackId, playbackPeaks, playbackDuration, playbackVersion]);
+  const playbackPalette = file?.archivePalette;
+  const playbackFile = useMemo(() => playbackId ? ({ id: playbackId, waveformPeaks: playbackPeaks, waveformDuration: playbackDuration, waveformCacheVersion: playbackVersion, archivePalette: playbackPalette }) : null, [playbackId, playbackPeaks, playbackDuration, playbackVersion, playbackPalette]);
 
   useEffect(() => {
     const file = playbackFile;
@@ -211,7 +218,7 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
       wavesurferRef.current = WaveSurfer.create({
         container: waveformRef.current,
         waveColor: '#a3a3a3',
-        progressColor: '#5e9ec5',
+        progressColor: getArchivePalette(file.archivePalette).accent,
         interact: false, // Disable default interact to handle click manually
         backend: 'MediaElement',
         url: getPlaybackAudioUrl(file.id),
@@ -300,7 +307,7 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
   };
 
   return (
-    <div className="container mx-auto p-4 bg-background text-foreground min-h-screen">
+    <div className="container mx-auto p-4 bg-background text-foreground min-h-screen" style={archivePaletteStyle(file.archivePalette)}>
       <h1 className="text-2xl font-bold mb-4">{file.name}</h1>
       {playbackError && <p role="alert">{playbackError}</p>}
       <div ref={waveformRef} className="mb-4 cursor-pointer" onClick={(e) => {
@@ -325,12 +332,12 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
         <p className="text-muted-foreground">Vibe: {vibes.map(displayTag).join(', ') || 'None'}</p>
         <p className="text-muted-foreground">Finish: {file.finish || 'None'}</p>
         <p className="text-muted-foreground">Year: {file.year || 'N/A'}</p>
-        <p className="text-muted-foreground">{adminName}&apos;s Rating: {file.ratings?.adam || file.myRating}/5</p>
-        {currentUser && currentUser.id !== 'adam' && (
+        <p className="text-muted-foreground">{adminName}&apos;s Rating: {file.ratings?.[ownerId] || file.myRating}/5</p>
+        {currentUser && currentUser.id !== ownerId && (
           <p className="text-muted-foreground">Your Rating: {file.ratings?.[currentUser.id] || file.userRating}/5</p>
         )}
       </div>
-      {currentUser?.isAdmin && <div className="mb-4">
+      {file.canEdit && <div className="mb-4">
         <label className="block text-sm font-medium mb-2 text-foreground">Instrument</label>
         <div className="flex flex-wrap gap-2">
           {instrumentOptions.map(option => (
@@ -357,13 +364,13 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
             </button>
           ))}
         </div>
-        <label className="block text-sm font-medium mb-2 mt-2 text-foreground">{adminName}&apos;s Rating</label>
-        <RatingInput value={editMyRating} onChange={setEditMyRating} />
+        {canRateOwner && <><label className="block text-sm font-medium mb-2 mt-2 text-foreground">{adminName}&apos;s Rating</label>
+        <RatingInput value={editMyRating} onChange={setEditMyRating} /></>}
         <div className="mt-2 grid gap-2 sm:grid-cols-2">
-          {accountUsers.filter(user => user.id !== 'adam' && (file.ratings?.[user.id] || 0) > 0).map(user => (
+          {accountUsers.filter(user => user.id !== ownerId && (file.ratings?.[user.id] || 0) > 0).map(user => (
             <div key={user.id}>
               <label className="block text-sm font-medium mb-2 text-foreground">{user.name}</label>
-              <RatingInput value={file.ratings?.[user.id] || 0} onChange={(rating) => { void updateRating(user.id, rating).catch(() => alert('Failed to update rating')); }} />
+              {ownerId === 'adam' && currentUser?.isAdmin ? <RatingInput value={file.ratings?.[user.id] || 0} onChange={(rating) => { void updateRating(user.id, rating).catch(() => alert('Failed to update rating')); }} /> : <span>{file.ratings?.[user.id] || 0}/5</span>}
             </div>
           ))}
         </div>
@@ -371,7 +378,7 @@ export default function PlayerPage({ params }: { params: Promise<{ id: string }>
           Update
         </button>
       </div>}
-      {currentUser && !currentUser.isAdmin && (
+      {currentUser && !canRateOwner && (
         <div className="mb-4">
           <label className="block text-sm font-medium mb-2 text-foreground">Your Rating</label>
           <RatingInput value={file.ratings?.[currentUser.id] || file.userRating} onChange={(rating) => { void updateRating(currentUser.id, rating).catch(() => alert('Failed to update rating')); }} />

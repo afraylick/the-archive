@@ -1,3 +1,4 @@
+import { recordingAccess } from '@/lib/recording-access';
 import { getIndexedWaveform } from '@/lib/archive-index';
 import { updateArchive } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
@@ -15,11 +16,13 @@ interface AudioFileRecord {
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const accessError = recordingAccess(req, (await params).id, 'edit');
+  if (accessError) return accessError;
   const { id } = await params;
 
   try {
     const user = getSessionUser(req);
-    if (!user?.isAdmin) {
+    if (!user) {
       return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
     }
 
@@ -39,6 +42,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
 
     const generated = await generateServerWaveform(filePath);
+    const latestAccess = recordingAccess(req, id, 'edit');
+    if (latestAccess) return latestAccess;
     let found = false;
     updateArchive<AudioFileRecord>(current => {
       const currentFile = current.find(item => item.id === id);
@@ -69,6 +74,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const accessError = recordingAccess(req, (await params).id, 'read');
+  if (accessError) return accessError;
   if (!getSessionUser(req)) return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
   const { id } = await params;
   if (!isSafeStorageId(id)) return NextResponse.json({ error: 'Invalid id' }, { status: 400 });

@@ -1,3 +1,4 @@
+import { recordingAccess } from '@/lib/recording-access';
 import { getArchiveIndex } from '@/lib/archive-index';
 import { readAudioRange } from '@/lib/audio-range';
 import { getMp3Container, streamMp3Container } from '@/lib/mp3-mp4';
@@ -15,8 +16,8 @@ interface AudioFileRecord {
   originalName?: string;
 }
 
-const AUDIO_CACHE_CONTROL = 'private, max-age=86400, stale-while-revalidate=604800';
-const MOBILE_AUDIO_CACHE_CONTROL = 'private, max-age=604800, stale-while-revalidate=2592000';
+const AUDIO_CACHE_CONTROL = 'private, no-cache';
+const MOBILE_AUDIO_CACHE_CONTROL = 'private, no-cache';
 
 const getContentDisposition = (downloadName: string | undefined): Record<string, string> => {
   if (!downloadName) return {};
@@ -113,6 +114,8 @@ const getMobileAudioPath = async (sourcePath: string, id: string) => {
 };
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const accessError = recordingAccess(req, (await params).id, 'read');
+  if (accessError) return accessError;
   const { id } = await params;
 
   try {
@@ -140,6 +143,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     if (!downloadName && req.nextUrl.searchParams.get('format') === 'mp4' && path.extname(id).toLowerCase() === '.mp3') {
       try {
         const container = await getMp3Container(filePath);
+        const latestAccess = recordingAccess(req, id);
+        if (latestAccess) return latestAccess;
         if (container) return streamMp3Container(filePath, container, req.headers.get('range'));
       } catch (error) {
         console.error('MP3 sample indexing failed for', id, error);
@@ -151,6 +156,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     if (wantsMobileAudio && !downloadName) {
       try {
         const mobileAudioPath = await getMobileAudioPath(filePath, id);
+        const latestAccess = recordingAccess(req, id);
+        if (latestAccess) return latestAccess;
         if (mobileAudioPath) {
           return streamAudioFile(mobileAudioPath, 'audio/mpeg', req.headers.get('range'), MOBILE_AUDIO_CACHE_CONTROL, downloadName);
         }
@@ -159,6 +166,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       }
     }
 
+    const latestAccess = recordingAccess(req, id);
+    if (latestAccess) return latestAccess;
     return streamAudioFile(filePath, contentType, req.headers.get('range'), AUDIO_CACHE_CONTROL, downloadName);
   } catch {
     return NextResponse.json({ error: 'Audio stream failed' }, { status: 500 });

@@ -1,11 +1,12 @@
+import { canReadRecording } from '@/lib/archives';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
 import { readArchive, writeJsonAtomic } from '@/lib/json-storage';
 import { getDataFilePath } from '@/lib/storage';
-import { readCollections, writeCollections, collectionForUser, canAccessCollection, canEditCollection, cleanCollectionName, validateMemberIds, collectionTrackIds, collectionKeys } from '@/lib/collections';
+import { collectionArchiveId, readCollections, writeCollections, collectionForUser, canAccessCollection, canEditCollection, cleanCollectionName, validateMemberIds, collectionTrackIds, collectionKeys } from '@/lib/collections';
 
 type Context = { params: Promise<{ id: string }> };
-interface Recording { id: string; projectId?: string; collections?: string[] }
+interface Recording { id: string; trashedAt?: string; projectId?: string; collections?: string[] }
 
 export async function GET(req: NextRequest, context: Context) {
   const user = getSessionUser(req);
@@ -34,7 +35,7 @@ export async function PATCH(req: NextRequest, context: Context) {
     let filesUpdated = 0;
     if (settings) {
       if ('visibility' in body && body.visibility !== 'public' && body.visibility !== 'private') throw new Error('Choose public or private');
-      const members = 'memberIds' in body ? validateMemberIds(body.memberIds, collection.ownerId) : collection.memberIds;
+      const members = 'memberIds' in body ? validateMemberIds(body.memberIds, collection.ownerId, collectionArchiveId(collection)) : collection.memberIds;
       const name = 'name' in body ? cleanCollectionName(body.name) : collection.name;
       if (!name) throw new Error('A collection name is required');
       const existing = collections.find(item => item.id !== id && item.name === name);
@@ -55,8 +56,9 @@ export async function PATCH(req: NextRequest, context: Context) {
     } else if ('addSongId' in body || 'removeSongId' in body) {
       const adding = 'addSongId' in body;
       const songId = adding ? body.addSongId : body.removeSongId;
-      const record = records.find(record => record.id === songId);
+      const record = records.find(record => record.id === songId && !record.trashedAt);
       if (!record) throw new Error('Song not found');
+      if (adding && !canReadRecording(record, user)) return NextResponse.json({ error: 'Archive access is required to share this song' }, { status: 403 });
       const current = record.collections || [];
       record.collections = adding ? [...new Set([...current, collectionKeys(collection)[0]])] : current.filter(key => !collectionKeys(collection).includes(key));
       collection.trackOrder = collectionTrackIds(collection, records);

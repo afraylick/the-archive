@@ -1,3 +1,4 @@
+import { readArchives, canAccessArchive, DEFAULT_ARCHIVE_ACCOUNT_LIMIT } from './archives';
 import { getTaskLimiter } from './task-limiter';
 import { writeJsonAtomic } from '@/lib/json-storage';
 import { createHmac, timingSafeEqual, randomBytes, scrypt } from 'crypto';
@@ -16,6 +17,7 @@ export interface ArchiveUser {
   isAdmin: boolean;
   role: UserRole;
   lastLoginAt?: string;
+  archiveScopeId?: string;
 }
 
 export const SESSION_COOKIE = 'archive_session';
@@ -47,6 +49,12 @@ const getSecret = () => {
 const getCredentialMarker = () => path.join(getStorageRoot(), 'credentials-initialized.json');
 const getUsersFile = () => path.join(getStorageRoot(), 'users.json');
 const getAccountsFile = () => path.join(getStorageRoot(), 'accounts.json');
+const getRetiredIdsFile = () => path.join(getStorageRoot(), 'retired-user-ids.json');
+const readRetiredUserIds = (): string[] => {
+  const ids = readJsonFile<unknown>(getRetiredIdsFile(), []);
+  if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string')) throw new Error('Invalid retired account storage');
+  return ids;
+};
 const getLegacyUsersFile = () => path.join(process.cwd(), 'data/users.json');
 const getLegacyAccountsFile = () => path.join(process.cwd(), 'data/accounts.json');
 
@@ -118,7 +126,7 @@ const readCustomUsers = () => {
   const storageUsers = readJsonFile<ArchiveUser[]>(getAccountsFile(), []);
   const usersById = new Map<string, ArchiveUser>();
 
-  if (![legacyUsers, storageUsers].every(users => Array.isArray(users) && users.every(user => user && typeof user.id === 'string' && typeof user.name === 'string' && typeof user.isAdmin === 'boolean' && (user.role === undefined || ['owner', 'admin', 'member'].includes(user.role))))) throw new Error('Invalid account storage');
+  if (![legacyUsers, storageUsers].every(users => Array.isArray(users) && users.every(user => user && typeof user.id === 'string' && typeof user.name === 'string' && typeof user.isAdmin === 'boolean' && (user.role === undefined || ['owner', 'admin', 'member'].includes(user.role)) && (user.archiveScopeId === undefined || typeof user.archiveScopeId === 'string')))) throw new Error('Invalid account storage');
 
   [...legacyUsers, ...storageUsers]
     .filter(user => user.id && user.name)
@@ -138,7 +146,8 @@ const writeCustomUsers = (users: ArchiveUser[]) => {
 
 const getAllUsers = () => {
   const builtInUsers = getArchiveSettings().legacyDefaults ? LEGACY_USERS : CLEAN_USERS;
-  const customUsers = readCustomUsers().filter(user => user.id !== 'bobs');
+  const retired = new Set(readRetiredUserIds());
+  const customUsers = readCustomUsers().filter(user => user.id !== 'bobs' && !retired.has(user.id));
   const customIds = new Set(customUsers.map(user => user.id));
   return [
     ...builtInUsers.filter(user => !customIds.has(user.id)),
@@ -146,7 +155,7 @@ const getAllUsers = () => {
   ].map(user => {
     // The original production administrator remains the Owner even when a
     // legacy display-name override stores isAdmin:false or has no role field.
-    const role: UserRole = user.id === 'adam' ? 'owner' : user.role || (user.isAdmin ? 'admin' : 'member');
+    const role: UserRole = user.id === 'adam' ? 'owner' : user.archiveScopeId ? 'member' : user.role || (user.isAdmin ? 'admin' : 'member');
     return { ...user, role, isAdmin: role !== 'member' };
   });
 };
@@ -156,7 +165,20 @@ export const getPublicUsers = () => getAllUsers().map(user => ({
   name: user.name,
   isAdmin: user.isAdmin,
   role: user.role,
+  ...(user.archiveScopeId ? { archiveScopeId: user.archiveScopeId } : {}),
 }));
+
+/** Archive-only accounts and their account directory stay inside their assigned archive. */
+export const getUsersForViewer = (viewer: ArchiveUser | null) => {
+  if (!viewer) return getPublicUsers().filter(user => !user.archiveScopeId);
+  const archives = readArchives();
+  if (viewer.archiveScopeId) {
+    const archive = archives.find(a => a.id === viewer.archiveScopeId && canAccessArchive(a, viewer));
+    return archive ? getPublicUsers().filter(user => user.id === archive.ownerId || archive.memberIds.includes(user.id)) : [];
+  }
+  return getPublicUsers().filter(user => !user.archiveScopeId || viewer.isAdmin || archives.some(a => a.id === user.archiveScopeId && canAccessArchive(a, viewer)));
+};
+const canManageScopedAccount = (actor: ArchiveUser, target: ArchiveUser) => Boolean(target.archiveScopeId && readArchives().some(a => a.id === target.archiveScopeId && !a.deletingAt && a.ownerId === actor.id));
 
 /** Login history is only included by the administrative member endpoint. */
 export const getUserLastLogins = () => Object.fromEntries(getAllUsers().map(user => [
@@ -249,7 +271,7 @@ export const setUserPasscode = (userId: UserId, passcode: string, actorId?: User
     if (!target) throw new Error('User not found');
     if (actorId) {
       const actor = getUserById(actorId);
-      if (!actor || !canEditAccount(actor, target)) throw new Error('You cannot manage this account');
+      if (!actor || !canEditAccount(actor, target) && !canManageScopedAccount(actor, target)) throw new Error('You cannot manage this account');
     }
   };
   checkAccess();
@@ -269,7 +291,7 @@ const getUserIdFromName = (name: string) => {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 40) || 'user';
-  const existingIds = new Set([...getAllUsers().map(user => user.id), 'bobs']);
+  const existingIds = new Set([...getAllUsers().map(user => user.id), ...readArchives().flatMap(archive => [archive.ownerId, ...archive.memberIds]), ...readRetiredUserIds(), 'bobs']);
   let id = baseId;
   let suffix = 2;
   while (existingIds.has(id)) {
@@ -279,16 +301,30 @@ const getUserIdFromName = (name: string) => {
   return id;
 };
 
-export const createUser = (name: string, passcode: string, actorId?: UserId) => authLimiter().run(async () => {
-  const checkAccess = () => { if (actorId && !getUserById(actorId)?.isAdmin) throw new Error('Admin access required'); };
+export const createUser = (name: string, passcode: string, actorId?: UserId, archiveScopeId?: string) => authLimiter().run(async () => {
+  const checkAccess = () => {
+    if (archiveScopeId) {
+      const actor = actorId && getUserById(actorId);
+      const archive = readArchives().find(a => a.id === archiveScopeId);
+      if (!actor || actor.archiveScopeId || !archive || archive.deletingAt || archive.ownerId !== actor.id) throw new Error('Only the Archive Admin can create its accounts');
+      if (getPublicUsers().filter(user => user.archiveScopeId === archiveScopeId).length >= (archive.accountLimit ?? DEFAULT_ARCHIVE_ACCOUNT_LIMIT)) throw new Error('This archive has reached its account limit');
+    } else if (actorId && !getUserById(actorId)?.isAdmin) throw new Error('Admin access required');
+  };
   checkAccess();
   const cleanName = name.trim();
-  if (!cleanName) throw new Error('User name is required');
+  if (!cleanName || cleanName.length > 80) throw new Error('Enter a user name up to 80 characters');
   const cleanPasscode = validatePasscode(passcode);
   if (await passcodeInUse(cleanPasscode)) throw new Error('Password is already in use');
   const hashed = await hashPasscode(cleanPasscode);
   checkAccess();
-  const user: ArchiveUser = { id: getUserIdFromName(cleanName), name: cleanName, isAdmin: false, role: 'member' };
+  readArchives();
+  const user: ArchiveUser = { id: getUserIdFromName(cleanName), name: cleanName, isAdmin: false, role: 'member', ...(archiveScopeId ? { archiveScopeId } : {}) };
+  if (archiveScopeId) {
+    // Invite first: an interrupted credential/account write can leave only an unusable reserved ID.
+    const archives = readArchives();
+    archives.find(a => a.id === archiveScopeId)!.memberIds.push(user.id);
+    writeJsonAtomic(path.join(getStorageRoot(), 'archives.json'), archives);
+  }
   const hashes = readPasswordHashes();
   hashes[user.id] = hashed;
   writePasswordHashes(hashes);
@@ -320,6 +356,7 @@ export const setUserRole = (actorId: UserId, userId: UserId, role: 'admin' | 'me
   const actor = getUserById(actorId);
   const target = getUserById(userId);
   if (!actor || !target || !canChangeAccountRole(actor, target)) throw new Error('Only Owners can change member roles');
+  if (target.archiveScopeId && role !== 'member') throw new Error('Archive-only accounts cannot become site administrators');
   if (role !== 'admin' && role !== 'member') throw new Error('Role must be Admin or Member');
   const updated = { ...target, role, isAdmin: role === 'admin' };
   const stored = readCustomUsers();
@@ -331,12 +368,15 @@ export const setUserRole = (actorId: UserId, userId: UserId, role: 'admin' | 'me
 };
 
 export const deleteUser = (userId: UserId) => {
+  if (readArchives().some(archive => archive.ownerId === userId)) throw new Error('Delete the archive before removing its Archive Admin account');
   if (getUserById(userId)?.role === 'owner') throw new Error('Owner accounts cannot be deleted');
   if (BUILT_IN_USER_IDS.has(userId)) throw new Error('Built-in accounts cannot be deleted');
 
   const customUsers = readCustomUsers();
   const nextUsers = customUsers.filter(user => user.id !== userId);
   if (nextUsers.length === customUsers.length) throw new Error('User not found');
+  // Never let a replacement account inherit archive or collection grants.
+  writeJsonAtomic(getRetiredIdsFile(), [...new Set([...readRetiredUserIds(), userId])]);
   writeCustomUsers(nextUsers);
 
   const usersFile = getUsersFile();
@@ -346,6 +386,16 @@ export const deleteUser = (userId: UserId) => {
     fs.mkdirSync(path.dirname(usersFile), { recursive: true });
   }
   writeJsonAtomic(usersFile, hashes);
+};
+
+/** Retire IDs before removing credentials, including accounts loaded from legacy storage. */
+export const removeArchiveAccounts = (archiveId: string, plannedIds: string[]) => {
+  const ids = new Set([...plannedIds, ...readCustomUsers().filter(user => user.archiveScopeId === archiveId).map(user => user.id)].filter(id => !BUILT_IN_USER_IDS.has(id)));
+  writeJsonAtomic(getRetiredIdsFile(), [...new Set([...readRetiredUserIds(), ...ids])]);
+  writeCustomUsers(readCustomUsers().filter(user => !ids.has(user.id)));
+  const hashes = readPasswordHashes();
+  for (const id of ids) delete hashes[id];
+  writePasswordHashes(hashes);
 };
 
 const signSession = (userId: string, expiresAt: number, hash: string) => (
@@ -369,7 +419,7 @@ export const getUserFromSessionToken = (token: string | undefined) => {
     if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + SESSION_TTL_MS) return null;
     const user = getUserById(userId);
     const hash = getStoredPasswordHash(userId);
-    if (!user || !hash) return null;
+    if (!user || !hash || (user.archiveScopeId && !readArchives().some(archive => archive.id === user.archiveScopeId && !archive.deletingAt))) return null;
     return timingSafeEqualText(signature, signSession(userId, expiresAt, hash)) ? user : null;
   } catch {
     return null; // Unreadable credentials invalidate sessions as well as logins.

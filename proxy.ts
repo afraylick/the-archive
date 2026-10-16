@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { getUserFromSessionToken, SESSION_COOKIE } from './lib/auth';
 
 const PUBLIC_PATHS = ['/login', '/api/session'];
-const ADMIN_PATHS = ['/manage', '/users', '/upload', '/api/upload', '/api/users'];
+const ADMIN_PATHS = ['/users', '/api/users'];
 const SECURITY_HEADERS: Record<string, string> = {
   'Content-Security-Policy': "base-uri 'self'; object-src 'none'; frame-ancestors 'none'",
   'Permissions-Policy': 'camera=(), geolocation=(), microphone=()',
@@ -22,9 +22,8 @@ const isPublicPath = (pathname: string) => (
   PUBLIC_PATHS.some(path => pathname === path || pathname.startsWith(`${path}/`))
 );
 
-const isAdminPath = (pathname: string, method: string) => (
-  ADMIN_PATHS.some(path => pathname === path || pathname.startsWith(`${path}/`)) ||
-  (pathname.startsWith('/api/files/') && method === 'DELETE' && !/^\/api\/files\/[^/]+\/comments$/.test(pathname))
+const isAdminPath = (pathname: string) => (
+  ADMIN_PATHS.some(path => pathname === path || pathname.startsWith(`${path}/`))
 );
 
 export function proxy(request: NextRequest) {
@@ -45,7 +44,7 @@ export function proxy(request: NextRequest) {
     return withSecurityHeaders(NextResponse.redirect(loginUrl));
   }
 
-  if (isAdminPath(pathname, request.method) && !user.isAdmin) {
+  if (isAdminPath(pathname) && !user.isAdmin) {
     if (pathname.startsWith('/api/')) {
       return withSecurityHeaders(NextResponse.json({ error: 'Admin access required' }, { status: 403 }));
     }

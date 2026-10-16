@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { getDataFilePath } from './storage';
 
 type RecordData = { id: string; waveformPeaks?: number[][]; [key: string]: unknown };
-type Index = { path: string; signature: string; metadata: RecordData[]; byId: Map<string, RecordData>; waveforms: Map<string, Float64Array[]> };
+type Index = { path: string; signature: string; metadata: RecordData[]; allMetadata: RecordData[]; byId: Map<string, RecordData>; waveforms: Map<string, Float64Array[]> };
 const state = globalThis as typeof globalThis & { archiveReadIndex?: Index };
 const MAX_CACHED_PEAK_BYTES = 256 * 1024 * 1024;
 
@@ -13,7 +13,7 @@ export function getArchiveIndex(): Index {
   try { stat = fs.statSync(file); } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     state.archiveReadIndex = undefined;
-    return { path: file, signature: '', metadata: [], byId: new Map<string, RecordData>(), waveforms: new Map() };
+    return { path: file, signature: '', metadata: [], allMetadata: [], byId: new Map<string, RecordData>(), waveforms: new Map() };
   }
   const signature = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
   if (state.archiveReadIndex?.path === file && state.archiveReadIndex.signature === signature) return state.archiveReadIndex;
@@ -21,9 +21,9 @@ export function getArchiveIndex(): Index {
   if (!Array.isArray(data)) throw new Error('Invalid archive metadata');
   const waveforms = new Map<string, Float64Array[]>();
   let cachedBytes = 0;
-  const metadata = data.map(record => {
+  const allMetadata = data.map(record => {
     const { waveformPeaks, ...fields } = record;
-    if (Array.isArray(waveformPeaks) && waveformPeaks.every(channel => Array.isArray(channel))) {
+    if (!record.trashedAt && Array.isArray(waveformPeaks) && waveformPeaks.every(channel => Array.isArray(channel))) {
       const bytes = waveformPeaks.reduce((total, channel) => total + channel.length * 8, 0);
       if (cachedBytes + bytes <= MAX_CACHED_PEAK_BYTES) {
         waveforms.set(record.id, waveformPeaks.map(channel => Float64Array.from(channel)));
@@ -32,7 +32,8 @@ export function getArchiveIndex(): Index {
     }
     return { ...fields, waveformAvailable: Boolean(waveformPeaks) } as RecordData;
   });
-  const index: Index = { path: file, signature, metadata, byId: new Map(metadata.map(record => [record.id, record])), waveforms };
+  const metadata = allMetadata.filter(record => !record.trashedAt);
+  const index: Index = { allMetadata, path: file, signature, metadata, byId: new Map(metadata.map(record => [record.id, record])), waveforms };
   state.archiveReadIndex = index;
   return index;
 }

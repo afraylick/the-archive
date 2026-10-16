@@ -1,3 +1,5 @@
+import { canEditRecording, archiveForRecording } from '@/lib/archives';
+import { recordingAccess } from '@/lib/recording-access';
 import { privateRatingAccess } from '@/lib/collections';
 import { writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
@@ -14,6 +16,8 @@ interface AudioFileRecord {
 }
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const accessError = recordingAccess(req, (await params).id, 'read');
+  if (accessError) return accessError;
   const { id } = await params;
 
   try {
@@ -24,7 +28,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     const { rating, userId } = await req.json() as { rating?: number; userId?: UserId };
     const normalizedRating = Number.isFinite(rating) ? Math.max(0, Math.min(5, Math.round(rating || 0))) : 0;
-    const ratingUserId = user.isAdmin && userId && getUserById(userId) ? userId : user.id;
+
 
     const dataFile = getDataFilePath();
     const data: AudioFileRecord[] = fs.existsSync(dataFile)
@@ -36,6 +40,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
     const updatedFile = data[index];
+    const ownerId = archiveForRecording(updatedFile)?.ownerId || 'adam';
+    const ratingUserId = ownerId === 'adam' && canEditRecording(updatedFile, user) && user.isAdmin && userId && getUserById(userId) ? userId : user.id;
     updatedFile.ratings = updatedFile.ratings || {};
     updatedFile.ratingUpdatedAt = updatedFile.ratingUpdatedAt || {};
     updatedFile.ratings.adam = updatedFile.ratings.adam || updatedFile.myRating || 0;
@@ -47,12 +53,12 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     writeJsonAtomic(dataFile, data);
 
-    const showAllRatings = user.isAdmin || privateRatingAccess(req.nextUrl.searchParams.get('collection'), user, id);
+    const showAllRatings = canEditRecording(updatedFile, user) || privateRatingAccess(req.nextUrl.searchParams.get('collection'), user, id);
     return NextResponse.json({
       ratings: showAllRatings
         ? updatedFile.ratings
         : {
-            adam: updatedFile.ratings.adam || 0,
+            [ownerId]: updatedFile.ratings[ownerId] || 0,
             [user.id]: updatedFile.ratings[user.id] || 0,
           },
       myRating: updatedFile.ratings.adam || 0,
@@ -60,7 +66,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       ratingUpdatedAt: showAllRatings
         ? updatedFile.ratingUpdatedAt
         : {
-            adam: updatedFile.ratingUpdatedAt.adam || '',
+            [ownerId]: updatedFile.ratingUpdatedAt[ownerId] || '',
             [user.id]: updatedFile.ratingUpdatedAt[user.id] || '',
           },
     });

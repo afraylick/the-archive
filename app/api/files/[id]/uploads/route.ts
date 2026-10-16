@@ -1,3 +1,6 @@
+import { reserveUploadQuota } from '@/lib/upload-quota';
+import { recordingArchiveId, archiveForRecording, canEditRecording } from '@/lib/archives';
+import { recordingAccess } from '@/lib/recording-access';
 import { readCollections, collectionKeys, canAccessCollection, canEditCollection } from '@/lib/collections';
 import { cleanupStorageFile } from '@/lib/storage';
 import { receiveUpload, readUploadHeader, UploadError } from '@/lib/stream-upload';
@@ -21,6 +24,7 @@ interface AudioComment {
 
 interface AudioFileRecord {
   id: string;
+  archiveId?: string;
   projectId?: string;
   name?: string;
   originalName?: string;
@@ -104,8 +108,11 @@ const isSupportedAudioBuffer = (buffer: Buffer, extension: string) => {
 };
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const accessError = recordingAccess(req, (await params).id, 'archive');
+  if (accessError) return accessError;
   const { id: projectId } = await params;
 
+  let quota: ReturnType<typeof reserveUploadQuota> | undefined;
   let staged: Awaited<ReturnType<typeof receiveUpload>> | undefined;
   let uncommitted: string | undefined;
   try {
@@ -117,7 +124,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'Invalid project id' }, { status: 400 });
     }
 
-    staged = await receiveUpload(req, { files: 1, fileBytes: MAX_UPLOAD_FILE_BYTES, totalBytes: MAX_UPLOAD_FILE_BYTES, fileField: 'file' });
+    quota = reserveUploadQuota(user.id);
+    staged = await receiveUpload(req, { files: 1, fileBytes: MAX_UPLOAD_FILE_BYTES, totalBytes: MAX_UPLOAD_FILE_BYTES, fileField: 'file', onFileBytes: quota.addBytes });
     const file = staged.files[0];
     const notesValue = staged.fields.get('notes');
     if (!file || file.size === 0) return NextResponse.json({ error: 'Choose one audio file to upload' }, { status: 400 });
@@ -171,6 +179,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     } = {
       id: storageId,
       projectId,
+      archiveId: recordingArchiveId(project),
       name: project.name || file.name,
       originalName: file.name.slice(0, 255),
       instrument: project.instrument || '',
@@ -201,6 +210,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const editableKeys = new Set(collections.filter(collection => canAccessCollection(collection, user) && canEditCollection(collection, user)).flatMap(collectionKeys));
     upload.collections = (upload.collections || []).filter(key => editableKeys.has(key));
     let parentExists = false;
+    const latestAccess = recordingAccess(req, projectId, 'archive');
+    if (latestAccess) return latestAccess;
+    quota.assertCapacity();
     updateArchive<AudioFileRecord>(current => {
       parentExists = current.some(item => item.id === projectId && !item.projectId);
       return parentExists ? [...current, upload] : undefined;
@@ -211,12 +223,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
     uncommitted = undefined;
     const namesByKey = new Map(collections.flatMap(collection => collectionKeys(collection).map(key => [key, collection.name] as const)));
-    return NextResponse.json({ upload: { ...upload, collections: [...new Set((upload.collections || []).map(key => namesByKey.get(key)!))] } }, { status: 201 });
+    return NextResponse.json({ upload: { ...upload, canEdit: canEditRecording(upload, user), canUploadVersion: true, archiveOwnerId: archiveForRecording(upload)?.ownerId, collections: [...new Set((upload.collections || []).map(key => namesByKey.get(key)!))] } }, { status: 201 });
   } catch (error) {
     console.error(error);
     return NextResponse.json({ error: error instanceof UploadError ? error.message : 'Upload failed' }, { status: error instanceof UploadError ? error.status : 500 });
     } finally {
     if (uncommitted) cleanupStorageFile(uncommitted);
     staged?.cleanup();
+    quota?.release();
   }
 }

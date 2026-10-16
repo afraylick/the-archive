@@ -1,4 +1,5 @@
 'use client';
+import { archiveUrl } from '@/lib/recording-url';
 
 import { mutateRecording, type RecordingMutation, type MetadataChanges } from '@/lib/recording-mutations';
 
@@ -8,6 +9,7 @@ import { disposePlayer } from '@/lib/playback';
 import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
 
 interface AudioFile {
+  archiveOwnerId?: string;
   waveformAvailable?: boolean;
   id: string;
   projectId?: string;
@@ -370,7 +372,7 @@ const ManageWaveform = ({
   );
 };
 
-export default function AdvancedTools() {
+export default function AdvancedTools({ managedCollections }: { managedCollections: string[] }) {
   const [loadError, setLoadError] = useState(false);
   const [files, setFiles] = useState<AudioFile[]>([]);
   const [accountUsers, setAccountUsers] = useState<ArchiveUser[]>([]);
@@ -388,11 +390,12 @@ export default function AdvancedTools() {
   const [collectionStatus, setCollectionStatus] = useState('');
   const [collectionBusy, setCollectionBusy] = useState(false);
   const activeWaveSurferRef = useRef<WaveSurfer | null>(null);
-  const adminName = accountUsers.find(user => user.id === 'adam')?.name || 'Admin';
+  const ownerId = files[0]?.archiveOwnerId || 'adam';
+  const adminName = accountUsers.find(user => user.id === ownerId)?.name || 'Archive Admin';
   const accountNamesById = new Map(accountUsers.map(user => [user.id, user.name]));
 
   const fetchFiles = useCallback(() => {
-    fetch('/api/files?view=metadata')
+    fetch(archiveUrl('/api/files?view=metadata'))
       .then(res => { if (!res.ok) throw new Error('Library unavailable'); return res.json(); })
       .then(data => {
         setFiles(data);
@@ -413,13 +416,15 @@ export default function AdvancedTools() {
     const isVariation = Boolean(target?.projectId);
     const label = target?.originalName || target?.name || 'this file';
     if (!confirm(isVariation
-      ? `Delete the variation "${label}"? The main song will not be deleted.`
-      : `Delete the song project "${label}" and all of its variations?`
+      ? `Move the variation "${label}" to trash? The main song stays in your archive.`
+      : `Move "${label}" and all of its versions to trash? They will be removed from collections.`
     )) return;
     try {
       const res = await fetch(`/api/files/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (res.ok) {
         setFiles(prev => removeManagedFile(prev, id));
+        window.dispatchEvent(new Event('storage-changed'));
+        window.dispatchEvent(new Event('recordings-changed'));
       } else {
         alert('Failed to delete');
       }
@@ -647,14 +652,16 @@ export default function AdvancedTools() {
   };
 
   const deleteAll = async () => {
-    const confirmation = prompt('Type DELETE to permanently delete ALL files.');
-    if (confirmation !== 'DELETE') return;
+    const confirmation = prompt('Type TRASH to move all recordings in this archive to recoverable trash. They will be removed from collections.');
+    if (confirmation !== 'TRASH') return;
     try {
       const responses = await Promise.all(files.map(file => fetch(`/api/files/${encodeURIComponent(file.id)}`, { method: 'DELETE' })));
       if (responses.some(res => !res.ok)) {
         throw new Error('Some files could not be deleted');
       }
       setFiles([]);
+      window.dispatchEvent(new Event('storage-changed'));
+      window.dispatchEvent(new Event('recordings-changed'));
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Error deleting files');
       fetchFiles(); // Refresh in case of partial failure
@@ -796,7 +803,7 @@ export default function AdvancedTools() {
     formData.append('file', metadataFile);
 
     try {
-      const res = await fetch('/api/finder-tags/import', {
+      const res = await fetch(archiveUrl('/api/finder-tags/import'), {
         method: 'POST',
         body: formData,
       });
@@ -836,7 +843,7 @@ export default function AdvancedTools() {
       String(candidate.year || '').includes(normalizedSearch)
     ));
   });
-  const collectionOptions = Array.from(new Set(getAllManagedFiles(files).flatMap(file => file.collections || []))).sort((a, b) => a.localeCompare(b));
+  const collectionOptions = [...managedCollections].sort((a, b) => a.localeCompare(b));
   const waveformBulkProgress = waveformBulkStatus.match(/(\d+)\/(\d+)/);
   const waveformBulkDone = waveformBulkProgress ? Number(waveformBulkProgress[1]) : 0;
   const waveformBulkTotal = waveformBulkProgress ? Number(waveformBulkProgress[2]) : 0;
@@ -854,7 +861,7 @@ export default function AdvancedTools() {
             className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition"
             disabled={files.length === 0}
           >
-            Delete All Files
+            Move all recordings to trash
           </button>
           <button
             onClick={cullAllWaveforms}
@@ -1056,7 +1063,7 @@ export default function AdvancedTools() {
                   </p>
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <span>{adminName}&apos;s Rating:</span>
-                    <RatingInput value={file.ratings?.adam || file.myRating} onChange={(rating) => updateRating(file.id, 'adam', rating)} />
+                    <RatingInput value={file.ratings?.[file.archiveOwnerId || ownerId] || file.myRating} onChange={(rating) => updateRating(file.id, file.archiveOwnerId || ownerId, rating)} />
                   </div>
                   <div className="mt-1 grid gap-1 text-muted-foreground sm:grid-cols-2">
                     {accountUsers.filter(user => user.id !== 'adam' && (file.ratings?.[user.id] || 0) > 0).map(user => (
@@ -1113,7 +1120,7 @@ export default function AdvancedTools() {
                       onClick={() => deleteFile(file.id)}
                       className="rounded bg-red-500 px-3 py-2 text-sm text-white hover:bg-red-600"
                     >
-                      Delete
+                      Move to trash
                     </button>
                   </div>
                   <ManageWaveform
@@ -1245,14 +1252,14 @@ export default function AdvancedTools() {
                                 onClick={() => deleteFile(variation.id)}
                                 className="rounded bg-red-500 px-3 py-2 text-sm text-white hover:bg-red-600"
                               >
-                                Delete Variation
+                                Move version to trash
                               </button>
                             </div>
                             <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm text-muted-foreground">
                               <span>Waveform: {hasAvailableWaveform(variation) ? 'Cached' : 'Not cached'}</span>
                               <span className="flex items-center gap-2">
                                 {adminName}&apos;s Rating:
-                                <RatingInput value={variation.ratings?.adam || variation.myRating} onChange={(rating) => updateRating(variation.id, 'adam', rating)} />
+                                <RatingInput value={variation.ratings?.[variation.archiveOwnerId || ownerId] || variation.myRating} onChange={(rating) => updateRating(variation.id, variation.archiveOwnerId || ownerId, rating)} />
                               </span>
                             </div>
                             <div className="mt-1 grid gap-1 text-sm text-muted-foreground sm:grid-cols-2">

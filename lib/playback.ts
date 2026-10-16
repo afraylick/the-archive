@@ -1,3 +1,4 @@
+import { recordingUrl } from '@/lib/recording-url';
 import type WaveSurfer from 'wavesurfer.js';
 
 const pendingSeeks = new WeakMap<WaveSurfer, () => void>();
@@ -21,12 +22,12 @@ export const needsMp3SampleTable = (id: string, userAgent: string) => /\.mp3$/i.
 
 /** Shared by the library and management players, including mobile/Firefox formats. */
 export const getPlaybackAudioUrl = (id: string) => {
-  const baseUrl = `/api/files/${encodeURIComponent(id)}/audio`;
+  const baseUrl = recordingUrl(`/api/files/${encodeURIComponent(id)}/audio`);
   if (typeof navigator === 'undefined') return baseUrl;
-  if (needsMp3SampleTable(id, navigator.userAgent)) return `${baseUrl}?format=mp4`;
+  if (needsMp3SampleTable(id, navigator.userAgent)) return `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}format=mp4`;
   const mobile = /Android|webOS|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
     || (/Macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
-  return mobile ? `${baseUrl}?format=mobile` : baseUrl;
+  return mobile ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}format=mobile` : baseUrl;
 };
 
 /** The media clock is authoritative; cached/decoded duration is only a startup fallback. */

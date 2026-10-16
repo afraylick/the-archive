@@ -20,6 +20,7 @@
 # production
 /build
 /data
+/.checkpoints/
 
 # misc
 .DS_Store

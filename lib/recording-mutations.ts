@@ -1,3 +1,5 @@
+import { recordingUrl } from './recording-url';
+
 export interface MetadataChanges {
   name?: string;
   originalName?: string;
@@ -16,7 +18,7 @@ export type RecordingMutation =
 
 /** Return only the committed fields; callers merge them into their latest state. */
 export async function mutateRecording<T>(id: string, mutation: RecordingMutation): Promise<Partial<T>> {
-  const response = await fetch(`/api/files/${encodeURIComponent(id)}`, {
+  const response = await fetch(recordingUrl(`/api/files/${encodeURIComponent(id)}`), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(mutation),

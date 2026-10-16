@@ -1,3 +1,4 @@
+import { readArchives, canReadRecording } from '@/lib/archives';
 import { writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import {
@@ -22,6 +23,7 @@ interface AudioComment {
 
 interface AudioFileRecord {
   id: string;
+  trashedAt?: string;
   name: string;
   ratings?: Partial<Record<UserId, number>>;
   ratingUpdatedAt?: Partial<Record<UserId, string>>;
@@ -48,8 +50,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
   }
 
-  const files = readFiles();
+  const archiveSnapshot = readArchives();
+  const files = readFiles().filter(file => !file.trashedAt && canReadRecording(file, user, archiveSnapshot));
   const lastLogins = getUserLastLogins();
+  const ownedArchiveIds = new Set(archiveSnapshot.map(archive => archive.ownerId));
   const users = getPublicUsers().map(account => {
     const ratedSongs = files
       .filter(file => (file.ratings?.[account.id] || 0) > 0)
@@ -62,11 +66,12 @@ export async function GET(req: NextRequest) {
 
     return {
       ...account,
+      isArchiveAdmin: ownedArchiveIds.has(account.id),
       lastLoginAt: lastLogins[account.id],
       permissions: {
         canEdit: canEditAccount(user, account),
-        canChangeRole: canChangeAccountRole(user, account),
-        canDelete: canDeleteAccount(user, account),
+        canChangeRole: canChangeAccountRole(user, account) && !account.archiveScopeId,
+        canDelete: canDeleteAccount(user, account) && !ownedArchiveIds.has(account.id),
       },
       stats: {
         ratingCount: ratedSongs.length,

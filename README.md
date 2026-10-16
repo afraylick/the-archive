@@ -27,7 +27,7 @@ It combines browser-based batch uploads, waveform playback, metadata and collect
 - Multiple instrument tags, multiple vibe tags, and multiple collections per recording.
 - Finish categories for `Tracked`, `Recorder`, and `Voice Memo`, plus compatibility with Finish values already stored in an archive.
 - Recording year and full recorded date, upload date, original filename, notes, Finder color tags, and cached waveform data.
-- One-to-five-star ratings for the Admin and each member.
+- One-to-five-star ratings for the Archive Admin and each member.
 - Per-user likes.
 - Comments with optional playhead timestamps or manually entered timecodes.
 - Optional ZIP attachment for stems or other supporting files.
@@ -35,7 +35,7 @@ It combines browser-based batch uploads, waveform playback, metadata and collect
 
 ### Uploading
 
-- Admin-only browser page for uploading batches of new audio projects.
+- Archive Admins can upload batches of new audio projects to their selected archive.
 - Drag and drop across the entire upload page, or use the file picker.
 - Queue multiple files and remove unwanted entries before submitting.
 - Apply instruments, vibes, collections, Finish, and a fallback rating to the whole queue.
@@ -44,7 +44,7 @@ It combines browser-based batch uploads, waveform playback, metadata and collect
 - Upload progress and status display.
 - Drop an optional Finder-tag JSON file with the audio; the JSON is selected automatically but the batch is not submitted automatically.
 - Finder import and color-to-rating logic remain implemented; the dedicated Finder controls are hidden from the upload UI for now. Manual batch and per-file ratings remain available.
-- Any authenticated user can attach a new version to an existing song project from its card. Versions retain their own source filename, uploader, upload date, notes, comments, ratings, and likes.
+- Any user with source archive access can attach a new version to an existing song project from its card. Versions retain their own source filename, uploader, upload date, notes, comments, ratings, and likes.
 
 ### Playback
 
@@ -52,7 +52,7 @@ It combines browser-based batch uploads, waveform playback, metadata and collect
 - Cached waveform peaks for quick loading and lower browser decoding cost.
 - Only one recording plays at a time.
 - Select the original or any uploaded version directly from the song card.
-- Admin-selectable default version for each song project.
+- Archive Admin-selectable default version for each song project.
 - Time-coded comment markers displayed directly over the waveform.
 - Persistent mini-player with play/pause, seeking, volume, and stop/repeat/continue-to-next modes.
 - Browser Media Session integration for play, pause, previous, next, seek, and lock-screen metadata when supported.
@@ -76,6 +76,40 @@ It combines browser-based batch uploads, waveform playback, metadata and collect
 - Collection selection creates a focused collection view and resets unrelated filters.
 - Clean installations start with no Finish filter selected, so every recording is visible. Legacy installations retain their previous default Finish selection.
 
+### Separate personal archives
+
+The styled archive title is a dropdown containing only archives the current account can browse. Regular site accounts without an archive can choose **Create your archive** and select initial user access on the same screen. Archive-only accounts stay in their assigned archive. Each account owns at most one archive; new archives are private. Archive Admins choose existing accounts in **Manage → Archive Settings** and can rename their archive there. Existing accounts retain access to Adam’s archive during the initial migration; accounts created afterward need an invitation. Legacy recordings remain in Adam’s archive without rewriting or moving audio.
+
+Uploads, tags, notes, versions, and management are scoped to the selected archive. The archive dropdown contains selection and creation only. Manage starts with Archive Settings (name, access, deletion), Accounts, and archive recording tools. Non-site Archive Admins can open Manage only for their own archive; direct visits to another archive’s Manage page redirect back to browsing. Site administrators retain the site-account controls, with archive tools shown only where authorized. Manage’s collection catalog is limited to the selected archive. Archive Admins manage their archive without a site Admin role. Invited listeners can browse, rate, comment, and upload alternate versions; they can edit their own versions. Archive Admins can edit or delete all recordings in their archive. Versions stay in their parent’s archive. Site Admin status does not automatically grant browsing or editing access to someone else’s archive. Existing Admin management of Adam’s archive is preserved when they have archive access. Site account administrators remain trusted because they can reset Member passwords.
+
+The pane above the recordings has **Activity / Inbox** controls in its upper-left corner. Only the selected archive’s Archive Admin sees Activity; it covers ratings and comments on their originals and versions. Everyone else sees Inbox only, including site administrators browsing someone else’s archive. The personal inbox works for all accounts, including Archive Admins, across the archives they can browse. Archive Admins and uploaders can send a recording to another account that already has source archive access. Sending does not grant access; use a collection to share individual recordings outside an archive. Inbox links open the correct source archive.
+
+Collections may combine songs from different archives. Their add-song picker searches every archive the user can browse. A collection grants access only to its included recordings, including their notes, comments, waveform, audio/download, and attached stems. A version shared alone appears without its unshared parent or siblings. Collection access never adds the source archive to the archive dropdown or the normal library. Collection-only listeners cannot edit source metadata, add versions, or reshare those recordings into other collections. People with source archive access can add its recordings to collections they can edit, so invite trusted collaborators.
+
+New collections default to private; explicitly public collections are available to every signed-in account on the site. Removing archive access blocks browsing and future direct audio requests, but independent collection grants remain until the recordings or recipient are removed from those collections. Already downloaded audio cannot be recalled. Audio responses revalidate authorization rather than trusting a long browser cache lifetime.
+
+`archives.json` stores archive administration and membership beside `data.json`, `collections.json`, account credentials, and `inbox.json`. The site does not create or maintain backups. Existing recording IDs and URLs remain unchanged; new uploads carry an `archiveId`. `retired-user-ids.json` permanently reserves deleted account IDs, preventing replacement accounts from inheriting archive access, collection invitations, or uploads. It remains part of the persistent account data. `retired-archive-ids.json` prevents replacement archives from reusing deleted IDs; `archive-deletions/` holds cleanup manifests only while deletion is unfinished.
+
+Before this collaborative change, the local project was saved at Git tag `checkpoint/pre-collaborative-2026-10-16` (commit `c0951d8`). `.checkpoints/pre-collaborative-2026-10-16/` contains a verified repository bundle, the untracked context file, a verified local data/audio copy, and `RESTORE.txt`. Checkpoints are ignored by Git and excluded from deployment traces. This is a local rollback copy; remote production data requires its own backup.
+
+### Archive color palettes
+
+**Manage → Archive Settings → Color palette** offers Blue (default), Cyan, Teal, Green, Amber, Coral, Rose, and Violet. The picker appears below archive access. The Archive Admin can preview the complete theme before saving it for everyone. Existing archives default to Blue without a migration. Each archive keeps its own coordinated backgrounds, pane surfaces, borders, fields, and text colors. All eight retain comparable dark-theme lightness and contrast; semantic status and personal-rating colors remain distinct. The setting follows the library, Manage, Upload, and standalone player. Collections use their collection archive’s palette, including mixed-archive playlists and collection-only access. Only the Archive Admin may change it; a site role alone does not grant this permission.
+
+### Trash, storage limits, and archive-only accounts
+
+**Manage → Trash** lists deleted recordings that you can manage. Moving a song to trash retains its original audio, stems, metadata, ratings, and comments, and moves its active versions with it. The library, audio endpoints, inbox, and collections hide trashed recordings. Collection memberships and playlist positions are cleared on deletion. **Restore** returns recordings to the archive only; add them to collections manually. Previously trashed versions stay in trash when restoring their parent. Restore the parent before restoring a separately trashed version.
+
+Trash has no automatic expiration. **Delete permanently** in Trash requires typed confirmation and removes the recording’s media, stems, and generated mobile audio. Archive Admins and uploaders can restore or permanently delete recordings they can manage. This is recoverable deletion, not a backup service; the site does not maintain backups.
+
+Every user has a **5 GB (5 GiB) total upload quota**, across archives. Original audio, alternate versions, stem ZIPs, and trash count toward the uploader’s limit; legacy recordings without an uploader are charged to their Archive Admin. Generated waveform/transcode caches do not count. Usage is shown in Upload and Manage. Upload streaming reserves space across concurrent requests, and failed uploads release reservations and staging files. Replacing a stem ZIP credits that user’s previous ZIP without allowing simultaneous replacements to claim the same space. Existing recordings above the quota remain intact; further uploads require freeing space. Moving recordings to trash does not free space; permanent deletion does.
+
+Archive Admins can open **Manage → Accounts** to create accounts for that archive only. These accounts can browse, comment, rate, and upload versions in their assigned archive. They cannot create an archive, enter another archive, become site administrators, or use public collections belonging to another archive. They may use the assigned archive’s shared collections, including explicitly shared cross-archive recordings within those collections. Archive Admins can reset these accounts’ passwords and remove them. Removing an archive-only account revokes its sessions while retaining recordings and comments. Existing site-account invitations are separate.
+
+Each archive can create **10 archive-only accounts by default**, excluding its Archive Admin and existing site users invited to it. The **site Owner** sets a per-archive limit from 0 to 100 in **Members & access → Site archives**. Lowering the limit blocks new accounts without removing existing ones. Account creation checks the limit again after password hashing, including concurrent requests. Removed account IDs remain retired.
+
+Archive Admins cannot leave an existing archive, but can permanently delete it through **Manage → Archive Settings → Delete archive**. The site **Owner** can delete any archive through **Members & access → Site archives**, without an archive invitation. Site Admins have no such global deletion permission. Deletion requires the exact archive name and removes recordings, versions, trash, stems, generated audio, that archive’s collections, and archive-only accounts. Songs disappear from surviving mixed collections; other archives and global site accounts remain. This is permanent and bypasses recording trash. An interrupted deletion closes the archive and can be retried from either control. Replacement archives receive a fresh ID. The Owner account remains protected even if its archive is deleted. Account and quota checks run on the server; hiding controls alone does not grant or deny access. Resharing permissions remain unchanged.
+
 ### Collaboration
 
 - Individual member ratings while retaining a distinct Admin rating.
@@ -85,8 +119,8 @@ It combines browser-based batch uploads, waveform playback, metadata and collect
 - Clicking a time-coded comment seeks to that moment and starts playback.
 - Users can delete their own comments.
 - Every member can create a public or private collection. Owners and invited members can edit playlist songs; everyone with access can comment.
-- All authenticated users can upload alternate versions to an existing project.
-- Admin activity feed for ratings and comments from other users.
+- People with source archive access can upload alternate versions to an existing project.
+- Activity feeds in each Archive Admin’s archive, alongside a personal inbox for every account.
 
 ### Administration
 
@@ -112,7 +146,7 @@ It combines browser-based batch uploads, waveform playback, metadata and collect
 ### User management
 
 - A single protected Owner account on clean installations; existing installations automatically recognize the original administrator (`adam`) as Owner.
-- Admin-created member accounts; there is no public registration flow.
+- Admin-created site accounts and Archive Admin-created archive-only accounts; there is no public registration flow.
 - Editable display names without changing the stable internal IDs used by ratings, likes, comments, and upload history.
 - Owners can promote Members to Admin or demote Admins from **Members & access → Access role**.
 - Admins can manage Member accounts and their own name/password, but cannot change roles or edit, reset passwords for, or delete other Admin or Owner accounts.
@@ -130,25 +164,28 @@ It combines browser-based batch uploads, waveform playback, metadata and collect
 
 ## Accounts and permissions
 
-The application has three roles: Owner, Admin, and Member. The original administrator's stable ID (`adam`) automatically receives Owner access when this version is deployed, including existing production installations and renamed accounts. Passwords, session cookies, and interaction history are preserved. New accounts start as Members.
+The application has three site roles: Owner, Site Admin, and Member; Archive Admin is a separate archive-specific designation. The original administrator's stable ID (`adam`) automatically receives Owner access when this version is deployed, including existing production installations and renamed accounts. Passwords, session cookies, and interaction history are preserved. New accounts start as Members.
 
-| Capability | Owner | Admin | Member |
+| Capability | Owner | Site Admin | Member |
 | --- | --- | --- | --- |
-| Browse, filter, play, and download audio or stems | Yes | Yes | Yes |
+| Browse, filter, play, and download audio or stems | With archive/collection access | With archive/collection access | With archive/collection access |
 | Rate, like, and comment; delete own comments | Yes | Yes | Yes |
 | Create collections or upload alternate versions | Yes | Yes | Yes |
 | Edit playlist songs | Creator or invited | Creator or invited | Creator or invited |
 | Manage collection privacy and sharing | Creator | Creator | Creator |
-| Upload new song projects in bulk | Yes | Yes | No |
-| Edit projects, tags, notes, or another user's rating | Yes | Yes | No |
-| Manage stems, waveforms, and files | Yes | Yes | No |
-| View archive-wide activity and user summaries | Yes | Yes | No |
+| Upload new song projects in bulk | In own archive | In own archive; legacy Adam access | In own archive |
+| Edit own archive’s projects, tags, and notes | Yes | Yes | Yes |
+| Edit another account’s ratings | Legacy Adam archive | Legacy Adam archive with access | No |
+| Manage stems, waveforms, and files | Own archive | Own archive; legacy Adam access | Own archive or own uploaded version |
+| View own archive’s activity | Yes | Yes | Yes |
 | Create and manage Member accounts | Yes | Yes | No |
 | Edit own name and password | Yes | Yes | No |
 | Manage other Admin or Owner accounts | Yes | No | No |
-| Promote Members to Admin or demote Admins | Yes | No | No |
+| Promote Members to Site Admin or demote Site Admins | Yes | No | No |
+| Delete any archive | Yes | No | No |
+| Delete own archive as Archive Admin | Yes | Yes | Yes |
 
-Only Owners change roles. Owner access is protected from demotion and deletion. Built-in legacy accounts cannot be deleted. Deleting a custom account also removes its ratings, likes, and comments, so back up the archive before deleting an account whose history may be needed.
+These roles govern site accounts; archive administration is separate. Only Owners change site roles. Owner access is protected from demotion and deletion. Built-in legacy accounts and accounts owning an archive cannot be deleted. Deleting a custom account also removes its ratings, likes, and comments, so back up the archive before deleting an account whose history may be needed.
 
 ## Requirements
 
@@ -221,11 +258,11 @@ The default Owner's stable internal ID is `adam` for data-schema compatibility. 
 
 ## Collections
 
-Collections are playlists with their own pages at `/collections/[id]`. Open the collapsible **Collections** panel below the library search to browse accessible playlists or create one. Every signed-in member can create a collection; new collections are public to everyone signed into this archive by default. Public does not bypass the archive login.
+Collections are playlists with their own pages at `/collections/[id]`. Open the collapsible **Collections** panel below the library search to browse accessible playlists or create one. Every signed-in member can create a collection; new collections are private by default. Explicitly public collections are available to every signed-in account on the site. Public does not bypass login.
 
 The creator can rename a collection, make it private, and invite or remove existing archive members through **Sharing & settings**. Only the creator and invited members can add, remove, or reorder songs. Anyone with access can rate songs and join the collection conversation above the playlist. Private collection members can see everyone's song ratings within that collection; ordinary library and public collection rating visibility stays the same. Private collections and their conversations are hidden from uninvited accounts, including administrators.
 
-Existing collection tags appear as public playlists owned by the original archive owner. Their recording memberships and stable page URLs survive renaming. Collection metadata, sharing, playlist order, and chat are stored in `collections.json` beside `data.json`; include both in archive backups. Removing a song from a collection never deletes its audio or library entry.
+Existing collection tags appear as public playlists owned by the original Archive Admin. Their recording memberships and stable page URLs survive renaming. Collection metadata, sharing, playlist order, and chat are stored in `collections.json` beside `data.json`; include both in archive backups. Removing a song from a collection never deletes its audio or library entry.
 
 ## Configuration
 
@@ -310,7 +347,7 @@ Your web server, proxy, platform, or browser may impose smaller request-size and
 
 ### Uploading new projects
 
-Only the Admin can open **Upload** and create new top-level song projects.
+Archive Admins can open **Upload** and create new top-level song projects in their own archive. Existing Admins retain this capability in Adam’s archive when they have access.
 
 1. Drag supported audio anywhere onto the page or click the selection box.
 2. Optionally include one Finder JSON export in the same drop.
@@ -342,9 +379,9 @@ Review the queue before upload and click the selected Finish to clear it or choo
 
 ### Organizing recordings
 
-- Admins can rename a project by using the edit control beside its title.
-- Admins can add or remove instrument and vibe tags from a song card.
-- Admin notes are editable by the Admin and readable by members when present.
+- Archive Admins can rename a project by using the edit control beside its title.
+- Archive Admins and the recording’s uploader can add or remove instrument and vibe tags from a song card.
+- Recording notes are editable by the Archive Admin or uploader and readable with recording access, including collection grants.
 - Every user can create a collection from the Collections panel or a song card. Owners and invited members can add recordings to their playlists.
 - Admins can rename or remove a collection globally from **Manage**.
 - Finish and year can be changed from **Manage** for originals and variations.
@@ -369,15 +406,15 @@ Every authenticated user can open **Upload** on a song card and attach one suppo
 - starts with independent notes, comments, ratings, and likes; and
 - can be selected from the version menu on the main page.
 
-The Admin can choose which version is selected by default and can edit or delete each variation independently. Deleting the parent project deletes all attached versions.
+The Archive Admin can choose which version is selected by default and can edit or delete each variation independently. Deleting the parent project deletes all attached versions.
 
 ### Stems
 
-From **Manage**, the Admin can attach one ZIP file to an original or variation. Uploading another ZIP replaces the previous attachment. Any authenticated user can download the current stems ZIP from the song card.
+From **Manage**, the Archive Admin can attach one ZIP file to an original or variation. Uploading another ZIP replaces the previous attachment. Anyone with recording access can download the current stems ZIP from the song card.
 
 ### Waveforms
 
-Waveforms are cached in `data.json` rather than stored as image files. They are normally generated during upload. The Admin can regenerate or remove an individual cache, rebuild every waveform, or cull all cached waveforms from **Manage**.
+Waveforms are cached in `data.json` rather than stored as image files. They are normally generated during upload. The Archive Admin can regenerate or remove an individual cache, rebuild every waveform, or cull all cached waveforms from **Manage**.
 
 Stage 4 uses waveform cache version 6. Earlier caches are ignored because mobile placeholder peaks may have been saved as audio. After deploying, reload open pages and use **Manage → Regenerate All Waveforms**. Keep that page open until it reports completion; failed items retain their previous saved data and can be retried individually. Regeneration updates only waveform peaks, duration, and cache version; it preserves recordings, metadata, ratings, likes, and comments. Do not cull caches first. Desktop playback can regenerate missing caches from decoded audio; mobile playback can stream while awaiting an Admin regeneration and must never save its display placeholder as audio.
 
@@ -568,11 +605,11 @@ are not application caches or deployment assets.
 - Recording edits update only explicitly submitted fields. Older open pages using the retired whole-record save must be reloaded after updating the application.
 - Attachment replacement and deletion commit metadata before cleaning up old files; cleanup failures are logged and may leave unreferenced files on disk.
 - Run one application process against a storage directory. Multiple replicas or concurrent writers can overwrite one another because there is no database transaction or distributed lock layer.
-- This architecture is best suited to a personal archive or a small trusted group, not an untrusted public upload service or a horizontally scaled deployment.
+- This architecture suits a small trusted group sharing separate personal archives. Keep a single server process for now. Upload quotas, archive-only account limits, retained ownership, and recoverable trash are enforced. Resharing by people with source archive access is allowed. The site does not maintain backups. A transactional database is appropriate before adding server replicas or sustained concurrent traffic.
 - All library pages and file endpoints require authentication; there is no anonymous public-sharing mode.
 - There is no self-registration, email recovery, or automatic password-reset flow. The Admin manages accounts directly.
 - Fresh installations require an explicitly configured initial password; there is no built-in `admin` password.
-- Account deletion removes that member's interaction history. File and project deletion removes audio from disk and is not recoverable without a backup.
+- Site-account deletion removes that member's interaction history; owners cannot be deleted. Removing archive-only accounts preserves history. File and project deletion moves recordings to recoverable trash; permanent deletion from Trash cannot be undone.
 - Large uploads are read and processed by the Node.js application, so memory, request limits, proxy timeouts, and available disk space must be sized accordingly.
 - Review [SECURITY.md](SECURITY.md) before exposing an archive to the internet.
 

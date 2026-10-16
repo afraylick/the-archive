@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const inside = (file, dir) => file === dir || file.startsWith(`${dir}${path.sep}`);
 const canonical = file => fs.existsSync(file) ? fs.realpathSync(file) : path.resolve(file);
-const privateNames = new Set(['users.json', 'accounts.json', 'credentials-initialized.json', 'login-attempts.json', 'archive-settings.json', 'data.json', 'SONGIE_CHATGPT_CONTEXT.md']);
+const privateNames = new Set(['users.json', 'accounts.json', 'retired-user-ids.json', 'retired-archive-ids.json', 'credentials-initialized.json', 'login-attempts.json', 'archive-settings.json', 'archives.json', 'collections.json', 'inbox.json', 'data.json', 'SONGIE_CHATGPT_CONTEXT.md']);
 
 export function inspectBuild(root, storageRoot) {
   root = path.resolve(root);
@@ -17,7 +17,7 @@ export function inspectBuild(root, storageRoot) {
     const relative = path.relative(root, resolved);
     const segments = relative.split(path.sep);
     const name = path.basename(resolved);
-    if (privateRoots.some(dir => inside(resolved, dir)) || segments.includes('.git') || /^\.env(?:\.|$)/.test(name) || /\.(?:pem|key)$/i.test(name) || privateNames.has(name) || (!segments.includes('node_modules') && /\.(?:wav|mp3|flac|aiff?|m4a|aac|ogg|zip)$/i.test(name))) {
+    if (privateRoots.some(dir => inside(resolved, dir)) || (segments.includes('.git') || segments.includes('.checkpoints') || segments.includes('archive-deletions')) || /^\.env(?:\.|$)/.test(name) || /\.(?:pem|key)$/i.test(name) || privateNames.has(name) || (!segments.includes('node_modules') && /\.(?:wav|mp3|flac|aiff?|m4a|aac|ogg|zip)$/i.test(name))) {
       findings.add(path.relative(root, file));
     }
   };

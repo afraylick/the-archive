@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
-import { readCollections, createCollection, collectionForUser, canAccessCollection } from '@/lib/collections';
+import { readCollections, createCollection, collectionForUser, canAccessCollection, collectionArchiveId } from '@/lib/collections';
 import { PATCH as updateCollection, DELETE as deleteCollection } from './[id]/route';
 
 export async function GET(req: NextRequest) {
   const user = getSessionUser(req);
   if (!user) return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
   try {
-    return NextResponse.json({ collections: readCollections().filter(collection => canAccessCollection(collection, user)).map(collection => {
+    const archiveId = req.nextUrl.searchParams.get('archive');
+    return NextResponse.json({ collections: readCollections().filter(collection => canAccessCollection(collection, user) && (!archiveId || collectionArchiveId(collection) === archiveId)).map(collection => {
       const { comments: _comments, ...summary } = collectionForUser(collection, user);
       void _comments;
       return summary;

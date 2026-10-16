@@ -3,6 +3,7 @@ import {
   createSessionToken,
   getUserByPasscode,
   getPublicUsers,
+  getUsersForViewer,
   getSessionUser,
   recordUserLogin,
   SESSION_COOKIE,
@@ -20,7 +21,7 @@ export async function GET(req: NextRequest) {
   const user = getSessionUser(req);
   return NextResponse.json({
     user,
-    users: getPublicUsers(),
+    users: getUsersForViewer(user),
     settings: getArchiveSettings(),
   });
 }

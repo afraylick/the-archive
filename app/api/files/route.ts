@@ -1,5 +1,7 @@
+import { readArchives, selectedArchive, canReadRecording, canEditRecording, archiveForRecording, recordingArchiveId } from '@/lib/archives';
 import { readCollections, canAccessCollection, collectionTrackIds, collectionKeys } from '@/lib/collections';
 import { getArchiveIndex } from '@/lib/archive-index';
+import { getArchivePalette } from '@/lib/archive-palettes';
 import { getLegacyCommentId } from '@/lib/comment-id';
 import { NextResponse } from 'next/server';
 import { getSessionUser, type UserId } from '@/lib/auth';
@@ -9,6 +11,8 @@ import { getDataFilePath, getUploadPath, isSafeStorageId } from '@/lib/storage';
 
 interface AudioFileRecord {
   id: string;
+  archiveId?: string;
+  trashedAt?: string;
   projectId?: string;
   defaultVersionId?: string;
   variationType?: 'linked';
@@ -94,19 +98,19 @@ const getUploadedAtFromId = (id: string | undefined) => {
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 };
 
-const sanitizeFileForUser = (file: AudioFileRecord, userId: UserId, isAdmin: boolean, showAllRatings = isAdmin) => {
+const sanitizeFileForUser = (file: AudioFileRecord, userId: UserId, isAdmin: boolean, showAllRatings = isAdmin, ownerId = archiveForRecording(file)?.ownerId || 'adam') => {
   const ratings = file.ratings || {};
   const ratingUpdatedAt = file.ratingUpdatedAt || {};
   const visibleRatings = showAllRatings
     ? ratings
     : {
-        adam: ratings.adam || file.myRating || 0,
+        [ownerId]: ratings[ownerId] || (ownerId === 'adam' ? file.myRating || 0 : 0),
         [userId]: getRating(file, userId),
       };
   const visibleRatingUpdatedAt = showAllRatings
     ? ratingUpdatedAt
     : {
-        adam: ratingUpdatedAt.adam || '',
+        [ownerId]: ratingUpdatedAt[ownerId] || '',
         [userId]: ratingUpdatedAt[userId] || '',
       };
 
@@ -135,8 +139,16 @@ export async function GET(req: NextRequest) {
     const selectedCollection = collectionId ? accessibleCollections.find(collection => collection.id === collectionId) : undefined;
     if (collectionId && !selectedCollection) return NextResponse.json({ error: 'Collection not found or unavailable' }, { status: 404 });
     const selectedIds = new Set(selectedCollection ? collectionTrackIds(selectedCollection) : []);
+    const archiveSnapshot = readArchives();
+    const archive = selectedArchive(user, req.nextUrl.searchParams.get('archive'));
     const sanitize = (file: AudioFileRecord) => ({
-      ...sanitizeFileForUser(file, user.id, user.isAdmin, user.isAdmin || Boolean(selectedCollection?.visibility === 'private' && selectedIds.has(file.id))),
+      ...sanitizeFileForUser(file, user.id, canEditRecording(file, user, archiveSnapshot), canEditRecording(file, user, archiveSnapshot) || Boolean(selectedCollection?.visibility === 'private' && selectedIds.has(file.id)), archiveForRecording(file, archiveSnapshot)?.ownerId || 'adam'),
+      archiveId: recordingArchiveId(file),
+      archiveName: archiveForRecording(file, archiveSnapshot)?.name,
+      archiveOwnerId: archiveForRecording(file, archiveSnapshot)?.ownerId || 'adam',
+      archivePalette: getArchivePalette(archiveForRecording(file, archiveSnapshot)?.palette).id,
+      canEdit: canEditRecording(file, user, archiveSnapshot),
+      canUploadVersion: canReadRecording(file, user, archiveSnapshot),
       collections: [...new Set((file.collections || []).flatMap(key => namesByKey.has(key) ? [namesByKey.get(key)!] : []))],
     });
     const dataFile = getDataFilePath();
@@ -149,7 +161,7 @@ export async function GET(req: NextRequest) {
       : JSON.parse(fs.readFileSync(dataFile, 'utf8')) as AudioFileRecord[];
 
     // Migrate old rating to myRating and userRating
-    data = data.map((file) => {
+    data = data.filter(file => !file.trashedAt).map((file) => {
       if (file.rating !== undefined && file.myRating === undefined) {
         file.myRating = file.rating;
         file.userRating = 0;
@@ -207,6 +219,11 @@ export async function GET(req: NextRequest) {
     // Normalize legacy records for this response only. Missing audio must never
     // remove persisted records merely because someone browses the library.
 
+    const allAccessible = req.nextUrl.searchParams.get('scope') === 'accessible';
+    data = data.filter(file => selectedCollection ? selectedIds.has(file.id) : Boolean(canReadRecording(file, user, archiveSnapshot) && (allAccessible || (archive && recordingArchiveId(file) === archive.id))));
+    // A version shared alone cannot reveal its unshared parent or siblings.
+    const visibleIds = new Set(data.map(file => file.id));
+    data = data.map(file => file.projectId && !visibleIds.has(file.projectId) ? { ...file, projectId: undefined, defaultVersionId: file.id } : file);
     const projects = data.filter(file => !file.projectId);
     const versions = new Map<string, AudioFileRecord[]>();
     for (const file of data) {
@@ -223,7 +240,7 @@ export async function GET(req: NextRequest) {
       return {
         ...sanitize(project),
         defaultVersionId: selectedCollection && !selectedIds.has(project.defaultVersionId || project.id) ? (selectedIds.has(project.id) ? project.id : uploads[0]?.id) : project.defaultVersionId,
-        interactionUserIds: user.isAdmin ? getInteractionUserIds([project, ...uploads]) : undefined,
+        interactionUserIds: canEditRecording(project, user, archiveSnapshot) ? getInteractionUserIds([project, ...uploads]) : undefined,
         uploads: uploads.map(sanitize),
       };
     });

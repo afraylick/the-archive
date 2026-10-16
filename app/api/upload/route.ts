@@ -1,3 +1,5 @@
+import { reserveUploadQuota } from '@/lib/upload-quota';
+import { selectedArchive, canManageArchive } from '@/lib/archives';
 import { resolveCollectionMemberships } from '@/lib/collections';
 import { cleanupStorageFile } from '@/lib/storage';
 import { receiveUpload, UploadError } from '@/lib/stream-upload';
@@ -80,15 +82,19 @@ const cleanTagArray = (tags: unknown) => Array.isArray(tags)
   : [];
 
 export async function POST(req: NextRequest) {
+  let quota: ReturnType<typeof reserveUploadQuota> | undefined;
   let staged: Awaited<ReturnType<typeof receiveUpload>> | undefined;
   const uncommitted: string[] = [];
   try {
     const user = getSessionUser(req);
-    if (!user?.isAdmin) {
+    if (!user) {
       return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
     }
 
-    staged = await receiveUpload(req, { files: MAX_UPLOAD_FILES, fileBytes: MAX_UPLOAD_FILE_BYTES, totalBytes: MAX_UPLOAD_TOTAL_BYTES, fileField: 'files' });
+    const archive = selectedArchive(user, req.nextUrl.searchParams.get('archive'));
+    if (!archive || !canManageArchive(archive, user)) return NextResponse.json({ error: 'Choose your own archive to upload' }, { status: 403 });
+    quota = reserveUploadQuota(user.id);
+    staged = await receiveUpload(req, { files: MAX_UPLOAD_FILES, fileBytes: MAX_UPLOAD_FILE_BYTES, totalBytes: MAX_UPLOAD_TOTAL_BYTES, fileField: 'files', onFileBytes: quota.addBytes });
     const files = staged.files;
     if (files.length === 0) {
       return NextResponse.json({ error: 'No files uploaded' }, { status: 400 });
@@ -153,6 +159,9 @@ export async function POST(req: NextRequest) {
       }
       const newEntry = {
         id: filename,
+        archiveId: archive.id,
+        uploadedBy: user.id,
+        uploadedByName: user.name,
         name: file.name,
         instrument: instruments[0] || '',
         vibe: vibes[0] || '',
@@ -167,9 +176,9 @@ export async function POST(req: NextRequest) {
         waveformCacheVersion: generatedWaveform ? WAVEFORM_CACHE_VERSION : undefined,
         year,
         createdAt,
-        ratings: { adam: adamRating },
-        ratingUpdatedAt: adamRating > 0 ? { adam: new Date().toISOString() } : {},
-        myRating: adamRating,
+        ratings: { [user.id]: adamRating },
+        ratingUpdatedAt: adamRating > 0 ? { [user.id]: new Date().toISOString() } : {},
+        myRating: user.id === 'adam' ? adamRating : 0,
         userRating: 0,
         notes: typeof metadata.notes === 'string' ? metadata.notes.slice(0, MAX_NOTES_LENGTH) : '',
         comments: [],
@@ -179,10 +188,14 @@ export async function POST(req: NextRequest) {
       results.push({ id: filename, name: file.name });
     }
 
+    const latestUser = getSessionUser(req);
+    const latestArchive = latestUser && selectedArchive(latestUser, archive.id);
+    if (!latestUser || !latestArchive || !canManageArchive(latestArchive, latestUser)) throw new Error('Archive access changed during upload');
     const names = [...new Set(additions.flatMap(record => record.collections))];
     const keys = resolveCollectionMemberships(names, user);
     const keysByName = new Map(names.map((name, index) => [name, keys[index]]));
     additions.forEach(record => { record.collections = record.collections.map(name => keysByName.get(name)!); });
+    quota.assertCapacity();
     updateArchive<AudioFileRecord>(current => [...current, ...additions]);
     uncommitted.length = 0;
 
@@ -193,5 +206,6 @@ export async function POST(req: NextRequest) {
   } finally {
     for (const file of uncommitted) cleanupStorageFile(file);
     staged?.cleanup();
+    quota?.release();
   }
 }

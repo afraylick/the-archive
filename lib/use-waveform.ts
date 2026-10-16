@@ -1,4 +1,5 @@
 'use client';
+import { recordingUrl } from '@/lib/recording-url';
 import { useEffect, useState } from 'react';
 type Peaks = { waveformPeaks?: number[][]; waveformDuration?: number; waveformCacheVersion?: number };
 /** Retain loaded peaks for this card; cancellation prevents stale version responses. */
@@ -8,7 +9,7 @@ export function useWaveform(id: string, enabled: boolean, revision = 0) {
   useEffect(() => {
     if (!enabled || result?.key === key) return;
     const controller = new AbortController();
-    fetch(`/api/files/${encodeURIComponent(id)}/waveform`, { signal: controller.signal })
+    fetch(recordingUrl(`/api/files/${encodeURIComponent(id)}/waveform`), { signal: controller.signal })
       .then(response => { if (!response.ok) throw new Error('Waveform unavailable'); return response.json(); })
       .then(data => { if (!controller.signal.aborted) setResult({ key, data }); })
       // A waveform failure must not prevent audio playback; refresh or remount retries.

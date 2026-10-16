@@ -13,7 +13,7 @@ export interface UploadedPart { name: string; type: string; path: string; size: 
 const state = globalThis as typeof globalThis & { archiveUploadsActive?: number };
 
 /** Bounded memory, disk staging on the storage filesystem, and backpressure throughout. */
-export async function receiveUpload(req: Request, limits: { files: number; fileBytes: number; totalBytes: number; fileField: string }) {
+export async function receiveUpload(req: Request, limits: { files: number; fileBytes: number; totalBytes: number; fileField: string; onFileBytes?: (bytes: number) => void }) {
   if ((state.archiveUploadsActive || 0) >= 2) throw new UploadError('Uploads busy. Try again shortly.', 503);
   const declaredLength = Number(req.headers.get('content-length'));
   const maxBodyBytes = limits.totalBytes + 16 * 1024 * 1024;
@@ -52,6 +52,7 @@ export async function receiveUpload(req: Request, limits: { files: number; fileB
       stream.on('limit', () => fail(new UploadError('Upload file is too large', 413)));
       const counter = new Transform({ transform(chunk: Buffer, _encoding, callback) {
         part.size += chunk.length; totalFiles += chunk.length;
+        try { limits.onFileBytes?.(chunk.length); } catch (error) { callback(error as Error); return; }
         callback(totalFiles > limits.totalBytes ? new UploadError('Upload is too large', 413) : null, chunk);
       } });
       const write = pipeline(stream, counter, fs.createWriteStream(part.path, { flags: 'wx', mode: 0o600 }), { signal: controller.signal }).catch(error => { fail(error); });

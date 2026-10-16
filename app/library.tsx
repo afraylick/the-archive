@@ -1,5 +1,10 @@
 'use client';
+import theme from './library-theme.module.css';
+import { archivePaletteStyle } from '@/lib/archive-palettes';
+import { archiveCapabilities } from '@/lib/archive-capabilities';
+import { recordingUrl, archiveUrl } from '@/lib/recording-url';
 
+import { ArchiveSwitcher, type ArchiveChoice } from './archive-switcher';
 import { mutateRecording, type MetadataChanges } from '@/lib/recording-mutations';
 
 import { Fragment, memo, type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -14,6 +19,11 @@ import { getPlayableDuration as getWaveSurferPlayableDuration, getSeekTarget, se
 import { isValidWaveformCache, roundWaveformPeak, WAVEFORM_CACHE_VERSION, WAVEFORM_PEAK_LENGTH } from '@/lib/waveform';
 
 interface AudioFile {
+  archiveId?: string;
+  archiveName?: string;
+  archiveOwnerId?: string;
+  canEdit?: boolean;
+  canUploadVersion?: boolean;
   id: string;
   projectId?: string;
   defaultVersionId?: string;
@@ -72,6 +82,7 @@ interface WaveformGenerationResponse {
 }
 
 interface ArchiveUser {
+  archiveScopeId?: string;
   id: string;
   name: string;
   isAdmin: boolean;
@@ -118,6 +129,9 @@ interface InboxMessage {
   senderName: string;
   sentAt: string;
   readAt?: string;
+  archiveId?: string;
+  archiveName?: string;
+  unavailable?: boolean;
 }
 
 type EndMode = 'repeat' | 'next' | 'stop';
@@ -179,7 +193,7 @@ const isCommonVersionAudioFile = (file: File) => {
   const extension = extensionIndex >= 0 ? file.name.slice(extensionIndex).toLowerCase() : '';
   return VERSION_AUDIO_EXTENSIONS.has(extension);
 };
-const getAdamRating = (file: AudioFile) => file.ratings?.adam || file.myRating || 0;
+const getAdamRating = (file: AudioFile) => file.ratings?.[file.archiveOwnerId || 'adam'] || file.myRating || 0;
 const getProjectId = (file: AudioFile) => file.projectId || file.id;
 const findProjectForFileId = (projects: AudioFile[], fileId: string) => (
   projects.find(project => (
@@ -499,6 +513,9 @@ const AudioCard = memo(function AudioCard({
   const file = selectedFileId === project.id
     ? project
     : project.uploads?.find(upload => upload.id === selectedFileId) || project;
+  const canEdit = Boolean(file.canEdit);
+  const ownerId = file.archiveOwnerId || 'adam';
+  const canRateAsOwner = currentUser.id === ownerId || (currentUser.isAdmin && ownerId === 'adam' && canEdit);
   const waveformRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
@@ -688,7 +705,7 @@ const AudioCard = memo(function AudioCard({
       waveColor: '#727479',
       progressColor: tracksStartedFromWaveformClick.has(latestFileRef.current.id) ? '#525252' : '#727479',
       cursorWidth: tracksStartedFromWaveformClick.has(latestFileRef.current.id) ? 1 : 0,
-      cursorColor: '#3680e9',
+      cursorColor: getComputedStyle(waveformRef.current).getPropertyValue('--accent').trim() || '#438cec',
       height: waveformHeightRef.current,
       interact: false,
       backend: 'MediaElement',
@@ -864,7 +881,7 @@ const AudioCard = memo(function AudioCard({
 
   useEffect(() => {
     wavesurferRef.current?.setOptions({
-      progressColor: hasStartedPlayback ? (isActive ? '#3680e9' : '#525252') : '#727479',
+      progressColor: hasStartedPlayback ? (isActive && cardRef.current ? getComputedStyle(cardRef.current).getPropertyValue('--accent').trim() || '#438cec' : '#525252') : '#727479',
       cursorWidth: hasStartedPlayback ? 1 : 0,
     });
   }, [hasStartedPlayback, isActive]);
@@ -902,7 +919,7 @@ const AudioCard = memo(function AudioCard({
   }, [shouldRenderWaveform]);
 
   const handleUserRatingChange = async (newRating: number, userId = currentUser.id) => {
-    const res = await fetch(`/api/files/${encodeURIComponent(file.id)}/rating${collectionId ? `?collection=${encodeURIComponent(collectionId)}` : ''}`, {
+    const res = await fetch(recordingUrl(`/api/files/${encodeURIComponent(file.id)}/rating`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rating: newRating, userId }),
@@ -916,7 +933,7 @@ const AudioCard = memo(function AudioCard({
   };
 
   const toggleLike = async () => {
-    const res = await fetch(`/api/files/${encodeURIComponent(file.id)}/like`, {
+    const res = await fetch(recordingUrl(`/api/files/${encodeURIComponent(file.id)}/like`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ liked: !file.liked }),
@@ -1069,7 +1086,7 @@ const AudioCard = memo(function AudioCard({
       ? Math.min(rawTimestamp, maxDuration || rawTimestamp)
       : undefined;
 
-    const res = await fetch(`/api/files/${encodeURIComponent(file.id)}/comments`, {
+    const res = await fetch(recordingUrl(`/api/files/${encodeURIComponent(file.id)}/comments`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: trimmedComment, timestamp }),
@@ -1083,7 +1100,7 @@ const AudioCard = memo(function AudioCard({
   };
 
   const deleteComment = async (commentId: string) => {
-    const res = await fetch(`/api/files/${encodeURIComponent(file.id)}/comments`, {
+    const res = await fetch(recordingUrl(`/api/files/${encodeURIComponent(file.id)}/comments`), {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ commentId }),
@@ -1113,7 +1130,7 @@ const AudioCard = memo(function AudioCard({
     formData.set('notes', uploadNotes);
 
     try {
-      const res = await fetch(`/api/files/${encodeURIComponent(project.id)}/uploads`, {
+      const res = await fetch(recordingUrl(`/api/files/${encodeURIComponent(project.id)}/uploads`), {
         method: 'POST',
         body: formData,
       });
@@ -1156,9 +1173,9 @@ const AudioCard = memo(function AudioCard({
 
   const recipientUsers = useMemo(() => (
     accountUsers
-      .filter(user => !user.isAdmin)
+      .filter(user => user.id !== currentUser.id)
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-  ), [accountUsers]);
+  ), [accountUsers, currentUser.id]);
 
   const linkSongToProject = async (targetProject: AudioFile) => {
     if (isLinkingSong) return;
@@ -1166,7 +1183,7 @@ const AudioCard = memo(function AudioCard({
     setIsLinkingSong(true);
     setLinkError('');
     try {
-      const res = await fetch(`/api/files/${encodeURIComponent(project.id)}/link`, {
+      const res = await fetch(recordingUrl(`/api/files/${encodeURIComponent(project.id)}/link`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ targetProjectId: targetProject.id }),
@@ -1177,7 +1194,7 @@ const AudioCard = memo(function AudioCard({
         return;
       }
 
-      const filesRes = await fetch('/api/files?view=metadata');
+      const filesRes = await fetch(archiveUrl('/api/files?view=metadata'));
       if (!filesRes.ok) throw new Error('Failed to reload songs');
       setFiles(await filesRes.json() as AudioFile[]);
       setShowLinkSearch(false);
@@ -1267,7 +1284,7 @@ const AudioCard = memo(function AudioCard({
     setWaveformRefreshing(true);
     try {
       const latestFile = latestFileRef.current;
-      const serverRes = await fetch(`/api/files/${encodeURIComponent(latestFile.id)}/waveform`, {
+      const serverRes = await fetch(recordingUrl(`/api/files/${encodeURIComponent(latestFile.id)}/waveform`), {
         method: 'POST',
       });
 
@@ -1288,7 +1305,7 @@ const AudioCard = memo(function AudioCard({
         return;
       }
 
-      const res = await fetch(`/api/files/${encodeURIComponent(latestFile.id)}/audio`);
+      const res = await fetch(recordingUrl(`/api/files/${encodeURIComponent(latestFile.id)}/audio`));
       if (!res.ok) throw new Error('Failed to load audio file');
 
       const audioContext = getSharedAudioContext();
@@ -1323,21 +1340,21 @@ const AudioCard = memo(function AudioCard({
   const uploads = Array.isArray(project.uploads) ? project.uploads : [];
   const selectedUploadDate = formatShortDate(file.uploadedAt);
   const selectedLinkedDate = formatShortDate(file.linkedAt);
-  const adminName = accountUsers.find(user => user.id === 'adam')?.name || 'Admin';
+  const adminName = accountUsers.find(user => user.id === ownerId)?.name || 'Admin';
   const accountNamesById = new Map(accountUsers.map(user => [user.id, user.name]));
   const selectedVersionMetadata = file.projectId
     ? file.variationType === 'linked'
       ? `Linked variation: ${file.name}${selectedLinkedDate ? ` · added ${selectedLinkedDate}` : ''}`
       : `Uploaded by ${(file.uploadedBy ? accountNamesById.get(file.uploadedBy) : '') || file.uploadedByName || file.uploadedBy || 'Unknown'}${selectedUploadDate ? ` on ${selectedUploadDate}` : ''}`
     : '';
-  const adamRating = file.ratings?.adam || file.myRating || 0;
+  const adamRating = getAdamRating(file);
   const displayedAdamRating = hoveredAdamRating || adamRating;
   const currentUserRating = file.ratings?.[currentUser.id] || file.userRating || 0;
   const displayedUserRating = hoveredUserRating || currentUserRating;
   const getCommentDisplayName = (comment: AudioComment) => accountNamesById.get(comment.userId) || comment.userName;
-  const otherUserRatings = currentUser.isAdmin || showAllRatings
+  const otherUserRatings = canEdit || showAllRatings
     ? accountUsers
-        .filter(user => user.id !== 'adam' && (currentUser.isAdmin || user.id !== currentUser.id))
+        .filter(user => user.id !== ownerId && (canRateAsOwner || user.id !== currentUser.id))
         .map(user => ({ user, rating: file.ratings?.[user.id] || 0 }))
         .filter(({ rating }) => rating > 0)
     : [];
@@ -1573,6 +1590,7 @@ const AudioCard = memo(function AudioCard({
                       {project.name}
                     </h2>
                   )}
+                  {collectionId && file.archiveName && <span className="max-w-36 truncate rounded border border-border/40 px-1.5 py-0.5 text-[10px] text-muted-foreground" title={file.archiveName}>{file.archiveName}</span>}
                   {file.projectId ? (
                     <span className="hidden min-w-0 truncate text-xs font-light text-muted-foreground/65 md:inline" title={selectedVersionMetadata}>
                       {selectedVersionMetadata}
@@ -1590,7 +1608,7 @@ const AudioCard = memo(function AudioCard({
                       ({file.originalName})
                     </span>
                   )}
-                  {currentUser.isAdmin && (
+                  {project.canEdit && (
                     <button
                       type="button"
                       onClick={() => {
@@ -1687,7 +1705,7 @@ const AudioCard = memo(function AudioCard({
               </svg>
             </button>
             <a
-              href={`/api/files/${encodeURIComponent(file.id)}/audio?download=1`}
+              href={recordingUrl(`/api/files/${encodeURIComponent(file.id)}/audio?download=1`)}
               download={file.originalName || file.name}
               className="inline-flex h-8 w-9 items-center justify-center border-l border-border/70 text-muted-foreground transition hover:text-foreground"
               title="Download audio"
@@ -1697,7 +1715,7 @@ const AudioCard = memo(function AudioCard({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v11m0 0 4-4m-4 4-4-4M5 19h14" />
               </svg>
             </a>
-            {currentUser.isAdmin && (
+            {canEdit && (
               <button
                 type="button"
                 onClick={() => {
@@ -1716,7 +1734,7 @@ const AudioCard = memo(function AudioCard({
                 </svg>
               </button>
             )}
-            {currentUser.isAdmin && !collectionId && (
+            {project.canEdit && !collectionId && (
               <button
                 type="button"
                 onClick={() => {
@@ -1738,11 +1756,11 @@ const AudioCard = memo(function AudioCard({
               </button>
             )}
           </div>
-          {currentUser.isAdmin && showLinkSearch && renderLinkSearchPanel(
+          {project.canEdit && showLinkSearch && renderLinkSearchPanel(
             'right-52 top-10 hidden md:block',
             `link-song-desktop-${project.id}`,
           )}
-          {currentUser.isAdmin && !collectionId && showSendPanel && renderSendPanel('right-52 top-10 hidden md:block')}
+          {project.canEdit && !collectionId && showSendPanel && renderSendPanel('right-52 top-10 hidden md:block')}
 
           <div className="relative mt-1 min-h-40 min-w-0 sm:min-h-36 md:-ml-[3.25rem] md:-mt-5 md:w-[calc(100%+3.25rem)] md:min-h-[118px]">
             <div className="hidden absolute right-0 top-0 z-10 overflow-hidden rounded border border-border/70 bg-[#0f171c]/80 opacity-70 shadow-sm backdrop-blur transition hover:opacity-90">
@@ -1775,7 +1793,7 @@ const AudioCard = memo(function AudioCard({
                 </svg>
               </button>
               <a
-                href={`/api/files/${encodeURIComponent(file.id)}/audio?download=1`}
+                href={recordingUrl(`/api/files/${encodeURIComponent(file.id)}/audio?download=1`)}
                 download={file.originalName || file.name}
                 className="inline-flex h-8 w-9 items-center justify-center border-l border-border/70 text-muted-foreground transition hover:text-foreground"
                 title="Download audio"
@@ -1785,7 +1803,7 @@ const AudioCard = memo(function AudioCard({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v11m0 0 4-4m-4 4-4-4M5 19h14" />
                 </svg>
               </a>
-              {currentUser.isAdmin && (
+              {canEdit && (
                 <button
                   type="button"
                   onClick={() => {
@@ -1804,7 +1822,7 @@ const AudioCard = memo(function AudioCard({
                   </svg>
                 </button>
               )}
-              {currentUser.isAdmin && !collectionId && (
+              {project.canEdit && !collectionId && (
                 <button
                   type="button"
                   onClick={() => {
@@ -1826,11 +1844,11 @@ const AudioCard = memo(function AudioCard({
                 </button>
               )}
             </div>
-            {currentUser.isAdmin && showLinkSearch && renderLinkSearchPanel(
+            {project.canEdit && showLinkSearch && renderLinkSearchPanel(
               'right-0 top-10 md:hidden',
               `link-song-mobile-${project.id}`,
             )}
-            {currentUser.isAdmin && !collectionId && showSendPanel && renderSendPanel('right-0 top-10 md:hidden')}
+            {project.canEdit && !collectionId && showSendPanel && renderSendPanel('right-0 top-10 md:hidden')}
             {playbackError && <p role="alert" className="text-sm text-red-400">{playbackError}</p>}
             <div
               ref={waveformRef}
@@ -1881,7 +1899,7 @@ const AudioCard = memo(function AudioCard({
           <div className="relative z-20 mt-2 grid gap-3 md:-ml-[3.25rem] md:-mt-5 md:w-[calc(100%+3.25rem)] md:block">
             <div className="min-w-0 space-y-1.5 md:pb-1 md:pr-[20rem]">
               <div className="flex items-center gap-1.5">
-                {currentUser.isAdmin ? (
+                {canEdit ? (
                   <button
                     type="button"
                     onClick={() => setOpenTagPicker(prev => prev === 'instruments' ? null : 'instruments')}
@@ -1920,7 +1938,7 @@ const AudioCard = memo(function AudioCard({
                 </div>
               </div>
               <div className="flex items-center gap-1.5">
-                {currentUser.isAdmin ? (
+                {canEdit ? (
                   <button
                     type="button"
                     onClick={() => setOpenTagPicker(prev => prev === 'vibes' ? null : 'vibes')}
@@ -1990,7 +2008,7 @@ const AudioCard = memo(function AudioCard({
                     />
                   </svg>
                 </button>
-                {(currentUser.isAdmin || hasNotes) && (
+                {(canEdit || hasNotes) && (
                   <button
                     type="button"
                     onClick={() => setShowNotes(prev => !prev)}
@@ -2010,7 +2028,7 @@ const AudioCard = memo(function AudioCard({
                   type="button"
                   onClick={() => setShowComments(prev => !prev)}
                   className={`row-start-1 inline-flex min-h-9 min-w-0 items-center justify-center gap-1 whitespace-nowrap border-b border-r border-border/70 px-2 py-1.5 text-xs transition sm:min-h-0 sm:flex-none sm:gap-2 sm:border-b-0 sm:px-4 sm:text-sm ${
-                    currentUser.isAdmin || hasNotes ? 'col-span-2' : 'col-span-3'
+                    canEdit || hasNotes ? 'col-span-2' : 'col-span-3'
                   } ${
                     hasComments
                       ? 'bg-accent/10 text-accent hover:bg-accent/15'
@@ -2026,7 +2044,7 @@ const AudioCard = memo(function AudioCard({
                   type="button"
                   onClick={() => { setShowCollections(prev => !prev); window.dispatchEvent(new Event('collections-changed')); }}
                   className={`row-start-1 inline-flex min-h-9 min-w-0 items-center justify-center gap-1 whitespace-nowrap border-b border-border/70 px-2 py-1.5 text-xs transition sm:min-h-0 sm:flex-none sm:gap-2 sm:border-b-0 sm:border-r sm:px-4 sm:text-sm ${
-                    currentUser.isAdmin || hasNotes ? 'col-span-2' : 'col-span-3'
+                    canEdit || hasNotes ? 'col-span-2' : 'col-span-3'
                   } ${
                     hasCollections
                       ? 'bg-accent/10 text-accent hover:bg-accent/15'
@@ -2049,6 +2067,8 @@ const AudioCard = memo(function AudioCard({
                       ? 'bg-accent/10 text-accent hover:bg-accent/15'
                       : 'text-muted-foreground hover:text-foreground'
                   }`}
+                  disabled={!file.canUploadVersion}
+                  title={!file.canUploadVersion ? 'Archive access is required to add versions' : undefined}
                   aria-expanded={showUpload}
                 >
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -2059,7 +2079,7 @@ const AudioCard = memo(function AudioCard({
               </div>
               {file.stems && (
                 <a
-                  href={`/api/files/${encodeURIComponent(file.id)}/stems`}
+                  href={recordingUrl(`/api/files/${encodeURIComponent(file.id)}/stems`)}
                   download={file.stems.name}
                   className="inline-flex items-center gap-2 rounded border border-border/70 bg-background/35 px-4 py-1.5 text-sm text-muted-foreground transition hover:text-foreground"
                   title={file.stems.name}
@@ -2073,7 +2093,7 @@ const AudioCard = memo(function AudioCard({
             </div>
           </div>
 
-          {currentUser.isAdmin && openTagPicker === 'instruments' && (
+          {canEdit && openTagPicker === 'instruments' && (
             <div className="mt-2 flex flex-wrap gap-2 rounded border border-border/70 bg-background/60 p-2">
               {instrumentChoices.length > 0 ? instrumentChoices.map(tag => {
                 const selected = instruments.includes(tag);
@@ -2096,7 +2116,7 @@ const AudioCard = memo(function AudioCard({
               )}
             </div>
           )}
-          {currentUser.isAdmin && openTagPicker === 'vibes' && (
+          {canEdit && openTagPicker === 'vibes' && (
             <div className="mt-2 flex flex-wrap gap-2 rounded border border-border/70 bg-background/60 p-2">
               {vibeChoices.length > 0 ? vibeChoices.map(tag => {
                 const selected = vibes.includes(tag);
@@ -2124,11 +2144,11 @@ const AudioCard = memo(function AudioCard({
             <span className="text-xs font-light text-muted-foreground">{adminName}&apos;s</span>
             <div className="flex items-center">
               {[1, 2, 3, 4, 5].map((star) => (
-                currentUser.isAdmin ? (
+                canRateAsOwner ? (
                   <button
                     key={star}
                     type="button"
-                    onClick={() => handleUserRatingChange(star, 'adam')}
+                    onClick={() => handleUserRatingChange(star, ownerId)}
                     onMouseEnter={() => setHoveredAdamRating(star)}
                     onMouseLeave={() => setHoveredAdamRating(0)}
                     className={`inline-flex h-8 w-7 items-center justify-center ${star <= displayedAdamRating ? adamRatingColorClass : emptyRatingColorClass}`}
@@ -2147,7 +2167,7 @@ const AudioCard = memo(function AudioCard({
                 )
               ))}
             </div>
-            {(currentUser.isAdmin || showAllRatings) && (
+            {(canEdit || showAllRatings) && (
               otherUserRatings.map(({ user, rating }) => (
                 <Fragment key={user.id}>
                   <span className="truncate text-xs font-light text-muted-foreground" title={user.name}>{user.name}</span>
@@ -2164,7 +2184,7 @@ const AudioCard = memo(function AudioCard({
                 </Fragment>
               ))
             )}
-            {!currentUser.isAdmin && (
+            {!canRateAsOwner && (
               <>
                 <span className="text-xs font-light text-muted-foreground">Yours</span>
                 <div className="flex items-center">
@@ -2190,11 +2210,11 @@ const AudioCard = memo(function AudioCard({
           <span className="text-xs font-light text-muted-foreground">{adminName}&apos;s</span>
           <div className="flex items-center">
             {[1, 2, 3, 4, 5].map((star) => (
-              currentUser.isAdmin ? (
+              canRateAsOwner ? (
                 <button
                   key={star}
                   type="button"
-                  onClick={() => handleUserRatingChange(star, 'adam')}
+                  onClick={() => handleUserRatingChange(star, ownerId)}
                   onMouseEnter={() => setHoveredAdamRating(star)}
                   onMouseLeave={() => setHoveredAdamRating(0)}
                   className={`inline-flex h-6 w-5 items-center justify-center ${star <= displayedAdamRating ? adamRatingColorClass : emptyRatingColorClass}`}
@@ -2213,7 +2233,7 @@ const AudioCard = memo(function AudioCard({
               )
             ))}
           </div>
-          {(currentUser.isAdmin || showAllRatings) && (
+          {(canEdit || showAllRatings) && (
             otherUserRatings.map(({ user, rating }) => (
               <Fragment key={user.id}>
                 <span className="truncate text-xs font-light text-muted-foreground" title={user.name}>{user.name}</span>
@@ -2230,7 +2250,7 @@ const AudioCard = memo(function AudioCard({
               </Fragment>
             ))
           )}
-          {!currentUser.isAdmin && (
+          {!canRateAsOwner && (
             <>
               <span className="text-xs font-light text-muted-foreground">Yours</span>
               <div className="flex items-center">
@@ -2256,7 +2276,7 @@ const AudioCard = memo(function AudioCard({
         <div className="mt-3 space-y-3">
           {showNotes && (
             <div>
-              {currentUser.isAdmin ? (
+              {canEdit ? (
                 <SongNotes
                   key={file.id}
                   value={noteText}
@@ -2360,7 +2380,7 @@ const AudioCard = memo(function AudioCard({
                     <button
                       key={collection.id}
                       type="button"
-                      disabled={collectionSaving || !collection.canEdit}
+                      disabled={collectionSaving || !collection.canEdit || (!file.canUploadVersion && !selected)}
                       aria-pressed={selected}
                       aria-label={`${selected ? 'Remove from' : 'Add to'} ${collection.name}`}
                       title={!collection.canEdit ? 'Only the owner and invited members can change songs' : undefined}
@@ -2516,6 +2536,12 @@ export default function Library({ collectionId }: { collectionId?: string }) {
   const [showLogout, setShowLogout] = useState(false);
   const [accountUsers, setAccountUsers] = useState<ArchiveUser[]>([]);
   const [archiveName, setArchiveName] = useState('the archive');
+  const [currentArchive, setCurrentArchive] = useState<ArchiveChoice | null | undefined>(undefined);
+  const initialSettings = useRef<{ legacyDefaults?: boolean; defaultInstruments?: string[]; defaultVibes?: string[] }>({});
+  const canManage = Boolean(currentArchive?.canManage);
+  const { canOpenManage, canViewActivity } = archiveCapabilities(currentArchive, currentUser);
+  const [paneMode, setPaneMode] = useState<'activity' | 'inbox'>('activity');
+  const visiblePane = canViewActivity ? paneMode : 'inbox';
   const [selectedInstruments, setSelectedInstruments] = useState<string[]>([]);
   const [selectedVibes, setSelectedVibes] = useState<string[]>([]);
   const [selectedFinishes, setSelectedFinishes] = useState<string[]>([]);
@@ -2546,6 +2572,14 @@ export default function Library({ collectionId }: { collectionId?: string }) {
   });
   const [instrumentOptions, setInstrumentOptions] = useState<string[]>([]);
   const [vibeOptions, setVibeOptions] = useState<string[]>([]);
+  const resolveArchive = useCallback((archive: ArchiveChoice | null) => {
+    setCurrentArchive(archive); setArchiveName(archive?.name || 'Your archives');
+    setPaneMode('activity');
+    setShowActivity(false);
+    setSelectedFinishes(!collectionId && archive?.id === 'adam' && initialSettings.current.legacyDefaults ? ['Tracked', 'Recorder'] : []);
+    setInstrumentOptions(archive?.id === 'adam' ? initialSettings.current.defaultInstruments || [] : ['Guitar', 'Vocals', 'Bass', 'Drums', 'Synth']);
+    setVibeOptions(archive?.id === 'adam' ? initialSettings.current.defaultVibes || [] : []);
+  }, [collectionId]);
   const [newInstrument, setNewInstrument] = useState('');
   const [newVibe, setNewVibe] = useState('');
   const [sortBy, setSortBy] = useState<SortBy>(collectionId ? 'playlist' : 'adamsRatingRandom');
@@ -2571,25 +2605,23 @@ export default function Library({ collectionId }: { collectionId?: string }) {
   const playerRegistryRef = useRef<Map<string, PlayerRegistryEntry>>(new Map());
   const renderedFilesRef = useRef<AudioFile[]>([]);
   const pendingPlaybackTrackIdRef = useRef<string | null>(null);
-  const adminName = accountUsers.find(user => user.id === 'adam')?.name || 'Admin';
+  const adminName = collectionId ? 'Archive Admin' : accountUsers.find(user => user.id === currentArchive?.ownerId)?.name || 'Archive Admin';
 
   useEffect(() => {
     fetch('/api/session')
       .then(res => res.json())
       .then((data: { user: ArchiveUser | null; users: ArchiveUser[]; settings?: { archiveName?: string; defaultInstruments?: string[]; defaultVibes?: string[]; legacyDefaults?: boolean } }) => {
+        initialSettings.current = data.settings || {};
         setCurrentUser(data.user);
         setAccountUsers(data.users);
-        setArchiveName(data.settings?.archiveName || 'the archive');
-        setSelectedFinishes(!collectionId && data.settings?.legacyDefaults ? ['Tracked', 'Recorder'] : []);
-        setInstrumentOptions(prev => Array.from(new Set([...prev, ...(data.settings?.defaultInstruments || [])])));
-        setVibeOptions(prev => Array.from(new Set([...prev, ...(data.settings?.defaultVibes || [])])));
       });
 
   }, [collectionId]);
 
   useEffect(() => {
     let active = true;
-    fetch(`/api/files?view=metadata${collectionId ? `&collection=${encodeURIComponent(collectionId)}` : ''}`)
+    if (!collectionId && currentArchive === undefined) return;
+    fetch(`/api/files?view=metadata${collectionId ? `&collection=${encodeURIComponent(collectionId)}` : currentArchive ? `&archive=${encodeURIComponent(currentArchive.id)}` : ''}`)
       .then(res => { if (!res.ok) throw new Error('Library unavailable'); return res.json(); })
       .then((data: AudioFile[]) => {
         if (!active) return;
@@ -2600,7 +2632,7 @@ export default function Library({ collectionId }: { collectionId?: string }) {
         setVibeOptions(prev => Array.from(new Set([...prev, ...normalizedFiles.flatMap(file => getTags(file, 'vibes', 'vibe'))])));
       }).catch(() => { if (active) setLoadError(true); });
     return () => { active = false; };
-  }, [collectionId, playlistRevision]);
+  }, [collectionId, playlistRevision, currentArchive]);
 
   useEffect(() => {
     if (collectionId) return;
@@ -2770,14 +2802,15 @@ export default function Library({ collectionId }: { collectionId?: string }) {
   const activityFileIds = useMemo(() => new Set(
     files
       .filter(file => {
-        const hasCommentActivity = (Array.isArray(file.comments) ? file.comments : [])
-          .some(comment => comment.userId && comment.userId !== 'adam' && comment.text);
-        const hasRatingActivity = Object.entries(file.ratings || {})
-          .some(([userId, rating]) => userId !== 'adam' && (rating || 0) > 0);
+        const versions = [file, ...(file.uploads || [])];
+        const hasCommentActivity = versions.flatMap(version => version.comments || [])
+          .some(comment => comment.userId && comment.userId !== currentUser?.id && comment.text);
+        const hasRatingActivity = versions.flatMap(version => Object.entries(version.ratings || {}))
+          .some(([userId, rating]) => userId !== currentUser?.id && (rating || 0) > 0);
         return hasCommentActivity || hasRatingActivity;
       })
       .map(file => file.id)
-  ), [files]);
+  ), [files, currentUser?.id]);
 
   const matchingFiles = useMemo(() => {
     if (showActivity) {
@@ -2892,12 +2925,13 @@ export default function Library({ collectionId }: { collectionId?: string }) {
   ), [accountUsers, currentUser?.id]);
 
   const activityEntries = useMemo<ActivityEntry[]>(() => {
-    if (!currentUser?.isAdmin) return [];
+    if (!canViewActivity) return [];
 
     const userNameById = new Map(accountUsers.map(user => [user.id, user.name]));
-    const commentActivities = files.flatMap(file => (
+    const activityFiles = files.flatMap(file => [file, ...(file.uploads || [])]);
+    const commentActivities = activityFiles.flatMap(file => (
       (Array.isArray(file.comments) ? file.comments : [])
-        .filter(comment => comment.userId && comment.userId !== 'adam' && comment.text)
+        .filter(comment => comment.userId && comment.userId !== currentUser?.id && comment.text)
         .map(comment => {
           const timestamp = new Date(comment.createdAt).getTime();
           return {
@@ -2914,9 +2948,9 @@ export default function Library({ collectionId }: { collectionId?: string }) {
         })
     ));
 
-    const ratingActivities = files.flatMap(file => (
+    const ratingActivities = activityFiles.flatMap(file => (
       Object.entries(file.ratings || {})
-        .filter(([userId, rating]) => userId !== 'adam' && (rating || 0) > 0)
+        .filter(([userId, rating]) => userId !== currentUser?.id && (rating || 0) > 0)
         .map(([userId, rating]) => {
           const createdAt = file.ratingUpdatedAt?.[userId];
           const timestamp = createdAt ? new Date(createdAt).getTime() : 0;
@@ -2939,7 +2973,7 @@ export default function Library({ collectionId }: { collectionId?: string }) {
         if (a.type !== b.type) return a.type === 'comment' ? -1 : 1;
         return compareByName(a.file, b.file);
       });
-  }, [accountUsers, currentUser?.isAdmin, files]);
+  }, [accountUsers, canViewActivity, currentUser?.id, files]);
 
   const filterCounts = useMemo(() => {
     const counts = {
@@ -3365,7 +3399,7 @@ export default function Library({ collectionId }: { collectionId?: string }) {
 
   const showActivityTrack = useCallback((file: AudioFile) => {
     setRandomTrackIds(null);
-    setActivityTargetTrackId(file.id);
+    setActivityTargetTrackId(file.projectId || file.id);
     setRenderWindow(prev => ({ ...prev, key: '', limit: INITIAL_RENDER_LIMIT }));
   }, []);
 
@@ -3392,6 +3426,9 @@ export default function Library({ collectionId }: { collectionId?: string }) {
     const song = findProjectForFileId(files, message.songId);
     if (song) {
       showActivityTrack(song);
+    } else if (!message.unavailable && message.archiveId) {
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+      window.location.assign(`/?archive=${encodeURIComponent(message.archiveId)}&track=${encodeURIComponent(message.songId)}`);
     }
   }, [files, markInboxMessageRead, showActivityTrack]);
 
@@ -3525,11 +3562,9 @@ export default function Library({ collectionId }: { collectionId?: string }) {
     next: 'Continue to next song',
     repeat: 'Repeat song',
   }[endMode];
-  const archiveNameParts = archiveName.trim().split(/\s+/);
-  const archiveNameAccent = archiveNameParts.pop() || 'archive';
-  const archiveNameLead = archiveNameParts.join(' ');
 
   return (
+    <div className={theme.theme} style={archivePaletteStyle(collectionId ? selectedCollection?.palette : currentArchive?.palette)}>
     <div className="archive-shell min-h-screen text-foreground">
       {loadError && <div role="alert">Library could not be loaded. <button onClick={() => window.location.reload()}>Retry</button></div>}
       <header className="mx-auto grid h-auto max-w-[1800px] grid-cols-1 items-center gap-3 border-b border-border/40 px-3 py-3 sm:grid-cols-[1fr_auto_1fr] sm:px-4">
@@ -3539,10 +3574,7 @@ export default function Library({ collectionId }: { collectionId?: string }) {
             <path d="M4 22h11l5-9 6 18 7-28 8 38 8-26 6 11 5-16 5 30 8-36 7 27 6-14 5 5h24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" />
             <path d="M4 22h112" fill="none" stroke="rgba(255,255,255,0.8)" strokeLinecap="round" strokeWidth="2" />
           </svg>
-          <div className="text-2xl font-light tracking-normal">
-            {archiveNameLead && <span className="text-foreground">{archiveNameLead} </span>}
-            <span className="text-accent">{archiveNameAccent}</span>
-          </div>
+          <ArchiveSwitcher canCreate={!currentUser?.archiveScopeId} userId={currentUser?.id} people={accountUsers} onResolve={resolveArchive}/>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-end">
           <div className="flex flex-wrap justify-center gap-2 sm:justify-end">
@@ -3557,21 +3589,21 @@ export default function Library({ collectionId }: { collectionId?: string }) {
                 <span className="truncate" aria-live="polite">{showLogout ? 'Logout' : currentUser.name.trim().split(/\s+/)[0]}</span>
               </button>
             )}
-            {currentUser?.isAdmin && (
-              <>
+            {canOpenManage && (
               <Link
-                href="/manage"
+                href={currentArchive ? `/manage?archive=${encodeURIComponent(currentArchive.id)}` : "/manage"}
                 className="rounded border border-border/50 bg-muted/35 px-3 py-2 text-center text-sm text-muted-foreground transition hover:border-accent/40 hover:text-foreground"
               >
                 Manage
               </Link>
+            )}
+            {canManage && (
               <Link
-                href="/upload"
+                href={currentArchive ? `/upload?archive=${encodeURIComponent(currentArchive.id)}` : "/upload"}
                   className="rounded border border-accent/55 bg-accent/85 px-3 py-2 text-center text-sm text-accent-foreground shadow-sm shadow-accent/10 transition hover:bg-accent"
                 >
                   Upload
                 </Link>
-              </>
             )}
           </div>
         </div>
@@ -3677,7 +3709,7 @@ export default function Library({ collectionId }: { collectionId?: string }) {
               })}
             </div>}
           </div>
-          {currentUser?.isAdmin && (
+          {canManage && (
           <div className="border border-b-0 border-border/55 bg-[#131a1f]/86 p-0 shadow-[inset_0_1px_rgba(255,255,255,0.03)]">
             <button
               type="button"
@@ -3939,7 +3971,7 @@ export default function Library({ collectionId }: { collectionId?: string }) {
                 className="h-4 w-4 accent-accent"
               />
             </label>
-            {currentUser?.isAdmin && (
+            {canManage && (
               <label className="flex min-h-16 cursor-pointer items-center gap-4 px-5 text-sm font-medium text-foreground transition hover:bg-muted/20">
                 <SidebarIcon name="untagged" />
                 <span className="min-w-0 flex-1">Untagged songs</span>
@@ -3996,8 +4028,13 @@ export default function Library({ collectionId }: { collectionId?: string }) {
         </div>
         <div className="min-w-0 flex-1 md:pl-4">
           {collectionId && <CollectionHeader id={collectionId} value={selectedCollection} user={currentUser} people={accountUsers} onChange={onCollectionChange}/>}
-          {!collectionId && currentUser && !currentUser.isAdmin && (
-            <div className="mb-4 rounded border border-border/60 bg-muted/25 p-3">
+          {!collectionId && currentUser && <div className="mb-4 rounded border border-border/60 bg-muted/25 p-3">
+            <div className="mb-3 flex items-center gap-1" role="group" aria-label={canViewActivity ? "Activity and inbox" : "Inbox"}>
+              {canViewActivity && <button type="button" aria-pressed={visiblePane === 'activity'} onClick={() => setPaneMode('activity')} className={`rounded px-3 py-1 text-xs ${paneMode === 'activity' ? 'bg-accent/15 text-accent' : 'text-muted-foreground'}`}>Activity</button>}
+              <button type="button" aria-pressed={visiblePane === 'inbox'} onClick={() => { setPaneMode('inbox'); setShowActivity(false); }} className={`rounded px-3 py-1 text-xs ${visiblePane === 'inbox' ? 'bg-accent/15 text-accent' : 'text-muted-foreground'}`}>Inbox{unreadInboxCount ? ` · ${unreadInboxCount}` : ''}</button>
+            </div>
+          {!collectionId && currentUser && visiblePane === 'inbox' && (
+            <div>
               <button
                 type="button"
                 onClick={() => setShowInbox(prev => !prev)}
@@ -4020,7 +4057,7 @@ export default function Library({ collectionId }: { collectionId?: string }) {
               {showInbox && inboxMessages.length > 0 && (
                 <div className="mt-3 max-h-[22rem] divide-y divide-border/50 overflow-y-auto border-y border-border/50">
                   {inboxMessages.map(message => {
-                    const songAvailable = Boolean(findProjectForFileId(files, message.songId));
+                    const songAvailable = !message.unavailable;
                     return (
                       <div
                         key={message.id}
@@ -4073,8 +4110,8 @@ export default function Library({ collectionId }: { collectionId?: string }) {
               )}
             </div>
           )}
-          {!collectionId && currentUser?.isAdmin && (
-            <div className="mb-4 rounded border border-border/60 bg-muted/25 p-3">
+          {!collectionId && canViewActivity && visiblePane === 'activity' && (
+            <div>
               <button
                 type="button"
                 onClick={() => setShowActivity(prev => !prev)}
@@ -4130,6 +4167,8 @@ export default function Library({ collectionId }: { collectionId?: string }) {
               )}
             </div>
           )}
+          </div>}
+          {!collectionId && currentArchive === null && <p className="mb-4 text-sm text-muted-foreground">Create your archive from the menu above to start uploading, or open a shared collection.</p>}
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-t-md border border-b-0 border-border/65 bg-[#13191e]/95 px-3 py-2 shadow-sm shadow-black/10">
             <div className="inline-flex flex-wrap overflow-hidden rounded border border-border/65 bg-background/40">
               <button
@@ -4196,6 +4235,7 @@ export default function Library({ collectionId }: { collectionId?: string }) {
             </div>
           </div>
           <div className="overflow-visible rounded-b-md border border-border/65 bg-[#0b0f14]/92 shadow-2xl shadow-black/20">
+            {!collectionId && currentArchive && files.length === 0 && !loadError && <p className="px-5 py-10 text-sm text-muted-foreground">No recordings in this archive yet.{canManage && <> <Link className="text-accent hover:underline" href={`/upload?archive=${encodeURIComponent(currentArchive.id)}`}>Upload your first recording</Link>.</>}</p>}
             {collectionId && selectedCollection && files.length === 0 && !loadError && <p className="px-5 py-10 text-sm text-muted-foreground">{selectedCollection.canEdit ? 'No songs yet. Add songs to start this collection.' : 'No songs in this collection yet.'}</p>}
             {displayedFiles.map(file => {
               const hiddenActiveTrack = Boolean(activeTrack && getProjectId(activeTrack) === file.id && !visibleFileIds.has(file.id));
@@ -4379,6 +4419,7 @@ export default function Library({ collectionId }: { collectionId?: string }) {
           </div>
         </div>
       )}
+    </div>
     </div>
   );
 }

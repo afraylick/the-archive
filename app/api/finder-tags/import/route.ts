@@ -1,3 +1,4 @@
+import { recordingArchiveId, selectedArchive, canManageArchive } from '@/lib/archives';
 import { writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser, type UserId } from '@/lib/auth';
@@ -7,6 +8,7 @@ import { getDataFilePath } from '@/lib/storage';
 
 interface AudioFileRecord {
   id: string;
+  trashedAt?: string;
   name?: string;
   originalName?: string;
   colorTags?: string[];
@@ -56,10 +58,12 @@ const deriveRatingFromColorTags = (colorTags: string[], fallbackRating: number) 
 export async function POST(req: NextRequest) {
   try {
     const user = getSessionUser(req);
-    if (!user?.isAdmin) {
+    if (!user) {
       return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
     }
 
+    const archive = selectedArchive(user, req.nextUrl.searchParams.get('archive'));
+    if (!archive || !canManageArchive(archive, user)) return NextResponse.json({ error: 'Choose your own archive to import tags' }, { status: 403 });
     const formData = await req.formData();
     const metadataFile = formData.get('file') as File | null;
     if (!metadataFile) {
@@ -71,6 +75,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid Finder tag metadata file' }, { status: 400 });
     }
 
+    const latestUser = getSessionUser(req);
+    const latestArchive = latestUser && selectedArchive(latestUser, archive.id);
+    if (!latestUser || !latestArchive || !canManageArchive(latestArchive, latestUser)) return NextResponse.json({ error: 'Archive access changed' }, { status: 403 });
     const dataFile = getDataFilePath();
     const data: AudioFileRecord[] = fs.existsSync(dataFile)
       ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
@@ -78,6 +85,7 @@ export async function POST(req: NextRequest) {
 
     const fileIndexesByName = new Map<string, number[]>();
     data.forEach((file, index) => {
+      if (file.trashedAt || recordingArchiveId(file) !== archive.id) return;
       for (const name of [file.name, file.originalName]) {
         const normalized = normalizeName(name);
         if (!normalized) continue;
@@ -112,7 +120,7 @@ export async function POST(req: NextRequest) {
       const index = matchedIndexes[0];
       const colorTags = normalizeColorTags(entry.colorTags);
       const ratings = data[index].ratings || {};
-      const currentAdamRating = ratings.adam || data[index].myRating || 0;
+      const currentAdamRating = ratings[archive.ownerId] || (archive.ownerId === 'adam' ? data[index].myRating || 0 : 0);
       const nextAdamRating = currentAdamRating > 0
         ? currentAdamRating
         : deriveRatingFromColorTags(colorTags, 0);
@@ -122,15 +130,15 @@ export async function POST(req: NextRequest) {
         colorTags,
         ratings: {
           ...ratings,
-          adam: nextAdamRating,
+          [archive.ownerId]: nextAdamRating,
         },
         ratingUpdatedAt: nextAdamRating > 0 && currentAdamRating === 0
           ? {
               ...(data[index].ratingUpdatedAt || {}),
-              adam: new Date().toISOString(),
+              [archive.ownerId]: new Date().toISOString(),
             }
           : data[index].ratingUpdatedAt,
-        myRating: nextAdamRating,
+        myRating: archive.ownerId === 'adam' ? nextAdamRating : data[index].myRating || 0,
       };
       matched += 1;
       updated += 1;

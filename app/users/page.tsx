@@ -1,4 +1,5 @@
 'use client';
+import { ArchiveLimits } from './archive-limits';
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -13,6 +14,7 @@ interface UserSummary {
   name: string;
   isAdmin: boolean;
   role: UserRole;
+  isArchiveAdmin?: boolean;
   lastLoginAt?: string | null;
   permissions: { canEdit: boolean; canChangeRole: boolean; canDelete: boolean };
   stats: { ratingCount: number; averageRating: number; likeCount: number; commentCount: number; collectionCount: number };
@@ -184,31 +186,32 @@ export default function ManageUsersPage() {
       </aside>
       <main className={s.main}>
         <div className={s.heading}><h1>Members & access</h1><button className={s.primary} disabled={loading || !!loadError || !!busy} onClick={() => openModal('add')}><Icon name="plus" size={17}/> Add member</button></div>
+        <ArchiveLimits/>
         {loading ? <p className={u.state} role="status">Loading members…</p> : loadError ? <div className={u.state} role="alert"><p>{loadError}</p><button className={s.secondary} onClick={() => { setLoading(true); void load(); }}>Retry</button></div> : <>
           <div className={s.stats}>{[
             { label: 'Total members', value: users.length, icon: 'users', filter: 'all' },
-            { label: 'Administrators', value: admins, icon: 'shield', filter: 'admins' },
+            { label: 'Site administrators', value: admins, icon: 'shield', filter: 'admins' },
             { label: 'Contributors', value: contributors, icon: 'activity', filter: 'contributors' },
             { label: 'Ratings', value: totals.ratings, icon: 'music', filter: 'all' },
           ].map(stat => <button key={stat.label} className={s.stat} onClick={() => setFilter(stat.filter)}><div><span>{stat.label}</span><Icon name={stat.icon}/></div><strong>{String(stat.value).padStart(2, '0')}</strong></button>)}</div>
           <div className={u.workspace}>
             <section className={s.content} aria-label="Member directory">
               <div className={s.sectionHead}><h2>Members</h2><span className={u.count}>{users.length} accounts</span></div>
-              <div className={`${s.tabs} ${u.memberTabs}`} aria-label="Member views">{[['all', 'All members', users.length], ['owners', 'Owners', owners], ['admins', 'Admins', admins], ['members', 'Members', users.length - admins - owners]].map(([value, label, count]) => <button key={value} className={filter === value ? s.tabActive : ''} onClick={() => setFilter(String(value))}>{label}<span>{count}</span></button>)}{filter === 'contributors' && <button className={s.tabActive} onClick={() => setFilter('all')}>Contributors <span>{contributors}</span><Icon name="close" size={12}/></button>}</div>
+              <div className={`${s.tabs} ${u.memberTabs}`} aria-label="Member views">{[['all', 'All members', users.length], ['owners', 'Owner', owners], ['admins', 'Site Admins', admins], ['members', 'Members', users.length - admins - owners]].map(([value, label, count]) => <button key={value} className={filter === value ? s.tabActive : ''} onClick={() => setFilter(String(value))}>{label}<span>{count}</span></button>)}{filter === 'contributors' && <button className={s.tabActive} onClick={() => setFilter('all')}>Contributors <span>{contributors}</span><Icon name="close" size={12}/></button>}</div>
               <div className={s.toolbar}><label className={s.search}><Icon name="search" size={17}/><input aria-label="Search members" placeholder="Search members…" value={query} onChange={event => setQuery(event.target.value)}/>{query && <button aria-label="Clear search" onClick={() => setQuery('')}><Icon name="close" size={14}/></button>}</label><select aria-label="Sort members" value={sort} onChange={event => setSort(event.target.value)}><option value="name">Name A–Z</option><option value="activity">Most activity</option><option value="login">Last login</option></select></div>
               <div className={s.tableScroll}><table className={u.table}><thead><tr><th>MEMBER</th><th>ACCESS</th><th>RATINGS</th><th>LIKES</th><th>COMMENTS</th><th>LAST LOGIN</th><th><span className={s.srOnly}>Details</span></th></tr></thead><tbody>{visible.map(user => <tr key={user.id} className={selected?.id === user.id ? u.selected : ''}>
                 <td><button className={u.member} onClick={() => selectMember(user)} aria-label={`Manage ${user.name}`} aria-pressed={selected?.id === user.id}><span className={`${s.avatar} ${user.isAdmin ? u.adminAvatar : ''}`}>{initials(user.name)}</span><span><strong>{user.name}{session?.id === user.id && <small>You</small>}</strong><span>{roleLabel(user.role)}</span></span></button></td>
-                <td><span className={`${u.badge} ${user.isAdmin ? u.adminBadge : ''}`}>{roleLabel(user.role)}</span></td>
+                <td><span className={`${u.badge} ${user.isAdmin ? u.adminBadge : ''}`}>{roleLabel(user.role)}</span>{user.isArchiveAdmin && <small className={u.badge}>Archive Admin</small>}</td>
                 <td><span className={u.number}>{user.stats.ratingCount}</span><small className={u.average}>{user.stats.ratingCount ? `${user.stats.averageRating} avg` : '—'}</small></td><td className={u.number}>{user.stats.likeCount}</td><td className={u.number}>{user.stats.commentCount}</td><td><LastLogin value={user.lastLoginAt}/></td><td><button className={u.open} aria-label={`Open ${user.name} details`} onClick={() => selectMember(user)}><Icon name="arrow" size={15}/></button></td>
               </tr>)}</tbody></table></div>
               {visible.length === 0 && <div className={s.empty}><Icon name="users" size={26}/><h3>No members found</h3><button className={s.textLink} onClick={() => { setQuery(''); setFilter('all'); }}>Clear filters</button></div>}
               <div className={s.tableFooter}><span>{visible.length} of {users.length} members</span><span>{totals.likes} likes · {totals.comments} comments</span></div>
             </section>
             {selected && <aside ref={details} className={u.details} aria-label="Member details">
-              <div className={u.detailHead}><span className={`${s.avatar} ${u.largeAvatar}`}>{initials(selected.name)}</span><div><span className={s.eyebrow}>MEMBER DETAILS</span><h2>{selected.name}</h2><span className={`${u.badge} ${selected.isAdmin ? u.adminBadge : ''}`}>{roleLabel(selected.role)}</span></div></div>
+              <div className={u.detailHead}><span className={`${s.avatar} ${u.largeAvatar}`}>{initials(selected.name)}</span><div><span className={s.eyebrow}>MEMBER DETAILS</span><h2>{selected.name}</h2><span className={`${u.badge} ${selected.isAdmin ? u.adminBadge : ''}`}>{roleLabel(selected.role)}</span>{selected.isArchiveAdmin && <span className={u.badge}>Archive Admin</span>}</div></div>
               <div className={u.detailBody}>
                 <dl className={u.loginSummary}><dt>Last login</dt><dd><LastLogin value={selected.lastLoginAt}/></dd></dl>
-                <form className={u.editForm} onSubmit={event => { event.preventDefault(); void saveRole(selected); }}><label htmlFor="member-role">Access role</label>{selected.permissions.canChangeRole ? <div className={u.inputAction}><select id="member-role" value={roleDraft || selected.role} onChange={event => setRoleDraft(event.target.value as 'admin' | 'member')} disabled={!!busy}><option value="member">Member</option><option value="admin">Admin</option></select><button className={s.secondary} disabled={!!busy || !roleDraft || roleDraft === selected.role}>{busy === 'role' ? 'Saving…' : 'Save role'}</button></div> : <><span className={u.badge}>{roleLabel(selected.role)}</span><small>{selected.role === 'owner' ? 'Owner access is protected.' : 'Only Owners can change roles.'}</small></>}</form>
+                <form className={u.editForm} onSubmit={event => { event.preventDefault(); void saveRole(selected); }}><label htmlFor="member-role">Access role</label>{selected.permissions.canChangeRole ? <div className={u.inputAction}><select id="member-role" value={roleDraft || selected.role} onChange={event => setRoleDraft(event.target.value as 'admin' | 'member')} disabled={!!busy}><option value="member">Member</option><option value="admin">Site Admin</option></select><button className={s.secondary} disabled={!!busy || !roleDraft || roleDraft === selected.role}>{busy === 'role' ? 'Saving…' : 'Save role'}</button></div> : <><span className={u.badge}>{roleLabel(selected.role)}</span><small>{selected.role === 'owner' ? 'Owner access is protected.' : 'Only the site Owner can change roles.'}</small></>}</form>
                 <form className={u.editForm} onSubmit={event => { event.preventDefault(); void saveName(selected); }}><label htmlFor="member-name">Display name</label><div className={u.inputAction}><input id="member-name" value={names[selected.id] ?? selected.name} onChange={event => setNames(previous => ({ ...previous, [selected.id]: event.target.value }))} disabled={!!busy || !selected.permissions.canEdit}/><button className={s.secondary} disabled={!!busy || !selected.permissions.canEdit || !names[selected.id]?.trim() || names[selected.id]?.trim() === selected.name}>{busy === 'name' ? 'Saving…' : 'Save name'}</button></div></form>
                 <form className={u.editForm} onSubmit={event => { event.preventDefault(); void savePassword(selected); }}><label htmlFor="member-password">Reset password</label><input id="member-password" type="password" autoComplete="new-password" placeholder="New password" value={password} onChange={event => setPassword(event.target.value)} disabled={!!busy || !selected.permissions.canEdit}/><div className={u.passwordAction}><small>8 characters minimum on the live site</small><button className={s.secondary} disabled={!!busy || !selected.permissions.canEdit || !password.trim()}>{busy === 'password' ? 'Saving…' : 'Save password'}</button></div>{session?.id === selected.id && <small>Changing your password signs you out.</small>}</form>
               </div>

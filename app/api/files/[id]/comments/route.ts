@@ -1,3 +1,4 @@
+import { recordingAccess } from '@/lib/recording-access';
 import { getLegacyCommentId } from '@/lib/comment-id';
 import { writeJsonAtomic } from '@/lib/json-storage';
 import { NextRequest, NextResponse } from 'next/server';
@@ -40,6 +41,8 @@ const readData = (dataFile: string): AudioFileRecord[] => {
 };
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const accessError = recordingAccess(req, (await params).id, 'read');
+  if (accessError) return accessError;
   const { id } = await params;
 
   try {
@@ -85,6 +88,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const accessError = recordingAccess(req, (await params).id, 'read');
+  if (accessError) return accessError;
   const { id } = await params;
 
   try {

@@ -1,0 +1,78 @@
+/* Shared full-page archive palette. Semantic status colors remain distinct. */
+.theme {
+  --foreground: #e4e9ef;
+  --muted: #141d26;
+  --muted-foreground: #98a3af;
+  --border: #222b35;
+  --accent-foreground: #fff;
+}
+
+.theme :global(.archive-shell > header) {
+  border-color: #ffffff07;
+}
+
+.theme :global(.audio-card) {
+  background: linear-gradient(120deg, color-mix(in srgb, var(--archive-pane) 91%, transparent), color-mix(in srgb, var(--archive-pane-deep) 91%, transparent));
+  border-color: #ffffff07;
+  box-shadow: none;
+}
+
+.theme :global(.audio-card:hover) {
+  background: linear-gradient(120deg, var(--archive-pane-hover), var(--archive-pane-hover-deep));
+}
+
+/* Panels and fields follow the complete archive theme. */
+.theme :global([class*="bg-[#131a1f]"]),
+.theme :global([class*="bg-[#13191e]"]),
+.theme :global(details:has(> nav[aria-label="Collections"])) {
+  background: linear-gradient(120deg, color-mix(in srgb, var(--archive-pane) 60%, transparent), color-mix(in srgb, var(--archive-pane-deep) 80%, transparent));
+  border-color: #ffffff07;
+  box-shadow: none;
+}
+
+.theme :global(input[class*="bg-[#131a1f]"]) {
+  background: color-mix(in srgb, var(--archive-field) 56.47%, transparent);
+  border-color: #ffffff12;
+}
+
+.theme :global([class*="bg-[#0d1419]"]),
+.theme :global(.archive-menu),
+.theme :global(.archive-dialog) {
+  background: var(--archive-menu);
+  border-color: var(--archive-edge);
+}
+
+.theme :global([class*="bg-[#0f171c]"]),
+.theme :global([class*="bg-[#10181e]"]:not(.audio-card)) {
+  background-color: var(--archive-pane-deep);
+}
+
+.theme :global([class*="bg-[#0b0f14]"]) {
+  background-color: var(--archive-field);
+}
+.theme :global([class*="bg-[#0b0f14]/25"]) { background-color: color-mix(in srgb, var(--archive-field) 25.1%, transparent); }
+.theme :global([class*="bg-[#0b0f14]/30"]) { background-color: color-mix(in srgb, var(--archive-field) 30.2%, transparent); }
+.theme :global([class*="bg-[#0b0f14]/80"]) { background-color: color-mix(in srgb, var(--archive-field) 80%, transparent); }
+.theme :global([class*="bg-[#0b0f14]/92"]) { background-color: color-mix(in srgb, var(--archive-field) 92.16%, transparent); }
+
+.theme :global([aria-pressed="true"][class*="bg-accent/15"]) {
+  color: var(--archive-accent-light, #87b5fc);
+  background: linear-gradient(100deg, color-mix(in srgb, var(--accent) 13%, transparent), color-mix(in srgb, var(--accent) 4%, transparent));
+}
+
+.theme :global(.archive-shell [class*="bg-accent/85"]) {
+  background-color: var(--archive-primary, #347ddd);
+  border-color: color-mix(in srgb, var(--accent) 33%, transparent);
+  box-shadow: 0 3px 14px color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.theme :global(.archive-shell [class*="bg-accent/85"]:hover) {
+  background-color: var(--archive-primary-hover, #428aed);
+}
+
+
+/* Color accents follow the selected archive; status and personal-rating colors stay distinct. */
+.theme :global(.archive-shell) { background: radial-gradient(circle at 52% -12%, var(--archive-glow, #438cec24), transparent 30rem), linear-gradient(180deg, color-mix(in srgb, var(--archive-page-top) 88%, transparent), color-mix(in srgb, var(--background) 98%, transparent) 28rem), var(--background); }
+.theme :global([class*="text-[#3680e9]"]) { color: var(--accent); }
+.theme :global([class*="text-[#7fa6c9]"]) { color: var(--archive-accent-light, #87b5fc); }
+@media (max-width: 640px) { .theme :global(.archive-shell) { background: var(--background); } }
