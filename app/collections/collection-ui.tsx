@@ -22,7 +22,7 @@ export function CollectionsPanel({ collections, selectedId, loading, error }: { 
   const [visibility, setVisibility] = useState('public');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState('');
-  return <details open className={s.panel}>
+  return <details className={s.panel}>
     <summary><span aria-hidden="true">♫</span><span>Collections</span><small>{collections.length}</small><span className={s.chevron} aria-hidden="true">⌄</span></summary>
     <nav aria-label="Collections" className={s.collectionList}>
       {selectedId && <Link href="/" className={s.libraryLink}>← All songs</Link>}

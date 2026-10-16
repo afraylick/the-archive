@@ -6,6 +6,7 @@ import { Fragment, memo, type Dispatch, type SetStateAction, useCallback, useEff
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { CollectionsPanel, CollectionHeader, PlaylistControls, type CollectionView } from './collections/collection-ui';
+import { SongNotes } from './song-notes';
 import { useWaveform } from '@/lib/use-waveform';
 import { useStableFilterResults } from '@/lib/use-stable-filter-results';
 import WaveSurfer from 'wavesurfer.js';
@@ -509,7 +510,7 @@ const AudioCard = memo(function AudioCard({
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState(project.name);
   const [showVersions, setShowVersions] = useState(false);
-  const [showNotes, setShowNotes] = useState(false);
+  const [showNotes, setShowNotes] = useState(() => getNoteText(file).trim().length > 0);
   const [showComments, setShowComments] = useState(false);
   const [showCollections, setShowCollections] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
@@ -579,6 +580,7 @@ const AudioCard = memo(function AudioCard({
     wavesurferRef.current?.pause();
     setSelectedFileId(nextFile.id);
     setNoteText(getNoteText(nextFile));
+    setShowNotes(getNoteText(nextFile).trim().length > 0);
     setNewComment('');
     setCommentTimecode('');
     setCurrentTime(0);
@@ -2255,15 +2257,14 @@ const AudioCard = memo(function AudioCard({
           {showNotes && (
             <div>
               {currentUser.isAdmin ? (
-                <textarea
+                <SongNotes
+                  key={file.id}
                   value={noteText}
-                  onChange={(event) => setNoteText(event.target.value)}
+                  onChange={setNoteText}
                   onBlur={saveNotes}
-                  placeholder="Add notes..."
-                  className="min-h-24 w-full resize-y rounded-md border border-border/65 bg-background/65 p-3 text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus:border-accent"
                 />
               ) : (
-                <div className="min-h-16 w-full whitespace-pre-wrap rounded-md border border-border/65 bg-background/55 p-3 text-sm text-muted-foreground">
+                <div className="w-full whitespace-pre-wrap break-words rounded-md border border-border/65 bg-background/55 p-3 text-sm text-muted-foreground">
                   {noteText}
                 </div>
               )}
