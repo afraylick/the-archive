@@ -139,6 +139,35 @@ test('5 GB quota spans originals, versions, stems, trash and concurrent streams'
   });
 });
 
+test('only the site Owner is exempt from total storage quota across upload routes', async t => {
+  const { alice, bob } = await setup(); const limit = quotas.USER_UPLOAD_QUOTA_BYTES;
+  save([{ id: 'owner-full.wav', name: 'Owner original', archiveId: 'adam', uploadedBy: 'adam' }]);
+  media('owner-full.wav', limit + 1024);
+  t.mock.method(generator, 'generateServerWaveform', async () => ({ waveformPeaks: [[.1]], waveformDuration: 1 }));
+  const summary = quotas.uploadStorageSummary('adam');
+  assert.equal(summary.unlimited, true); assert.equal(summary.limitBytes, null); assert.equal(summary.remainingBytes, null);
+  assert.equal(summary.usedBytes, limit + 1024);
+  const api = await (await load('app/api/storage/route.ts').GET(req('/api/storage'))).json();
+  assert.equal(api.unlimited, true); assert.equal(api.limitBytes, null); assert.equal(api.usedBytes, summary.usedBytes);
+  assert.equal((await upload.POST(req('/api/upload?archive=adam', 'adam', 'POST', form('files')))).status, 200);
+  assert.equal((await load('app/api/files/[id]/uploads/route.ts').POST(req('/api/files/owner-full.wav/uploads', 'adam', 'POST', form('file')), ctx('owner-full.wav'))).status, 201);
+  assert.equal((await stems.POST(req('/api/files/owner-full.wav/stems', 'adam', 'POST', form('file', 'parts.zip', 90)), ctx('owner-full.wav'))).status, 200);
+  assert.equal(quotas.uploadStorageSummary('adam').usedBytes, limit + 1024 + 44 + 44 + 90);
+  const ownerReservation = quotas.reserveUploadQuota('adam', quotas.stemReplacementCredit('owner-full.wav', 'adam'));
+  ownerReservation.addBytes(limit + 1);
+  assert.throws(() => quotas.reserveUploadQuota('adam', quotas.stemReplacementCredit('owner-full.wav', 'adam')), /already being replaced/);
+  ownerReservation.release();
+  assert.throws(() => ownerReservation.assertCapacity(), /expired/);
+  assert.equal(quotas.uploadStorageSummary('adam').reservedBytes, 0);
+  auth.setUserRole('adam', bob.id, 'admin');
+  for (const user of [alice, bob]) {
+    const usage = quotas.uploadStorageSummary(user.id);
+    assert.equal(usage.unlimited, false); assert.equal(usage.limitBytes, limit);
+    const reservation = quotas.reserveUploadQuota(user.id);
+    try { assert.throws(() => reservation.addBytes(limit + 1), /5 GB/); } finally { reservation.release(); }
+  }
+});
+
 test('archive-only accounts have owner-set limits and cannot escape their archive', async t => {
   const { alice, bob } = await setup(); const context = ctx(alice.id); let guest;
   const limits = value => registry.PATCH(req('/api/archives', 'adam', 'PATCH', { id: alice.id, accountLimit: value }));

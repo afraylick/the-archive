@@ -1,0 +1,19 @@
+@property --archive-scroll-thumb {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #438cec22;
+}
+.sidebar {
+  --archive-scroll-thumb: color-mix(in srgb, var(--accent) 18%, transparent);
+  scrollbar-width: thin;
+  scrollbar-color: var(--archive-scroll-thumb) transparent;
+  transition: --archive-scroll-thumb .45s ease, scrollbar-color .45s ease;
+}
+.sidebar:is(:hover, [data-scrolling="true"]) {
+  --archive-scroll-thumb: color-mix(in srgb, var(--accent) 65%, transparent);
+}
+.sidebar::-webkit-scrollbar { width: 6px; background: transparent; }
+.sidebar::-webkit-scrollbar-track, .sidebar::-webkit-scrollbar-corner { background: transparent; }
+.sidebar::-webkit-scrollbar-thumb { background: var(--archive-scroll-thumb); border-radius: 8px; }
+.sidebar::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }

@@ -3,6 +3,7 @@ import { getArchiveIndex } from './archive-index';
 import { archiveForRecording, readArchives } from './archives';
 import { getStemPath, getStorageRoot, getUploadPath, isSafeStorageId } from './storage';
 import { UploadError } from './stream-upload';
+import { getUserById } from './auth';
 
 export const USER_UPLOAD_QUOTA_BYTES = 5 * 1024 * 1024 * 1024;
 interface Usage { usedBytes: number; trashBytes: number }
@@ -49,7 +50,8 @@ function reservedFor(userId: string, root: string) {
 export function uploadStorageSummary(userId: string) {
   const usage = userStorageUsage(userId, true);
   const reservedBytes = reservedFor(userId, getStorageRoot());
-  return { ...usage, limitBytes: USER_UPLOAD_QUOTA_BYTES, reservedBytes, remainingBytes: Math.max(0, USER_UPLOAD_QUOTA_BYTES - usage.usedBytes - reservedBytes) };
+  const unlimited = getUserById(userId)?.role === 'owner';
+  return { ...usage, unlimited, limitBytes: unlimited ? null : USER_UPLOAD_QUOTA_BYTES, reservedBytes, remainingBytes: unlimited ? null : Math.max(0, USER_UPLOAD_QUOTA_BYTES - usage.usedBytes - reservedBytes) };
 }
 /** Reservations are charged while streaming, shared across requests, and released on every exit. */
 export function reserveUploadQuota(userId: string, replacement?: { key: string; credit: number }) {
@@ -61,7 +63,7 @@ export function reserveUploadQuota(userId: string, replacement?: { key: string; 
   let released = false;
   const assertCapacity = () => {
     if (released) throw new UploadError('Upload reservation expired', 409);
-    if (userStorageUsage(userId).usedBytes + reservedFor(userId, root) > USER_UPLOAD_QUOTA_BYTES) throw new UploadError('Your 5 GB upload limit is reached. Permanently delete items from trash to free space.', 413);
+    if (getUserById(userId)?.role !== 'owner' && userStorageUsage(userId).usedBytes + reservedFor(userId, root) > USER_UPLOAD_QUOTA_BYTES) throw new UploadError('Your 5 GB upload limit is reached. Permanently delete items from trash to free space.', 413);
   };
   return {
     addBytes(bytes: number) { reservation.bytes += bytes; assertCapacity(); },

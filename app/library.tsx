@@ -1,5 +1,6 @@
 'use client';
 import theme from './library-theme.module.css';
+import { LibrarySidebar } from './library-sidebar';
 import { archivePaletteStyle } from '@/lib/archive-palettes';
 import { archiveCapabilities } from '@/lib/archive-capabilities';
 import { recordingUrl, archiveUrl } from '@/lib/recording-url';
@@ -3609,7 +3610,7 @@ export default function Library({ collectionId }: { collectionId?: string }) {
         </div>
       </header>
       <div className="mx-auto flex max-w-[1800px] flex-col gap-4 p-3 pb-56 sm:p-4 sm:pb-36 md:flex-row">
-        <div className="w-full md:sticky md:top-4 md:max-h-[calc(100vh-2rem)] md:w-72 md:shrink-0 md:overflow-y-auto md:pr-3 md:pb-44">
+        <LibrarySidebar playerVisible={Boolean(activeTrack)}>
           <div className="mb-4 grid grid-cols-[minmax(0,3fr)_minmax(0,1fr)] gap-2 md:block">
             <div className="relative min-w-0">
               <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2">
@@ -3636,7 +3637,7 @@ export default function Library({ collectionId }: { collectionId?: string }) {
             <button
               type="button"
               onClick={() => setShowMobileFilters(prev => !prev)}
-              className={`flex h-12 min-w-0 items-center justify-center gap-2 rounded-xl transition hover:bg-muted/20 md:hidden ${showMobileFilters ? 'bg-muted/20 text-foreground' : 'text-muted-foreground'}`}
+              className={`flex h-12 min-w-0 items-center justify-center gap-2 rounded-xl border border-border/55 bg-[#131a1f]/86 shadow-[inset_0_1px_rgba(255,255,255,0.03)] transition hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent md:hidden ${showMobileFilters ? 'text-foreground' : 'text-muted-foreground'}`}
               aria-label={`Filters${activeFilterCount > 0 ? ` (${activeFilterCount} active)` : ''}`}
               aria-expanded={showMobileFilters}
               aria-controls="library-filters"
@@ -4025,7 +4026,7 @@ export default function Library({ collectionId }: { collectionId?: string }) {
             </div>
           </div>
           </div>
-        </div>
+        </LibrarySidebar>
         <div className="min-w-0 flex-1 md:pl-4">
           {collectionId && <CollectionHeader id={collectionId} value={selectedCollection} user={currentUser} people={accountUsers} onChange={onCollectionChange}/>}
           {!collectionId && currentUser && <div className="mb-4 rounded border border-border/60 bg-muted/25 p-3">
@@ -4040,9 +4041,9 @@ export default function Library({ collectionId }: { collectionId?: string }) {
                 onClick={() => setShowInbox(prev => !prev)}
                 className="flex w-full items-center justify-between gap-3 text-left"
                 aria-expanded={showInbox}
+                aria-label={showInbox ? "Collapse inbox" : "Expand inbox"}
               >
                 <span className="flex items-center gap-2">
-                  <h2 className="text-sm font-medium text-foreground">Inbox</h2>
                   {unreadInboxCount > 0 && (
                     <span className="rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold text-accent-foreground">
                       {unreadInboxCount} new
@@ -4117,9 +4118,9 @@ export default function Library({ collectionId }: { collectionId?: string }) {
                 onClick={() => setShowActivity(prev => !prev)}
                 className="flex w-full items-center justify-between gap-3 text-left"
                 aria-expanded={showActivity}
+                aria-label={showActivity ? "Collapse activity" : "Expand activity"}
               >
-                <h2 className="text-sm font-medium text-foreground">Activity</h2>
-                <span className="flex items-center gap-3 text-xs text-muted-foreground">
+                <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
                   {activityEntries.length} item{activityEntries.length === 1 ? '' : 's'}
                   <span>{showActivity ? '-' : '+'}</span>
                 </span>
